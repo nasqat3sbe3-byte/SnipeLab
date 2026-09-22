@@ -33,6 +33,8 @@ def calculate(effective, candles):
         "post_split_high":max(b["high"] for b in bars) if verified else None,
         "split_day_high":first["high"] if verified else None,
         "split_day_open":first["open"] if verified else None,
+        "post_split_high_date":max(bars,key=lambda b:b["high"])["date"] if verified else None,
+        "post_split_low_date":min(bars,key=lambda b:b["low"])["date"] if verified else None,
         "rsi_daily":rsi,"first_bar":first["date"],"bar_count":len(bars),
         "top_10_verified":bool(top and verified),**(top or {}),
         "updated_at":datetime.now(timezone.utc).isoformat()}
@@ -57,7 +59,7 @@ async def split_day_4h_high(client, yahoo, symbol, effective):
     if not data:return {"split_day_4h_high":None,"split_day_4h_status":"no_intraday_bars","extended_history_complete":False}
     tz=ZoneInfo((data.get("meta") or {}).get("exchangeTimezoneName") or "America/New_York")
     q=((data.get("indicators") or {}).get("quote") or [{}])[0]
-    buckets={}; period_high=None;period_low=None;first_day=False;dates=set()
+    buckets={}; period_high=None;period_low=None;first_day=False;dates=set();high_date=None;low_date=None
     for i,t in enumerate(data.get("timestamp") or []):
         local=datetime.fromtimestamp(t,tz)
         day=local.date().isoformat()
@@ -67,8 +69,8 @@ async def split_day_4h_high(client, yahoo, symbol, effective):
             if low<=0 or high<low:continue
         except (IndexError,TypeError,ValueError,KeyError):continue
         dates.add(day)
-        period_high=high if period_high is None else max(high,period_high)
-        period_low=low if period_low is None else min(low,period_low)
+        if period_high is None or high>period_high:period_high=high;high_date=day
+        if period_low is None or low<period_low:period_low=low;low_date=day
         if day==effective:
             first_day=True
             bucket=(local.hour-4)//4
@@ -80,6 +82,7 @@ async def split_day_4h_high(client, yahoo, symbol, effective):
             "split_day_4h_status":"yahoo_60m_aggregated_extended_4h",
             "split_day_4h_candles":len(buckets),
             "extended_post_split_high":period_high,"extended_post_split_low":period_low,
+            "extended_post_split_high_date":high_date,"extended_post_split_low_date":low_date,
             "extended_history_first_date":min(dates),"extended_history_last_date":max(dates),
             "extended_history_complete":False}
 
@@ -89,7 +92,17 @@ async def worker(universe,history,yahoo,save):
         while True:
             today=datetime.now(timezone.utc).date().isoformat()
             todo=[(s,m) for s,m in universe.items() if m.get("effective_date") and m["effective_date"]<=today]
-            todo.sort(key=lambda z:(history.get(z[0],{}).get("attempted_at",""),z[0]!="RETO",z[0]))
+            # Newest unprocessed splits first; completed records refresh hourly.
+            todo.sort(key=lambda z:(bool(history.get(z[0],{}).get("verified")), -date.fromisoformat(z[1]["effective_date"]).toordinal(), history.get(z[0],{}).get("attempted_at","")))
+            now_epoch=time.time()
+            def needs_refresh(sym,meta):
+                h=history.get(sym,{})
+                if not h.get("verified") or h.get("effective_date")!=meta["effective_date"]:return True
+                try:age=now_epoch-datetime.fromisoformat(h["attempted_at"]).timestamp()
+                except (ValueError,KeyError,TypeError):return True
+                interval=600 if meta["effective_date"]==datetime.now(ZoneInfo("America/New_York")).date().isoformat() else 3600
+                return age>=interval
+            todo=[(s,m) for s,m in todo if needs_refresh(s,m)]
             for sym,meta in todo[:16]:
                 try:
                     eff=meta["effective_date"]
@@ -112,13 +125,29 @@ async def worker(universe,history,yahoo,save):
                         result_data.update(await split_day_4h_high(client,yahoo,sym,eff))
                         if result_data.get("verified") and result_data.get("split_day_4h_high") is not None:
                             # A post-split maximum cannot be below the split-day 4H high.
-                            result_data["post_split_high"]=max(result_data["post_split_high"],result_data["split_day_4h_high"],result_data.get("extended_post_split_high") or 0)
+                            daily_high=result_data["post_split_high"]
+                            extended_high=result_data.get("extended_post_split_high")
+                            if extended_high is not None and extended_high>daily_high:
+                                result_data["post_split_high_date"]=result_data.get("extended_post_split_high_date")
+                            result_data["post_split_high"]=max(daily_high,result_data["split_day_4h_high"],extended_high or 0)
                             if result_data.get("extended_post_split_low") is not None:
+                                if result_data["extended_post_split_low"]<result_data["post_split_low"]:
+                                    result_data["post_split_low_date"]=result_data.get("extended_post_split_low_date")
                                 result_data["post_split_low"]=min(result_data["post_split_low"],result_data["extended_post_split_low"])
                             result_data["extrema_source"]="Yahoo daily plus available extended-hours 60m"
                             result_data["split_adjustment_requires_validation"]=True
                     except Exception as exc:
                         result_data.update({"split_day_4h_high":None,"split_day_4h_status":"fetch_error:"+type(exc).__name__})
+                    result_data["quality_warnings"]=[]
+                    if result_data.get("verified"):
+                        hi=result_data.get("post_split_high");lo=result_data.get("post_split_low")
+                        if not hi or not lo or hi<lo:result_data["quality_warnings"].append("invalid_extrema")
+                        if result_data.get("split_day_4h_high") is None:result_data["quality_warnings"].append("4h_unavailable")
+                        if result_data.get("top_10_verified") and (result_data["top_10_low"]<lo-1e-5 or result_data["top_10_high"]>hi+1e-5):
+                            result_data["quality_warnings"].append("rolling_extrema_inconsistent")
+                            result_data["top_10_verified"]=False
+                        if result_data.get("split_adjustment_requires_validation"):
+                            result_data["quality_warnings"].append("split_adjustment_unverified")
                     if not result_data.get("verified") and not result_data.get("error"):
                         result_data["error"]="First post-split daily bar could not be validated"
                     if universe.get(sym,{}).get("effective_date")!=eff:continue
@@ -127,6 +156,6 @@ async def worker(universe,history,yahoo,save):
                     previous=history.get(sym,{})
                     history[sym]={**previous,"verified":bool(previous.get("verified")),"error":f"{type(exc).__name__}: {str(exc)[:150]}","attempted_at":datetime.now(timezone.utc).isoformat()}
                 await asyncio.sleep(1)
-                if sym=="RETO" or sym==todo[0][0]:save(force=True)
+                if sym==todo[0][0]:save(force=True)
             save(force=True)
             await asyncio.sleep(15)
