@@ -66,6 +66,7 @@ def save_persistent_state(force=False):
 
 def utcnow(): return datetime.now(timezone.utc)
 def add_event(symbol, kind, text, data=None):
+    if kind=="halt" and any(e.get("kind")=="halt" and e.get("symbol")==symbol and e.get("data")== (data or {}) for e in EVENTS):return
     EVENTS.insert(0,{"symbol":symbol,"kind":kind,"text":text,"at":utcnow().isoformat(),"data":data or {}})
     del EVENTS[100:]
 
@@ -90,7 +91,7 @@ async def fetch_direct_universe(client):
             if len(tds)<5 or tds[3].lower()!="reverse": continue
             try: eff=datetime.strptime(tds[0],"%b %d, %Y").date()
             except Exception: continue
-            if eff < date(2026,5,1) or eff > date(2026,12,30): continue
+            if eff < date(2026,5,1) or eff > date(2026,12,30) or eff > utcnow().date(): continue
             sym=tds[1].upper().strip()
             if sym:
                 candidate={"symbol":sym,"company":tds[2],"effective_date":eff.isoformat(),"ratio":tds[4],"source":"stockanalysis"}
@@ -173,7 +174,8 @@ async def market_loop():
 
 def readiness_state(meta,q,b,a):
     price=float(q["price"]); live_low=float(q.get("day_low") or price)
-    prior_low=a.get("post_split_low")
+    hist=HISTORY.get(meta.get("symbol"),{})
+    prior_low=hist.get("post_split_low") if hist.get("verified") else None
     new_low=prior_low is not None and live_low<float(prior_low)
     effective_low=live_low if new_low else (float(prior_low) if prior_low is not None else live_low)
     dist=((price/effective_low)-1)*100 if effective_low>0 else None
@@ -183,7 +185,6 @@ def readiness_state(meta,q,b,a):
     if not new_low and prior_low is not None and market_day and market_day!=last_day:
         sessions=min(4,sessions+1)
     high=max(float(a.get("highest_since_split") or price),float(q.get("day_high") or price))
-    hist=HISTORY.get(meta.get("symbol"),{})
     half=hist.get("split_day_high",0)/2 if hist.get("verified") else None
     half_ok=bool(half is not None and effective_low<=half)
     av=b.get("available") if b else None
@@ -193,8 +194,8 @@ def readiness_state(meta,q,b,a):
     if not half_ok: missing.append(f"يحقق شرط النصف <= {half:.4f}" if half else "حساب مستوى النصف"); close=False
     if new_low: missing.append("كون قاع جديد اليوم: يبدأ الثبات من 0/4"); close=False
     if not av_ok:
-        missing.append("Available ينزل إلى <=20K" if av is not None else "قراءة Available")
-        close=close and av is not None and av<=20000
+        missing.append("Available ينزل إلى أقل من 10K" if av is not None else "قراءة Available")
+        close=close and av is not None and av<10000
     if not dist_ok:
         missing.append(f"يرجع أقرب للقاع: الآن {dist:.2f}% والهدف <=10%" if dist is not None else "حساب البعد عن القاع")
         close=close and dist is not None and dist<=20
@@ -214,8 +215,9 @@ def readiness_state(meta,q,b,a):
     elif dist<=10: dp=30
     elif dist<=20: dp=30-15*((dist-10)/10)
     else: dp=0
-    sp=25 if sessions>=4 else 19 if sessions==3 else 12 if sessions==2 else 6 if sessions==1 else 0
+    sp=20 if sessions>=4 else 15 if sessions==3 else 10 if sessions==2 else 5 if sessions==1 else 0
     pct=100.0 if full else round(min(99.0,ap+dp+sp),1)
+    if not hist.get("verified") or av is None or hist.get("rsi_daily") is None:pct=None
     strengths=[]
     if half_ok: strengths.append("شرط النصف ✓")
     if av_ok: strengths.append(f"Available {int(av):,} ✓")
@@ -246,7 +248,7 @@ def refresh_analytics():
         hist=HISTORY.get(sym,{})
         full=st["full"]; was_ready=bool(a.get("ready"))
         ready_at=a.get("ready_at"); ready_price=a.get("ready_price")
-        if full and ready_at is None:
+        if full and not was_ready:
             ready_at=utcnow().isoformat(); ready_price=price
             add_event(sym,"ready","Entered ready list",{"price":price,"available":b.get("available") if b else None})
         launched=bool(a.get("launched")); max_rise=a.get("max_rise_pct")
@@ -270,8 +272,8 @@ def refresh_analytics():
             "effective_sessions":st["effective_sessions"],"new_low_today":st["new_low_today"],
             "available":b.get("available") if b else None,"ctb":b.get("ctb") if b else None,"rebate":b.get("rebate") if b else None,
             "readiness_pct":st["readiness_pct"],"score":st["readiness_pct"],"ready":full,
-            "near_ready":st["shortlist"] and not full and not launched,"shortlist":st["shortlist"] and not launched,
-            "ready_candidate":(b is not None and b.get("available") is not None and b.get("available")<=20000 and st["effective_distance_pct"] is not None and st["effective_distance_pct"]<=10 and st["effective_sessions"]>=4 and not st["new_low_today"] ),
+            "near_ready":st["shortlist"] and not full,"shortlist":st["shortlist"],
+            "ready_candidate":(b is not None and b.get("available") is not None and b.get("available")<10000 and hist.get("verified") and st["effective_distance_pct"] is not None and st["effective_distance_pct"]<=10 and st["effective_sessions"]>=4 and not st["new_low_today"] ),
             "missing_count":st["missing_count"],"missing":st["missing"],"strength":st["strength"],
             "ready_at":ready_at,"ready_price":ready_price,"launched":launched,
             "max_rise_pct":round(max_rise,2) if max_rise is not None else None,"rise_pct":round(max_rise,2) if max_rise is not None else None,
