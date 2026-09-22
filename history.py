@@ -99,10 +99,10 @@ async def worker(universe,history,yahoo,save):
             now_epoch=time.time()
             def needs_refresh(sym,meta):
                 h=history.get(sym,{})
-                if not h.get("verified") or h.get("effective_date")!=meta["effective_date"]:return True
+                if h.get("effective_date")!=meta["effective_date"]:return True
                 try:age=now_epoch-datetime.fromisoformat(h["attempted_at"]).timestamp()
                 except (ValueError,KeyError,TypeError):return True
-                interval=600 if meta["effective_date"]==datetime.now(ZoneInfo("America/New_York")).date().isoformat() else 3600
+                interval=1800 if (not h.get("verified") or h.get("split_day_4h_high") is None) else (600 if meta["effective_date"]==datetime.now(ZoneInfo("America/New_York")).date().isoformat() else 3600)
                 return age>=interval
             todo=[(s,m) for s,m in todo if needs_refresh(s,m)]
             for sym,meta in todo[:16]:
