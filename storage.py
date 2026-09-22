@@ -32,3 +32,10 @@ def save(data):
 
 def status():
     return {"path":str(DB_PATH),"persistent_volume_required":str(DB_PATH).startswith("/tmp"),"exists":DB_PATH.exists()}
+
+
+def snapshot_info():
+    """Last durable snapshot metadata; proves persistence only after restart."""
+    with connect() as conn:
+        rows=conn.execute("SELECT name,updated_at FROM snapshots").fetchall()
+    return {"collections":{name:{"saved_at_epoch":ts} for name,ts in rows},"count":len(rows)}
