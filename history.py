@@ -129,6 +129,89 @@ async def twelve_data_split_day(client, symbol, effective):
             "extended_history_first_date":effective,
             "extended_history_last_date":effective}
 
+async def massive_split_day(client, symbol, effective):
+    """Massive unadjusted 1-minute aggregates, 04:00–20:00 New York."""
+    key=os.getenv("MASSIVE_API_KEY") or os.getenv("POLYGON_API_KEY")
+    if not key:
+        return {"split_day_4h_high":None,"split_day_4h_status":"massive_key_not_configured"}
+    ny=ZoneInfo("America/New_York")
+    day=date.fromisoformat(effective)
+    start=int(datetime.combine(day,datetime.min.time(),ny).timestamp()*1000)
+    end=int(datetime.combine(day,datetime.max.time(),ny).timestamp()*1000)
+    url=f"https://api.massive.com/v2/aggs/ticker/{symbol}/range/1/minute/{start}/{end}"
+    r=await client.get(url,params={"adjusted":"false","sort":"asc","limit":50000,"apiKey":key})
+    if r.status_code==429:return {"split_day_4h_high":None,"split_day_4h_status":"massive_rate_limited"}
+    r.raise_for_status()
+    data=r.json()
+    if data.get("status")=="ERROR":
+        return {"split_day_4h_high":None,"split_day_4h_status":"massive_api_error"}
+    buckets={};highs=[];lows=[]
+    for bar in data.get("results") or []:
+        try:
+            local=datetime.fromtimestamp(bar["t"]/1000,ny)
+            if local.date()!=day or not 4<=local.hour<20:continue
+            hi=float(bar["h"]);lo=float(bar["l"])
+            if lo<=0 or hi<lo:continue
+            bucket=(local.hour-4)//4
+            buckets[bucket]=max(hi,buckets.get(bucket,0))
+            highs.append(hi);lows.append(lo)
+        except (KeyError,TypeError,ValueError):continue
+    if not buckets:
+        return {"split_day_4h_high":None,"split_day_4h_status":"massive_no_split_day_bars"}
+    return {"split_day_4h_high":max(buckets.values()),
+            "split_day_4h_status":"massive_unadjusted_1m_extended_4h",
+            "split_day_4h_candles":len(buckets),
+            "extended_post_split_high":max(highs),
+            "extended_post_split_low":min(lows),
+            "extended_post_split_high_date":effective,
+            "extended_post_split_low_date":effective,
+            "extended_history_first_date":effective,
+            "extended_history_last_date":effective,
+            "extended_history_complete":False}
+
+
+async def alpaca_split_day(client, symbol, effective):
+    """Alpaca free IEX hourly bars: partial exchange coverage, label explicitly."""
+    key=os.getenv("ALPACA_API_KEY_ID")
+    secret=os.getenv("ALPACA_API_SECRET_KEY")
+    if not key or not secret:
+        return {"split_day_4h_high":None,"split_day_4h_status":"alpaca_keys_not_configured"}
+    ny=ZoneInfo("America/New_York")
+    day=date.fromisoformat(effective)
+    start=datetime.combine(day,datetime.min.time(),ny)
+    end=datetime.combine(day+__import__("datetime").timedelta(days=1),datetime.min.time(),ny)
+    r=await client.get(f"https://data.alpaca.markets/v2/stocks/{symbol}/bars",
+        headers={"APCA-API-KEY-ID":key,"APCA-API-SECRET-KEY":secret},
+        params={"timeframe":"1Hour","start":start.isoformat(),
+                "end":end.isoformat(),"feed":"iex","adjustment":"raw","limit":1000})
+    if r.status_code==429:return {"split_day_4h_high":None,"split_day_4h_status":"alpaca_rate_limited"}
+    r.raise_for_status()
+    buckets={};highs=[];lows=[]
+    for bar in r.json().get("bars") or []:
+        try:
+            local=datetime.fromisoformat(bar["t"].replace("Z","+00:00")).astimezone(ny)
+            if local.date()!=day or not 4<=local.hour<20:continue
+            hi=float(bar["h"]);lo=float(bar["l"])
+            if lo<=0 or hi<lo:continue
+            bucket=(local.hour-4)//4
+            buckets[bucket]=max(hi,buckets.get(bucket,0))
+            highs.append(hi);lows.append(lo)
+        except (KeyError,TypeError,ValueError):continue
+    if not buckets:
+        return {"split_day_4h_high":None,"split_day_4h_status":"alpaca_iex_no_split_day_bars"}
+    return {"split_day_4h_high":max(buckets.values()),
+            "split_day_4h_status":"alpaca_iex_partial_exchange_1h_4h",
+            "split_day_4h_candles":len(buckets),
+            "extended_post_split_high":max(highs),
+            "extended_post_split_low":min(lows),
+            "extended_post_split_high_date":effective,
+            "extended_post_split_low_date":effective,
+            "extended_history_first_date":effective,
+            "extended_history_last_date":effective,
+            "extended_history_complete":False,
+            "partial_exchange_coverage":True}
+
+
 async def worker(universe,history,yahoo,save):
     await asyncio.sleep(8)
     async with httpx.AsyncClient(timeout=15,follow_redirects=True,headers={"User-Agent":"Mozilla/5.0"}) as client:
@@ -182,15 +265,21 @@ async def worker(universe,history,yahoo,save):
                         # immediately when Yahoo lacks the required day-one bars.
                         intraday=await split_day_4h_high(client,yahoo,sym,eff)
                         if intraday.get("split_day_4h_high") is None:
-                            try:
-                                alternative=await twelve_data_split_day(client,sym,eff)
-                                if alternative.get("split_day_4h_high") is not None:
-                                    intraday=alternative
-                                else:
-                                    intraday["alternate_4h_status"]=alternative.get("split_day_4h_status")
-                            except Exception as alternate_exc:
-                                intraday["alternate_4h_status"]="fetch_error:"+type(alternate_exc).__name__
+                            intraday["fallback_attempts"]=[]
+                            for provider in (massive_split_day, twelve_data_split_day, alpaca_split_day):
+                                try:
+                                    alternative=await provider(client,sym,eff)
+                                    intraday["fallback_attempts"].append(
+                                        alternative.get("split_day_4h_status","unknown"))
+                                    if alternative.get("split_day_4h_high") is not None:
+                                        intraday=alternative
+                                        break
+                                except Exception as alternate_exc:
+                                    intraday["fallback_attempts"].append(
+                                        provider.__name__+":"+type(alternate_exc).__name__)
                         result_data.update(intraday)
+                        if result_data.get("partial_exchange_coverage"):
+                            result_data.setdefault("quality_warnings",[]).append("partial_exchange_coverage")
                         if result_data.get("verified") and result_data.get("split_day_4h_high") is not None:
                             # A post-split maximum cannot be below the split-day 4H high.
                             daily_high=result_data["post_split_high"]
@@ -206,7 +295,7 @@ async def worker(universe,history,yahoo,save):
                             result_data["split_adjustment_requires_validation"]=True
                     except Exception as exc:
                         result_data.update({"split_day_4h_high":None,"split_day_4h_status":"fetch_error:"+type(exc).__name__})
-                    result_data["quality_warnings"]=[]
+                    result_data["quality_warnings"]=result_data.get("quality_warnings",[])
                     if result_data.get("verified"):
                         hi=result_data.get("post_split_high");lo=result_data.get("post_split_low")
                         if not hi or not lo or hi<lo:result_data["quality_warnings"].append("invalid_extrema")
