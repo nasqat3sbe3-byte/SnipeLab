@@ -37,12 +37,12 @@ def calculate(effective, candles):
         "updated_at":datetime.now(timezone.utc).isoformat()}
 
 async def worker(universe,history,yahoo,save):
-    await asyncio.sleep(20)
+    await asyncio.sleep(8)
     async with httpx.AsyncClient(timeout=15,follow_redirects=True,headers={"User-Agent":"Mozilla/5.0"}) as client:
         while True:
             today=datetime.now(timezone.utc).date().isoformat()
             todo=[(s,m) for s,m in universe.items() if m.get("effective_date") and m["effective_date"]<=today]
-            todo.sort(key=lambda z:history.get(z[0],{}).get("updated_at",""))
+            todo.sort(key=lambda z:(z[0]!="RETO",history.get(z[0],{}).get("attempted_at",""),z[0]))
             for sym,meta in todo[:16]:
                 try:
                     eff=meta["effective_date"]
@@ -60,9 +60,10 @@ async def worker(universe,history,yahoo,save):
                             if min(v.values())<=0:continue
                             bars.append({"date":datetime.fromtimestamp(t,tz).date().isoformat(),**v})
                         except (IndexError,TypeError,ValueError,KeyError):continue
-                    history[sym]=calculate(eff,bars)
+                    history[sym]={**calculate(eff,bars),"attempted_at":datetime.now(timezone.utc).isoformat()}
                 except Exception as exc:
-                    if sym not in history:history[sym]={"verified":False,"error":str(exc)[:100]}
+                    previous=history.get(sym,{})
+                    history[sym]={**previous,"verified":bool(previous.get("verified")),"error":str(exc)[:100],"attempted_at":datetime.now(timezone.utc).isoformat()}
                 await asyncio.sleep(1)
             save(force=True)
             await asyncio.sleep(15)
