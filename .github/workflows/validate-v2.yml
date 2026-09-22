@@ -14,4 +14,4 @@ jobs:
           python-version: '3.12'
       - run: pip install -r requirements.txt
       - run: python -m py_compile main.py history.py storage.py event_rules.py
-      - run: python -m unittest -v test_history test_storage test_event_rules
+      - run: python -m unittest -v test_history test_storage test_event_rules test_universe
