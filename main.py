@@ -172,7 +172,7 @@ async def market_loop():
     async with httpx.AsyncClient(timeout=8,follow_redirects=True,headers=headers,limits=limits) as client:
         while True:
             # Keep the scan order fixed while advancing the cursor.
-    # Sorting by cache status can permanently skip some symbols.
+            # Sorting by cache status can permanently skip some symbols.
             syms=sorted(UNIVERSE,key=lambda sym:(sym!="RETO",sym))
             if not syms:
                 await asyncio.sleep(10); continue
