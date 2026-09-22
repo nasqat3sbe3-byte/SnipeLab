@@ -26,7 +26,7 @@ SPLITS_URLS = ("https://stockanalysis.com/actions/splits/2026/", "https://stocka
 STATE = {
     "status":"starting","heartbeat":None,"heartbeat_count":0,"booted_at":BOOTED_AT.isoformat(),
     "universe_count":len(UNIVERSE_SEED),"last_universe_sync":None,"universe_error":None,"universe_attempts":0,"universe_source":"seed",
-    "market_scan_count":0,"last_market_scan":None,"market_ok":0,"market_failed":0,"last_market_error":None,"market_cursor":0,"market_cycle":0,
+    "market_scan_count":0,"last_market_scan":None,"market_ok":0,"market_failed":0,"market_total_cached":0,"last_market_error":None,"market_cursor":0,"market_cycle":0,
     "borrow_scan_count":0,"last_borrow_scan":None,"borrow_ok":0,"borrow_missing":0,"last_borrow_error":None,
     "analytics_count":0,"last_analytics":None,"last_halt_scan":None,"halt_error":None,"last_news_scan":None,"news_error":None,"last_state_save":None,"persistence_error":None,"pid":os.getpid(),
 }
@@ -156,7 +156,7 @@ async def market_loop():
     limits=httpx.Limits(max_connections=5,max_keepalive_connections=4)
     async with httpx.AsyncClient(timeout=8,follow_redirects=True,headers=headers,limits=limits) as client:
         while True:
-            syms=sorted(UNIVERSE,key=lambda sym:(sym in QUOTES, sym not in ("RETO",),sym))
+            # Stable ordering is essential: sorting by cache presence while advancing\n            # a cursor can permanently skip symbols as QUOTES fills.\n            syms=sorted(UNIVERSE,key=lambda sym:(sym!="RETO",sym))
             if not syms:
                 await asyncio.sleep(10); continue
             cursor=int(STATE["market_cursor"]) % len(syms)
@@ -169,7 +169,7 @@ async def market_loop():
                 if row is not None: QUOTES[s]=row; ok+=1
             STATE["market_scan_count"]+=1
             STATE["last_market_scan"]=utcnow().isoformat()
-            STATE["market_ok"]=ok; STATE["market_failed"]=len(batch)-ok
+            STATE["market_ok"]=ok; STATE["market_failed"]=len(batch)-ok\n            STATE["market_total_cached"]=len(QUOTES)
             STATE["last_market_error"]=None if ok else "no quotes returned"
             nxt=(cursor+len(batch)) % len(syms)
             if nxt <= cursor: STATE["market_cycle"]+=1
@@ -401,7 +401,7 @@ async def dashboard():
 @app.get("/health")
 async def health():
     last=STATE["heartbeat"]; age=(utcnow()-datetime.fromisoformat(last)).total_seconds() if last else None
-    return {"ok":bool(last) and age<30,"heartbeat_age_seconds":age,"storage":storage.status(),"quotes_cached":len(QUOTES),"history_cached":len(HISTORY),**STATE}
+    return {"ok":bool(last) and age<30,"heartbeat_age_seconds":age,"storage":storage.status(),"quotes_cached":len(QUOTES),"history_cached":len(HISTORY),"history_verified":sum(bool(v.get("verified")) for v in HISTORY.values()),"history_failed":sum(bool(v.get("error")) for v in HISTORY.values()),"history_last_attempt":max((v.get("attempted_at","") for v in HISTORY.values()),default=None),**STATE}
 
 @app.get("/universe")
 async def universe():
@@ -494,7 +494,7 @@ async def ticker_news(symbol: str):
 @app.get("/api/diagnostics/{symbol}")
 async def ticker_diagnostics(symbol: str):
     symbol=re.sub(r"[^A-Z0-9.-]","",symbol.upper())[:12]
-    return {"symbol":symbol,"in_split_universe":symbol in UNIVERSE,
+    return {"symbol":symbol,"in_split_universe":symbol in UNIVERSE,"server_time":utcnow().isoformat(),"last_market_scan":STATE["last_market_scan"],"last_borrow_scan":STATE["last_borrow_scan"],
             "split":UNIVERSE.get(symbol),"history":HISTORY.get(symbol),
             "quote":QUOTES.get(symbol),"borrow":BORROW.get(symbol),
             "signal":ANALYTICS.get(symbol),
