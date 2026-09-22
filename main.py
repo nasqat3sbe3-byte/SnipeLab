@@ -133,18 +133,33 @@ async def universe_loop():
 
 async def fetch_quote(client, sem, symbol):
     async with sem:
-        try:
-            r=await client.get(YAHOO.format(symbol=symbol),params={"range":"1d","interval":"1m","includePrePost":"true","events":"history"})
-            r.raise_for_status(); result=(r.json().get("chart",{}).get("result") or [None])[0]
-            if not result:return symbol,None
-            ts=result.get("timestamp") or []; q=((result.get("indicators") or {}).get("quote") or [{}])[0]
-            closes=q.get("close") or []; highs=q.get("high") or []; lows=q.get("low") or []
-            valid=[(int(t),float(closes[i])) for i,t in enumerate(ts) if i<len(closes) and closes[i] is not None and float(closes[i])>0]
-            if not valid:return symbol,None
-            t,p=max(valid,key=lambda z:z[0]); hi=[float(v) for v in highs if v is not None and float(v)>0]; lo=[float(v) for v in lows if v is not None and float(v)>0]
-            return symbol,{"symbol":symbol,"price":p,"day_high":max(hi) if hi else p,"day_low":min(lo) if lo else p,
-                "market_timestamp":datetime.fromtimestamp(t,tz=timezone.utc).isoformat(),"received_at":utcnow().isoformat(),"source":"yahoo_1m_prepost"}
-        except Exception:return symbol,None
+        # The 1m endpoint can be empty outside the session; daily bars are a
+        # clearly labelled fallback, not a claim of live market data.
+        for interval,window in (("1m","1d"),("1d","5d")):
+            try:
+                r=await client.get(YAHOO.format(symbol=symbol),params={"range":window,"interval":interval,"includePrePost":"true","events":"history"})
+                r.raise_for_status()
+                result=(r.json().get("chart",{}).get("result") or [None])[0]
+                if not result:continue
+                ts=result.get("timestamp") or []
+                q=((result.get("indicators") or {}).get("quote") or [{}])[0]
+                closes=q.get("close") or []
+                valid=[(int(t),i,float(closes[i])) for i,t in enumerate(ts) if i<len(closes) and closes[i] is not None and float(closes[i])>0]
+                if not valid:continue
+                t,idx,p=max(valid,key=lambda z:z[0])
+                # Daily fallback must use the last session only, not the whole range.
+                if interval=="1d":
+                    hi=float(q["high"][idx]) if q.get("high") and q["high"][idx] is not None else p
+                    lo=float(q["low"][idx]) if q.get("low") and q["low"][idx] is not None else p
+                else:
+                    hi=max([float(v) for v in (q.get("high") or []) if v is not None and float(v)>0] or [p])
+                    lo=min([float(v) for v in (q.get("low") or []) if v is not None and float(v)>0] or [p])
+                return symbol,{"symbol":symbol,"price":p,"day_high":hi,"day_low":lo,
+                    "market_timestamp":datetime.fromtimestamp(t,tz=timezone.utc).isoformat(),
+                    "received_at":utcnow().isoformat(),"source":"yahoo_"+interval+("_prepost" if interval=="1m" else "_fallback")}
+            except Exception:
+                continue
+        return symbol,None
 
 async def delayed_market_start():
     await asyncio.sleep(5)
