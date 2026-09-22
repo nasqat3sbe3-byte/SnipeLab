@@ -615,6 +615,21 @@ async def history_coverage():
                               for w in sorted({w for x in rows for w in x["quality_warnings"]})},
             "rows":rows}
 
+@app.get("/api/history-audit")
+async def history_audit():
+    """Compact actionable report; do not confuse field coverage with validation."""
+    report=await history_coverage()
+    rows=report.pop("rows")
+    pending=[x for x in rows if x["audit_status"]=="pending"]
+    return {**report,
+        "pending_symbols":[{"symbol":x["symbol"],"effective_date":x["effective_date"],
+            "missing":x["missing"],"error":x["error"],
+            "split_day_4h_status":x["split_day_4h_status"],
+            "last_attempt":x["last_attempt"]} for x in pending],
+        "quality_examples":[{"symbol":x["symbol"],"warnings":x["quality_warnings"]}
+            for x in rows if x["quality_warnings"]][:20],
+        "note":"Completed fields are not independent price validation."}
+
 @app.get("/api/diagnostics/{symbol}")
 async def ticker_diagnostics(symbol: str):
     symbol=re.sub(r"[^A-Z0-9.-]","",symbol.upper())[:12]
