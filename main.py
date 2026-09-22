@@ -182,7 +182,7 @@ def readiness_state(meta,q,b,a):
     sessions=0 if new_low else int(a.get("stability_sessions") or 0)
     market_day=str(q.get("market_timestamp") or "")[:10]
     last_day=a.get("last_market_day")
-    if not new_low and prior_low is not None and market_day and market_day!=last_day:
+    if not new_low and prior_low is not None and market_day and last_day and market_day!=last_day:
         sessions=min(4,sessions+1)
     high=max(float(a.get("highest_since_split") or price),float(q.get("day_high") or price))
     half=hist.get("split_day_high",0)/2 if hist.get("verified") else None
@@ -206,7 +206,7 @@ def readiness_state(meta,q,b,a):
     if hist.get("rsi_daily") is None or hist["rsi_daily"]>=30:missing.append("RSI اليومي أقل من 30");close=False
     if not price_ok: missing.append("تحديث السعر الحالي"); close=False
     full=price_ok and hist.get("verified") and hist.get("rsi_daily") is not None and hist["rsi_daily"]<30 and half_ok and not new_low and av_ok and dist_ok and sess_ok
-    shortlist=full or (price_ok and half_ok and not new_low and close and 1<=len(missing)<=2)
+    shortlist=full or (price_ok and hist.get("verified") and av is not None and 1<=len(missing)<=2)
     if av is None: ap=0
     elif av<10000: ap=50
     elif av<=20000: ap=0
