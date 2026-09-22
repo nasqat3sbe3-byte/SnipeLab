@@ -226,8 +226,13 @@ async def worker(universe,history,yahoo,save):
                     and all(h.get(k) is not None for k in
                         ("split_day_open","split_day_4h_high",
                          "post_split_high","post_split_low")))
+            # Completed histories still need periodic extrema updates as new sessions trade.
+            # Keep the last good snapshot visible while a refresh is in progress.
             todo=[(sym,meta) for sym,meta in todo
-                  if not complete(history.get(sym,{}),meta)]
+                  if not complete(history.get(sym,{}),meta)
+                  or (time.time()-datetime.fromisoformat(
+                      history[sym].get("attempted_at", "1970-01-01T00:00:00+00:00")
+                  ).timestamp() >= 3600)]
             # Retry failures after 30 minutes, not continuously.
             now_epoch=time.time()
             def retry_due(sym,meta):
@@ -308,10 +313,22 @@ async def worker(universe,history,yahoo,save):
                     if not result_data.get("verified") and not result_data.get("error"):
                         result_data["error"]="First post-split daily bar could not be validated"
                     if universe.get(sym,{}).get("effective_date")!=eff:continue
-                    history[sym]={**result_data,"attempted_at":datetime.now(timezone.utc).isoformat()}
+                    # A temporary upstream gap must not erase previously verified
+                    # extrema for the SAME split; retain them until a valid refresh.
+                    previous=history.get(sym,{})
+                    if (previous.get("verified") and previous.get("effective_date")==eff
+                            and not result_data.get("verified")):
+                        history[sym]={**previous,"refresh_error":result_data.get("error") or "unverified refresh",
+                                      "attempted_at":datetime.now(timezone.utc).isoformat()}
+                    else:
+                        history[sym]={**result_data,"attempted_at":datetime.now(timezone.utc).isoformat()}
                 except Exception as exc:
                     previous=history.get(sym,{})
-                    history[sym]={**previous,"verified":bool(previous.get("verified")),"error":f"{type(exc).__name__}: {str(exc)[:150]}","attempted_at":datetime.now(timezone.utc).isoformat()}
+                    # Do not mark stale data fresh or lose a valid historical snapshot.
+                    history[sym]={**previous,"effective_date":meta["effective_date"],
+                                  "verified":bool(previous.get("verified") and previous.get("effective_date")==meta["effective_date"]),
+                                  "error":f"{type(exc).__name__}: {str(exc)[:150]}",
+                                  "attempted_at":datetime.now(timezone.utc).isoformat()}
                 await asyncio.sleep(1)
                 if sym==todo[0][0]:save(force=True)
             save(force=True)
