@@ -38,32 +38,50 @@ def calculate(effective, candles):
         "updated_at":datetime.now(timezone.utc).isoformat()}
 
 async def split_day_4h_high(client, yahoo, symbol, effective):
-    """Highest 4-hour candle high on effective date, including extended hours.
+    """Extended-hours hourly extrema from latest split through today.
 
-    Yahoo exposes 1h bars (not native 4h). Four-hour NY-time buckets are
-    aggregated from the 1h bars; missing intraday coverage is not fabricated.
+    Aggregate 60m Yahoo bars into 4H buckets anchored at 04:00 ET.
+    The day-one 4H high and period extrema use the same intraday source.
+    Do not claim complete extended-hours coverage beyond Yahoo's retention.
     """
-    if (datetime.now(ZoneInfo("America/New_York")).date()-date.fromisoformat(effective)).days>59:
-        return {"split_day_4h_high":None,"split_day_4h_status":"intraday_history_out_of_range"}
-    r=await client.get(yahoo.format(symbol=symbol),params={"period1":int(datetime.combine(date.fromisoformat(effective),datetime.min.time(),timezone.utc).timestamp())-86400,"period2":int(datetime.combine(date.fromisoformat(effective),datetime.min.time(),timezone.utc).timestamp())+172800,"interval":"60m","includePrePost":"true"})
+    ny=ZoneInfo("America/New_York")
+    if (datetime.now(ny).date()-date.fromisoformat(effective)).days>59:
+        return {"split_day_4h_high":None,"split_day_4h_status":"intraday_history_out_of_range",
+                "extended_history_complete":False}
+    start=int(datetime.combine(date.fromisoformat(effective),datetime.min.time(),timezone.utc).timestamp())-86400
+    r=await client.get(yahoo.format(symbol=symbol),params={
+        "period1":start,"period2":int(time.time())+86400,
+        "interval":"60m","includePrePost":"true"})
     r.raise_for_status()
     data=(r.json().get("chart",{}).get("result") or [None])[0]
-    if not data:return {"split_day_4h_high":None,"split_day_4h_status":"no_intraday_bars"}
+    if not data:return {"split_day_4h_high":None,"split_day_4h_status":"no_intraday_bars","extended_history_complete":False}
     tz=ZoneInfo((data.get("meta") or {}).get("exchangeTimezoneName") or "America/New_York")
     q=((data.get("indicators") or {}).get("quote") or [{}])[0]
-    buckets={}
+    buckets={}; period_high=None;period_low=None;first_day=False;dates=set()
     for i,t in enumerate(data.get("timestamp") or []):
         local=datetime.fromtimestamp(t,tz)
-        if local.date().isoformat()!=effective:continue
+        day=local.date().isoformat()
+        if day<effective or local.hour<4 or local.hour>=20:continue
         try:
-            high=float(q["high"][i])
-            if high<=0:continue
+            high=float(q["high"][i]);low=float(q["low"][i])
+            if low<=0 or high<low:continue
         except (IndexError,TypeError,ValueError,KeyError):continue
-        # 04:00 ET starts the extended-hours 4H candle series.
-        bucket=(local.hour-4)//4
-        buckets[bucket]=max(high,buckets.get(bucket,0))
-    if not buckets:return {"split_day_4h_high":None,"split_day_4h_status":"no_split_day_intraday_bars"}
-    return {"split_day_4h_high":max(buckets.values()),"split_day_4h_status":"yahoo_60m_aggregated_extended_4h","split_day_4h_candles":len(buckets)}
+        dates.add(day)
+        period_high=high if period_high is None else max(high,period_high)
+        period_low=low if period_low is None else min(low,period_low)
+        if day==effective:
+            first_day=True
+            bucket=(local.hour-4)//4
+            buckets[bucket]=max(high,buckets.get(bucket,0))
+    if not buckets:
+        return {"split_day_4h_high":None,"split_day_4h_status":"no_split_day_intraday_bars",
+                "extended_history_complete":False}
+    return {"split_day_4h_high":max(buckets.values()),
+            "split_day_4h_status":"yahoo_60m_aggregated_extended_4h",
+            "split_day_4h_candles":len(buckets),
+            "extended_post_split_high":period_high,"extended_post_split_low":period_low,
+            "extended_history_first_date":min(dates),"extended_history_last_date":max(dates),
+            "extended_history_complete":False}
 
 async def worker(universe,history,yahoo,save):
     await asyncio.sleep(8)
@@ -92,6 +110,13 @@ async def worker(universe,history,yahoo,save):
                     result_data=calculate(eff,bars)
                     try:
                         result_data.update(await split_day_4h_high(client,yahoo,sym,eff))
+                        if result_data.get("verified") and result_data.get("split_day_4h_high") is not None:
+                            # A post-split maximum cannot be below the split-day 4H high.
+                            result_data["post_split_high"]=max(result_data["post_split_high"],result_data["split_day_4h_high"],result_data.get("extended_post_split_high") or 0)
+                            if result_data.get("extended_post_split_low") is not None:
+                                result_data["post_split_low"]=min(result_data["post_split_low"],result_data["extended_post_split_low"])
+                            result_data["extrema_source"]="Yahoo daily plus available extended-hours 60m"
+                            result_data["split_adjustment_requires_validation"]=True
                     except Exception as exc:
                         result_data.update({"split_day_4h_high":None,"split_day_4h_status":"fetch_error:"+type(exc).__name__})
                     if not result_data.get("verified") and not result_data.get("error"):
