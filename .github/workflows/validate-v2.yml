@@ -1,0 +1,17 @@
+name: SnipeLab 2 validation
+on:
+  push:
+    branches: [snipelab-2-mobile-rebuild]
+  pull_request:
+    branches: [main]
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: python -m py_compile main.py history.py
+      - run: python -m unittest -v test_history
