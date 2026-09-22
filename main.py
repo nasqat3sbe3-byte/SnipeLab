@@ -10,6 +10,7 @@ from datetime import datetime, timezone, date
 
 import httpx
 from history import worker as historical_worker
+import storage
 from bs4 import BeautifulSoup
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
@@ -43,8 +44,11 @@ _LAST_SAVE = 0.0
 
 def load_persistent_state():
     try:
-        if not STATE_FILE.exists(): return
-        d=json.loads(STATE_FILE.read_text("utf-8"))
+        d=storage.load(("universe","quotes","analytics","borrow","history","events","halts"))
+        if not d and STATE_FILE.exists():d=json.loads(STATE_FILE.read_text("utf-8"))
+        UNIVERSE.update(d.get("universe") or {})
+        QUOTES.update(d.get("quotes") or {})
+        HALTS.update(d.get("halts") or {})
         ANALYTICS.update(d.get("analytics") or {})
         BORROW.update(d.get("borrow") or {})
         HISTORY.update(d.get("history") or {})
@@ -57,9 +61,8 @@ def save_persistent_state(force=False):
     now=time.time()
     if not force and now-_LAST_SAVE<60:return
     try:
-        tmp=STATE_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"saved_at":utcnow().isoformat(),"analytics":ANALYTICS,"borrow":BORROW,"history":HISTORY,"events":EVENTS[:100]},separators=(",",":")),"utf-8")
-        tmp.replace(STATE_FILE); _LAST_SAVE=now
+        storage.save({"universe":UNIVERSE,"quotes":QUOTES,"analytics":ANALYTICS,"borrow":BORROW,"history":HISTORY,"events":EVENTS[:100],"halts":HALTS})
+        _LAST_SAVE=now
         STATE["last_state_save"]=utcnow().isoformat(); STATE["persistence_error"]=None
     except Exception as exc:
         STATE["persistence_error"]=f"save {type(exc).__name__}: {str(exc)[:100]}"
@@ -99,7 +102,8 @@ async def fetch_direct_universe(client):
                 if previous is None or candidate["effective_date"] > previous["effective_date"]:
                     merged[sym]=candidate
     if not merged: raise RuntimeError("empty direct split feed | "+" | ".join(errors))
-    UNIVERSE.clear(); UNIVERSE.update(merged)
+    UNIVERSE.update(merged)
+    # Keep last known confirmed symbols when an upstream page is incomplete.
     STATE["universe_count"]=len(UNIVERSE); STATE["last_universe_sync"]=utcnow().isoformat(); STATE["universe_error"]=None; STATE["universe_source"]="stockanalysis_direct"
     return True
 
@@ -120,8 +124,8 @@ async def sync_universe(client):
 
 async def universe_loop():
     # Keep Northflank ingress healthy before any external scraping starts.
-    await asyncio.sleep(15)
-    headers={"User-Agent":"Mozilla/5.0 QanasWatcher/0.3"}
+    await asyncio.sleep(3)
+    headers={"User-Agent":"Mozilla/5.0 SnipeLab/2.0"}
     async with httpx.AsyncClient(follow_redirects=True,headers=headers) as client:
         while True:
             await sync_universe(client)
@@ -143,7 +147,7 @@ async def fetch_quote(client, sem, symbol):
         except Exception:return symbol,None
 
 async def delayed_market_start():
-    await asyncio.sleep(30)
+    await asyncio.sleep(5)
     await market_loop()
 
 async def market_loop():
@@ -152,7 +156,7 @@ async def market_loop():
     limits=httpx.Limits(max_connections=5,max_keepalive_connections=4)
     async with httpx.AsyncClient(timeout=8,follow_redirects=True,headers=headers,limits=limits) as client:
         while True:
-            syms=sorted(UNIVERSE)
+            syms=sorted(UNIVERSE,key=lambda sym:(sym in QUOTES, sym not in ("RETO",),sym))
             if not syms:
                 await asyncio.sleep(10); continue
             cursor=int(STATE["market_cursor"]) % len(syms)
@@ -170,6 +174,7 @@ async def market_loop():
             nxt=(cursor+len(batch)) % len(syms)
             if nxt <= cursor: STATE["market_cycle"]+=1
             STATE["market_cursor"]=nxt
+            save_persistent_state()
             await asyncio.sleep(3)
 
 def readiness_state(meta,q,b,a):
@@ -310,7 +315,7 @@ def parse_ibkr(text):
 
 async def delayed_borrow_start():
     # Let universe and price workers settle first on the 256 MB sandbox.
-    await asyncio.sleep(150)
+    await asyncio.sleep(10)
     await borrow_loop()
 
 async def borrow_loop():
@@ -331,6 +336,7 @@ async def borrow_loop():
             STATE["borrow_scan_count"]+=1; STATE["last_borrow_scan"]=now; STATE["borrow_ok"]=sum(1 for s in UNIVERSE if s in rows)
             STATE["borrow_missing"]=max(0,len(UNIVERSE)-STATE["borrow_ok"]); STATE["last_borrow_error"]=None
         except Exception as exc: STATE["last_borrow_error"]=f"{type(exc).__name__}: {str(exc)[:120]}"
+        save_persistent_state()
         await asyncio.sleep(300)
 
 async def halt_loop():
@@ -351,6 +357,7 @@ async def halt_loop():
                     row["_key"]=key
                 HALTS.clear(); HALTS.update(fresh); STATE["last_halt_scan"]=utcnow().isoformat(); STATE["halt_error"]=None
             except Exception as exc:STATE["halt_error"]=f"{type(exc).__name__}: {str(exc)[:100]}"
+            save_persistent_state()
             await asyncio.sleep(120)
 
 async def legacy_news_loop_disabled():
@@ -382,7 +389,7 @@ async def startup():
 async def root():
     return {"service":"snipelab-engine","message":"SnipeLab Engine is alive","version":"0.6.0",**STATE,
         "prices_ready":len(QUOTES),"borrow_ready":len(BORROW),"events":len(EVENTS),
-        "uptime_seconds":int(time.time()-BOOTED_AT.timestamp()),
+        "uptime_seconds":int(time.time()-BOOTED_AT.timestamp()),"storage":storage.status(),
         "endpoints":["/dashboard","/health","/universe","/prices","/borrow","/snapshot","/signals","/ready","/zero-short","/momentum","/top","/halts","/news","/events"]}
 
 DASHBOARD = (Path(__file__).parent / "dashboard.html").read_text("utf-8")
@@ -394,7 +401,7 @@ async def dashboard():
 @app.get("/health")
 async def health():
     last=STATE["heartbeat"]; age=(utcnow()-datetime.fromisoformat(last)).total_seconds() if last else None
-    return {"ok":bool(last) and age<30,"heartbeat_age_seconds":age,**STATE}
+    return {"ok":bool(last) and age<30,"heartbeat_age_seconds":age,"storage":storage.status(),"quotes_cached":len(QUOTES),"history_cached":len(HISTORY),**STATE}
 
 @app.get("/universe")
 async def universe():
@@ -465,7 +472,7 @@ async def dashboard_data():
             "top_10_verified":bool(h.get("top_10_verified")),
             "history_status":h.get("error") or ("verified" if h.get("verified") else "pending")}
         rows[sym]={"symbol":sym,"effective_date":meta.get("effective_date"),"price":QUOTES.get(sym),"borrow":BORROW.get(sym),"signal":signal}
-    return {"server_time":utcnow().isoformat(),"history_count":sum(bool(h.get("verified")) for h in HISTORY.values()),"history_pending":sum(1 for sym in UNIVERSE if not HISTORY.get(sym,{}).get("verified")),"health":{"ok":STATE.get("status")=="running","heartbeat":STATE.get("heartbeat"),"universe_count":len(UNIVERSE),"price_count":len(QUOTES),"borrow_count":len(BORROW),"analytics_count":len(ANALYTICS)},"rows":rows,"events":EVENTS[:40],"halts":HALTS,"news":NEWS}
+    return {"server_time":utcnow().isoformat(),"storage":storage.status(),"history_count":sum(bool(h.get("verified")) for h in HISTORY.values()),"history_pending":sum(1 for sym in UNIVERSE if not HISTORY.get(sym,{}).get("verified")),"health":{"ok":STATE.get("status")=="running","heartbeat":STATE.get("heartbeat"),"universe_count":len(UNIVERSE),"price_count":len(QUOTES),"borrow_count":len(BORROW),"analytics_count":len(ANALYTICS)},"rows":rows,"events":EVENTS[:40],"halts":HALTS,"news":NEWS}
 
 @app.get("/halts")
 async def halts():
