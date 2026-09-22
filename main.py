@@ -590,7 +590,12 @@ async def history_coverage():
                 "post_split_low":h.get("post_split_low") if valid else None,
                 "post_split_low_date":h.get("post_split_low_date") if valid else None}
         missing=[key for key in ("split_day_open","split_day_4h_high","post_split_high","post_split_low") if fields[key] is None]
-        rows.append({"symbol":sym,"effective_date":meta["effective_date"],
+        warnings=h.get("quality_warnings",[])
+        if not valid or missing:audit_status="pending"
+        elif any(w in warnings for w in ("invalid_extrema","rolling_extrema_inconsistent")):audit_status="inconsistent"
+        elif warnings or not h.get("extended_history_complete",False):audit_status="needs_validation"
+        else:audit_status="verified"
+        rows.append({"symbol":sym,"audit_status":audit_status,"effective_date":meta["effective_date"],
             "ratio":meta.get("ratio"),"split_source":meta.get("source"),
             **fields,"complete":not missing,"missing":missing,
             "quality_warnings":h.get("quality_warnings",[]),
@@ -601,6 +606,13 @@ async def history_coverage():
             "four_fields_complete":sum(x["complete"] for x in rows),
             "pending":sum(not x["complete"] for x in rows),
             "quality_flagged":sum(bool(x["quality_warnings"]) for x in rows),
+            "needs_validation":sum(x["audit_status"]=="needs_validation" for x in rows),
+            "inconsistent":sum(x["audit_status"]=="inconsistent" for x in rows),
+            "audited":sum(x["audit_status"]=="verified" for x in rows),
+            "pending_never_attempted":sum(x["audit_status"]=="pending" and not x["last_attempt"] for x in rows),
+            "pending_attempted":sum(x["audit_status"]=="pending" and bool(x["last_attempt"]) for x in rows),
+            "warning_counts":{w:sum(w in x["quality_warnings"] for x in rows)
+                              for w in sorted({w for x in rows for w in x["quality_warnings"]})},
             "rows":rows}
 
 @app.get("/api/diagnostics/{symbol}")
