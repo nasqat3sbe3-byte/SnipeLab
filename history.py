@@ -42,7 +42,7 @@ async def worker(universe,history,yahoo,save):
         while True:
             today=datetime.now(timezone.utc).date().isoformat()
             todo=[(s,m) for s,m in universe.items() if m.get("effective_date") and m["effective_date"]<=today]
-            todo.sort(key=lambda z:(z[0]!="RETO",history.get(z[0],{}).get("attempted_at",""),z[0]))
+            todo.sort(key=lambda z:(history.get(z[0],{}).get("attempted_at",""),z[0]!="RETO",z[0]))
             for sym,meta in todo[:16]:
                 try:
                     eff=meta["effective_date"]
@@ -50,7 +50,7 @@ async def worker(universe,history,yahoo,save):
                     r=await client.get(yahoo.format(symbol=sym),params={"period1":start,"period2":int(time.time())+86400,"interval":"1d","events":"history"})
                     r.raise_for_status()
                     result=(r.json().get("chart",{}).get("result") or [None])[0]
-                    if not result:continue
+                    if not result:raise ValueError("Yahoo returned no chart result")
                     q=((result.get("indicators") or {}).get("quote") or [{}])[0]
                     bars=[]
                     tz=ZoneInfo((result.get("meta") or {}).get("exchangeTimezoneName") or "America/New_York")
@@ -60,10 +60,14 @@ async def worker(universe,history,yahoo,save):
                             if min(v.values())<=0:continue
                             bars.append({"date":datetime.fromtimestamp(t,tz).date().isoformat(),**v})
                         except (IndexError,TypeError,ValueError,KeyError):continue
-                    history[sym]={**calculate(eff,bars),"attempted_at":datetime.now(timezone.utc).isoformat()}
+                    result_data=calculate(eff,bars)
+                    if not result_data.get("verified") and not result_data.get("error"):
+                        result_data["error"]="First post-split daily bar could not be validated"
+                    history[sym]={**result_data,"attempted_at":datetime.now(timezone.utc).isoformat()}
                 except Exception as exc:
                     previous=history.get(sym,{})
-                    history[sym]={**previous,"verified":bool(previous.get("verified")),"error":str(exc)[:100],"attempted_at":datetime.now(timezone.utc).isoformat()}
+                    history[sym]={**previous,"verified":bool(previous.get("verified")),"error":f"{type(exc).__name__}: {str(exc)[:150]}","attempted_at":datetime.now(timezone.utc).isoformat()}
                 await asyncio.sleep(1)
+                if sym=="RETO" or sym==todo[0][0]:save(force=True)
             save(force=True)
             await asyncio.sleep(15)
