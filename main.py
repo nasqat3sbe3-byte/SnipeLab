@@ -530,12 +530,43 @@ async def top():
     rows.sort(key=lambda x:x.get("top_10_gain_pct") or 0,reverse=True)
     return {"count":len(rows),"rows":rows}
 
+def data_freshness(row, timestamp_field, max_age_seconds):
+    """Explicit freshness for cached quotes/borrow; no fabricated live claims."""
+    stamp=(row or {}).get(timestamp_field)
+    if not stamp:
+        return {"status":"missing","age_seconds":None,"timestamp":None}
+    try:
+        parsed=datetime.fromisoformat(stamp.replace("Z","+00:00"))
+        age=max(0,int((utcnow()-parsed.astimezone(timezone.utc)).total_seconds()))
+        return {"status":"fresh" if age<=max_age_seconds else "stale",
+                "age_seconds":age,"timestamp":stamp}
+    except (TypeError,ValueError):
+        return {"status":"unknown","age_seconds":None,"timestamp":stamp}
+
+@app.get("/api/data-freshness")
+async def data_freshness_report():
+    """Read-only source coverage and age, without waiting for upstream APIs."""
+    quotes={sym:data_freshness(QUOTES.get(sym),"received_at",900) for sym in UNIVERSE}
+    borrow={sym:data_freshness(BORROW.get(sym),"received_at",1200) for sym in UNIVERSE}
+    def counts(rows):
+        return {state:sum(v["status"]==state for v in rows.values())
+                for state in ("fresh","stale","missing","unknown")}
+    return {"generated_at":utcnow().isoformat(),"universe_count":len(UNIVERSE),
+            "quotes":counts(quotes),"borrow":counts(borrow),
+            "last_market_scan":STATE["last_market_scan"],
+            "last_borrow_scan":STATE["last_borrow_scan"],
+            "last_market_error":STATE["last_market_error"],
+            "last_borrow_error":STATE["last_borrow_error"],
+            "quote_max_age_seconds":900,"borrow_max_age_seconds":1200}
+
 @app.get("/api/dashboard")
 async def dashboard_data():
     rows={}
     for sym,meta in UNIVERSE.items():
         h=HISTORY.get(sym,{})
         signal={**(ANALYTICS.get(sym) or {}),
+            "quote_freshness":data_freshness(QUOTES.get(sym),"received_at",900),
+            "borrow_freshness":data_freshness(BORROW.get(sym),"received_at",1200),
             "history_verified":bool(h.get("verified")),
             "post_split_low":h.get("post_split_low"),
             "highest_since_split":h.get("post_split_high"),
