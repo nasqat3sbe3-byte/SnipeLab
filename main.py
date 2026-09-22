@@ -223,7 +223,7 @@ def readiness_state(meta,q,b,a):
     if not new_low and prior_low is not None and market_day and last_day and market_day!=last_day:
         sessions=min(4,sessions+1)
     high=max(float(a.get("highest_since_split") or price),float(q.get("day_high") or price))
-    half=hist.get("split_day_high",0)/2 if hist.get("verified") else None
+    half=hist["split_day_4h_high"]/2 if hist.get("verified") and hist.get("split_day_4h_high") is not None else None
     half_ok=bool(half is not None and effective_low<=half)
     av=b.get("available") if b else None
     price_ok=price>0; av_ok=av is not None and av<10000
@@ -301,7 +301,7 @@ def refresh_analytics():
             add_event(sym,"ignition",f"Momentum +{ignition['pct']:.1f}%",ignition)
         ANALYTICS[sym]={"symbol":sym,"active":True,"effective_date":eff,"price":price,
             "post_split_low":hist.get("post_split_low"),"highest_since_split":hist.get("post_split_high"),
-            "history_verified":bool(hist.get("verified")),"split_day_high":hist.get("split_day_high"),"split_day_open":hist.get("split_day_open"),"rsi_daily":hist.get("rsi_daily"),
+            "history_verified":bool(hist.get("verified")),"split_day_high":hist.get("split_day_high"),"split_day_4h_high":hist.get("split_day_4h_high"),"split_day_4h_status":hist.get("split_day_4h_status"),"split_day_open":hist.get("split_day_open"),"rsi_daily":hist.get("rsi_daily"),
             "top_10_gain_pct":hist.get("top_10_gain_pct"),"top_10_low":hist.get("top_10_low"),"top_10_high":hist.get("top_10_high"),
             "top_10_low_date":hist.get("top_10_low_date"),"top_10_high_date":hist.get("top_10_high_date"),"top_10_verified":bool(hist.get("top_10_verified")),
             "half_level":st["half_level"],"half_reached":st["half_reached"],
@@ -509,6 +509,8 @@ async def dashboard_data():
             "post_split_low":h.get("post_split_low"),
             "highest_since_split":h.get("post_split_high"),
             "split_day_high":h.get("split_day_high"),
+            "split_day_4h_high":h.get("split_day_4h_high"),
+            "split_day_4h_status":h.get("split_day_4h_status"),
             "split_day_open":h.get("split_day_open"),
             "rsi_daily":h.get("rsi_daily"),
             "top_10_gain_pct":h.get("top_10_gain_pct"),
