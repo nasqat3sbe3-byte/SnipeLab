@@ -87,7 +87,7 @@ async def fetch_direct_universe(client):
             if len(tds)<5 or tds[3].lower()!="reverse": continue
             try: eff=datetime.strptime(tds[0],"%b %d, %Y").date()
             except Exception: continue
-            if eff < date(2026,5,1) or eff > date(2026,12,31): continue
+            if eff < date(2026,5,1) or eff > date(2026,12,30): continue
             sym=tds[1].upper().strip()
             if sym:
                 candidate={"symbol":sym,"company":tds[2],"effective_date":eff.isoformat(),"ratio":tds[4],"source":"stockanalysis"}
@@ -106,27 +106,13 @@ async def sync_universe(client):
         if await fetch_direct_universe(client): return
     except Exception as exc:
         last_error=f"direct: {type(exc).__name__}"
-    for path in ("/api/hunt","/api/splits"):
-        try:
-            r=await client.get(QANAS_WEB+path,timeout=60); r.raise_for_status(); rows=r.json()
-            if not isinstance(rows,list) or not rows: raise RuntimeError("empty universe")
-            fresh={}
-            today=utcnow().date().isoformat()
-            for x in rows:
-                sym=str(x.get("symbol") or "").upper().strip()
-                eff=str(x.get("effective_date") or "")[:10]
-                if sym and (not eff or eff<=today): fresh[sym]=x
-            if fresh:
-                UNIVERSE.clear(); UNIVERSE.update(fresh)
-                STATE["universe_count"]=len(UNIVERSE); STATE["last_universe_sync"]=utcnow().isoformat()
-                STATE["universe_error"]=None
-                return
-        except Exception as exc: last_error=f"{path}: {type(exc).__name__}"
+    # Never fetch the legacy Qanas service: SnipeLab is fully independent.
+    # Keep the last successfully synced universe when the public feed fails.
     # Render can be slow to wake up. Never leave the watcher empty while it retries.
     if not UNIVERSE:
         UNIVERSE.update({s:{"symbol":s,"effective_date":None,"source":"seed"} for s in UNIVERSE_SEED})
         STATE["universe_count"]=len(UNIVERSE)
-    STATE["universe_error"]=last_error or "unknown"; STATE["universe_source"]="seed" if STATE["last_universe_sync"] is None else STATE["universe_source"]
+    STATE["universe_error"]=last_error or "StockAnalysis feed unavailable"; STATE["universe_source"]="seed" if STATE["last_universe_sync"] is None else STATE["universe_source"]
 
 async def universe_loop():
     # Keep Northflank ingress healthy before any external scraping starts.
@@ -459,7 +445,7 @@ async def dashboard_data():
     rows={}
     for sym,meta in UNIVERSE.items():
         rows[sym]={"symbol":sym,"effective_date":meta.get("effective_date"),"price":QUOTES.get(sym),"borrow":BORROW.get(sym),"signal":ANALYTICS.get(sym)}
-    return {"server_time":utcnow().isoformat(),"health":{"ok":STATE.get("status")=="ok","heartbeat":STATE.get("heartbeat"),"universe_count":len(UNIVERSE),"price_count":len(QUOTES),"borrow_count":len(BORROW),"analytics_count":len(ANALYTICS)},"rows":rows,"events":EVENTS[-40:][::-1],"halts":HALTS,"news":NEWS}
+    return {"server_time":utcnow().isoformat(),"health":{"ok":STATE.get("status")=="running","heartbeat":STATE.get("heartbeat"),"universe_count":len(UNIVERSE),"price_count":len(QUOTES),"borrow_count":len(BORROW),"analytics_count":len(ANALYTICS)},"rows":rows,"events":EVENTS[:40],"halts":HALTS,"news":NEWS}
 
 @app.get("/halts")
 async def halts():
