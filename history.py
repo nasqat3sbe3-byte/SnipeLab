@@ -47,7 +47,9 @@ async def split_day_4h_high(client, yahoo, symbol, effective):
     Do not claim complete extended-hours coverage beyond Yahoo's retention.
     """
     ny=ZoneInfo("America/New_York")
-    if (datetime.now(ny).date()-date.fromisoformat(effective)).days>59:
+    # Yahoo 60m often exposes a longer window than 1m/15m; request it and
+    # report upstream rejection explicitly instead of hiding older split dates.
+    if (datetime.now(ny).date()-date.fromisoformat(effective)).days>729:
         return {"split_day_4h_high":None,"split_day_4h_status":"intraday_history_out_of_range",
                 "extended_history_complete":False}
     start=int(datetime.combine(date.fromisoformat(effective),datetime.min.time(),timezone.utc).timestamp())-86400
