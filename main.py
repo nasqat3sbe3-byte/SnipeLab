@@ -11,6 +11,7 @@ from datetime import datetime, timezone, date
 import httpx
 from history import worker as historical_worker
 import storage
+from event_rules import borrow_events, ready_event, worker_health
 from bs4 import BeautifulSoup
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
@@ -273,7 +274,8 @@ def refresh_analytics():
         ready_at=a.get("ready_at"); ready_price=a.get("ready_price")
         if full and not was_ready:
             ready_at=utcnow().isoformat(); ready_price=price
-            add_event(sym,"ready","Entered ready list",{"price":price,"available":b.get("available") if b else None})
+            ev=ready_event(sym,was_ready,full,price,b.get("available") if b else None)
+            if ev:add_event(*ev)
         launched=bool(a.get("launched")); max_rise=a.get("max_rise_pct")
         if ready_price and ready_price>0:
             # Match Qanas: TOP follows the highest observed price after the first qualifying ready moment.
@@ -345,11 +347,8 @@ async def borrow_loop():
                 new=rows.get(sym)
                 if not new:continue
                 new={**new,"received_at":now}; old=BORROW.get(sym)
-                if old:
-                    oa,na=old.get("available"),new.get("available")
-                    if oa is not None and na is not None and na<oa:
-                        changed+=1; add_event(sym,"available_down",f"Available {oa:g} -> {na:g}",{"old":oa,"new":na})
-                    if oa!=0 and na==0:add_event(sym,"available_zero","Available reached 0",{"old":oa,"new":0})
+                for ev in borrow_events(sym,old,new):
+                    changed+=1; add_event(*ev)
                 BORROW[sym]=new
             STATE["borrow_scan_count"]+=1; STATE["last_borrow_scan"]=now; STATE["borrow_ok"]=sum(1 for s in UNIVERSE if s in rows)
             STATE["borrow_missing"]=max(0,len(UNIVERSE)-STATE["borrow_ok"]); STATE["last_borrow_error"]=None
@@ -419,7 +418,9 @@ async def dashboard():
 @app.get("/health")
 async def health():
     last=STATE["heartbeat"]; age=(utcnow()-datetime.fromisoformat(last)).total_seconds() if last else None
-    return {"ok":bool(last) and age<30,"heartbeat_age_seconds":age,"storage":storage.status(),"quotes_cached":len(QUOTES),"history_cached":len(HISTORY),"history_verified":sum(bool(v.get("verified")) for v in HISTORY.values()),"history_failed":sum(bool(v.get("error")) for v in HISTORY.values()),"history_last_attempt":max((v.get("attempted_at","") for v in HISTORY.values()),default=None),**STATE}
+    now=utcnow()
+    workers={"market":worker_health(now,STATE.get("last_market_scan"),180),"borrow":worker_health(now,STATE.get("last_borrow_scan"),420),"history":worker_health(now,max((v.get("attempted_at","") for v in HISTORY.values()),default=None),900),"analytics":worker_health(now,STATE.get("last_analytics"),120),"halt":worker_health(now,STATE.get("last_halt_scan"),240)}
+    return {"ok":bool(last) and age<30,"heartbeat_age_seconds":age,"workers":workers,"storage":storage.status(),"quotes_cached":len(QUOTES),"history_cached":len(HISTORY),"history_verified":sum(bool(HISTORY.get(sym,{}).get("verified")) for sym in UNIVERSE),"history_failed":sum(bool(HISTORY.get(sym,{}).get("error")) for sym in UNIVERSE),"history_last_attempt":max((v.get("attempted_at","") for v in HISTORY.values()),default=None),**STATE}
 
 @app.get("/universe")
 async def universe():
@@ -490,7 +491,7 @@ async def dashboard_data():
             "top_10_verified":bool(h.get("top_10_verified")),
             "history_status":h.get("error") or ("verified" if h.get("verified") else "pending")}
         rows[sym]={"symbol":sym,"effective_date":meta.get("effective_date"),"price":QUOTES.get(sym),"borrow":BORROW.get(sym),"signal":signal}
-    return {"server_time":utcnow().isoformat(),"storage":storage.status(),"history_count":sum(bool(h.get("verified")) for h in HISTORY.values()),"history_pending":sum(1 for sym in UNIVERSE if not HISTORY.get(sym,{}).get("verified")),"health":{"ok":STATE.get("status")=="running","heartbeat":STATE.get("heartbeat"),"universe_count":len(UNIVERSE),"price_count":len(QUOTES),"borrow_count":len(BORROW),"analytics_count":len(ANALYTICS)},"rows":rows,"events":EVENTS[:40],"halts":HALTS,"news":NEWS}
+    return {"server_time":utcnow().isoformat(),"storage":storage.status(),"history_count":sum(bool(HISTORY.get(sym,{}).get("verified")) for sym in UNIVERSE),"history_pending":sum(1 for sym in UNIVERSE if not HISTORY.get(sym,{}).get("verified")),"health":{"ok":STATE.get("status")=="running","heartbeat":STATE.get("heartbeat"),"universe_count":len(UNIVERSE),"price_count":len(QUOTES),"borrow_count":len(BORROW),"analytics_count":len(ANALYTICS)},"rows":rows,"events":EVENTS[:40],"halts":HALTS,"news":NEWS}
 
 @app.get("/halts")
 async def halts():
