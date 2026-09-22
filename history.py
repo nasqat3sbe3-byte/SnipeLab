@@ -37,6 +37,34 @@ def calculate(effective, candles):
         "top_10_verified":bool(top and verified),**(top or {}),
         "updated_at":datetime.now(timezone.utc).isoformat()}
 
+async def split_day_4h_high(client, yahoo, symbol, effective):
+    """Highest 4-hour candle high on effective date, including extended hours.
+
+    Yahoo exposes 1h bars (not native 4h). Four-hour NY-time buckets are
+    aggregated from the 1h bars; missing intraday coverage is not fabricated.
+    """
+    if (datetime.now(ZoneInfo("America/New_York")).date()-date.fromisoformat(effective)).days>59:
+        return {"split_day_4h_high":None,"split_day_4h_status":"intraday_history_out_of_range"}
+    r=await client.get(yahoo.format(symbol=symbol),params={"period1":int(datetime.combine(date.fromisoformat(effective),datetime.min.time(),timezone.utc).timestamp())-86400,"period2":int(datetime.combine(date.fromisoformat(effective),datetime.min.time(),timezone.utc).timestamp())+172800,"interval":"60m","includePrePost":"true"})
+    r.raise_for_status()
+    data=(r.json().get("chart",{}).get("result") or [None])[0]
+    if not data:return {"split_day_4h_high":None,"split_day_4h_status":"no_intraday_bars"}
+    tz=ZoneInfo((data.get("meta") or {}).get("exchangeTimezoneName") or "America/New_York")
+    q=((data.get("indicators") or {}).get("quote") or [{}])[0]
+    buckets={}
+    for i,t in enumerate(data.get("timestamp") or []):
+        local=datetime.fromtimestamp(t,tz)
+        if local.date().isoformat()!=effective:continue
+        try:
+            high=float(q["high"][i])
+            if high<=0:continue
+        except (IndexError,TypeError,ValueError,KeyError):continue
+        # 04:00 ET starts the extended-hours 4H candle series.
+        bucket=(local.hour-4)//4
+        buckets[bucket]=max(high,buckets.get(bucket,0))
+    if not buckets:return {"split_day_4h_high":None,"split_day_4h_status":"no_split_day_intraday_bars"}
+    return {"split_day_4h_high":max(buckets.values()),"split_day_4h_status":"yahoo_60m_aggregated_extended_4h","split_day_4h_candles":len(buckets)}
+
 async def worker(universe,history,yahoo,save):
     await asyncio.sleep(8)
     async with httpx.AsyncClient(timeout=15,follow_redirects=True,headers={"User-Agent":"Mozilla/5.0"}) as client:
@@ -62,6 +90,10 @@ async def worker(universe,history,yahoo,save):
                             bars.append({"date":datetime.fromtimestamp(t,tz).date().isoformat(),**v})
                         except (IndexError,TypeError,ValueError,KeyError):continue
                     result_data=calculate(eff,bars)
+                    try:
+                        result_data.update(await split_day_4h_high(client,yahoo,sym,eff))
+                    except Exception as exc:
+                        result_data.update({"split_day_4h_high":None,"split_day_4h_status":"fetch_error:"+type(exc).__name__})
                     if not result_data.get("verified") and not result_data.get("error"):
                         result_data["error"]="First post-split daily bar could not be validated"
                     if universe.get(sym,{}).get("effective_date")!=eff:continue
