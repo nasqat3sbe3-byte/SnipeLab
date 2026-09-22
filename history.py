@@ -2,6 +2,7 @@ from datetime import datetime, timezone, date
 from zoneinfo import ZoneInfo
 import asyncio
 import time
+import os
 import httpx
 
 def calculate(effective, candles):
@@ -88,6 +89,46 @@ async def split_day_4h_high(client, yahoo, symbol, effective):
             "extended_history_first_date":min(dates),"extended_history_last_date":max(dates),
             "extended_history_complete":False}
 
+async def twelve_data_split_day(client, symbol, effective):
+    """Optional independent 1h source, requested ONLY for missing split-day 4H.
+    Requires TWELVEDATA_API_KEY. Never treat daily high as a 4H candle.
+    """
+    key=os.getenv("TWELVEDATA_API_KEY")
+    if not key:
+        return {"split_day_4h_high":None,"split_day_4h_status":"twelvedata_key_not_configured"}
+    r=await client.get("https://api.twelvedata.com/time_series",params={
+        "symbol":symbol,"interval":"1h","start_date":effective+" 04:00:00",
+        "end_date":effective+" 20:00:00","timezone":"America/New_York",
+        "prepost":"true","adjust":"none","apikey":key})
+    r.raise_for_status()
+    data=r.json()
+    if data.get("status")=="error" or not data.get("values"):
+        return {"split_day_4h_high":None,"split_day_4h_status":
+                "twelvedata_"+str(data.get("code") or "no_intraday_bars")}
+    buckets={}; lows=[]; highs=[]
+    for bar in data["values"]:
+        try:
+            local=datetime.fromisoformat(bar["datetime"])
+            if local.date().isoformat()!=effective or not 4<=local.hour<20:continue
+            hi=float(bar["high"]);lo=float(bar["low"])
+            if lo<=0 or hi<lo:continue
+            bucket=(local.hour-4)//4
+            buckets[bucket]=max(hi,buckets.get(bucket,0))
+            highs.append(hi);lows.append(lo)
+        except (KeyError,TypeError,ValueError):continue
+    if not buckets:
+        return {"split_day_4h_high":None,"split_day_4h_status":"twelvedata_no_split_day_intraday_bars"}
+    return {"split_day_4h_high":max(buckets.values()),
+            "split_day_4h_status":"twelvedata_1h_aggregated_extended_4h",
+            "split_day_4h_candles":len(buckets),
+            "extended_history_complete":False,
+            "extended_post_split_high":max(highs),
+            "extended_post_split_low":min(lows),
+            "extended_post_split_high_date":effective,
+            "extended_post_split_low_date":effective,
+            "extended_history_first_date":effective,
+            "extended_history_last_date":effective}
+
 async def worker(universe,history,yahoo,save):
     await asyncio.sleep(8)
     async with httpx.AsyncClient(timeout=15,follow_redirects=True,headers={"User-Agent":"Mozilla/5.0"}) as client:
@@ -135,8 +176,21 @@ async def worker(universe,history,yahoo,save):
                             bars.append({"date":datetime.fromtimestamp(t,tz).date().isoformat(),**v})
                         except (IndexError,TypeError,ValueError,KeyError):continue
                     result_data=calculate(eff,bars)
+                    result_data.setdefault("effective_date",eff)
                     try:
-                        result_data.update(await split_day_4h_high(client,yahoo,sym,eff))
+                        # Keep Yahoo as primary. Query the independent provider
+                        # immediately when Yahoo lacks the required day-one bars.
+                        intraday=await split_day_4h_high(client,yahoo,sym,eff)
+                        if intraday.get("split_day_4h_high") is None:
+                            try:
+                                alternative=await twelve_data_split_day(client,sym,eff)
+                                if alternative.get("split_day_4h_high") is not None:
+                                    intraday=alternative
+                                else:
+                                    intraday["alternate_4h_status"]=alternative.get("split_day_4h_status")
+                            except Exception as alternate_exc:
+                                intraday["alternate_4h_status"]="fetch_error:"+type(alternate_exc).__name__
+                        result_data.update(intraday)
                         if result_data.get("verified") and result_data.get("split_day_4h_high") is not None:
                             # A post-split maximum cannot be below the split-day 4H high.
                             daily_high=result_data["post_split_high"]
