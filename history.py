@@ -94,17 +94,29 @@ async def worker(universe,history,yahoo,save):
         while True:
             today=datetime.now(timezone.utc).date().isoformat()
             todo=[(s,m) for s,m in universe.items() if m.get("effective_date") and m["effective_date"]<=today]
-            # Newest unprocessed splits first; completed records refresh hourly.
-            todo.sort(key=lambda z:(bool(history.get(z[0],{}).get("verified")), -date.fromisoformat(z[1]["effective_date"]).toordinal(), history.get(z[0],{}).get("attempted_at","")))
+            # Backfill only incomplete records. Never re-fetch an already
+            # complete ticker unless a NEW effective split date supersedes it.
+            def complete(h,meta):
+                return (h.get("effective_date")==meta["effective_date"]
+                    and h.get("verified") is True
+                    and all(h.get(k) is not None for k in
+                        ("split_day_open","split_day_4h_high",
+                         "post_split_high","post_split_low")))
+            todo=[(sym,meta) for sym,meta in todo
+                  if not complete(history.get(sym,{}),meta)]
+            # Retry failures after 30 minutes, not continuously.
             now_epoch=time.time()
-            def needs_refresh(sym,meta):
+            def retry_due(sym,meta):
                 h=history.get(sym,{})
                 if h.get("effective_date")!=meta["effective_date"]:return True
-                try:age=now_epoch-datetime.fromisoformat(h["attempted_at"]).timestamp()
+                try:
+                    age=now_epoch-datetime.fromisoformat(h["attempted_at"]).timestamp()
                 except (ValueError,KeyError,TypeError):return True
-                interval=1800 if (not h.get("verified") or h.get("split_day_4h_high") is None) else (600 if meta["effective_date"]==datetime.now(ZoneInfo("America/New_York")).date().isoformat() else 3600)
-                return age>=interval
-            todo=[(s,m) for s,m in todo if needs_refresh(s,m)]
+                return age>=1800
+            todo=[(sym,meta) for sym,meta in todo if retry_due(sym,meta)]
+            todo.sort(key=lambda item:(
+                -date.fromisoformat(item[1]["effective_date"]).toordinal(),
+                history.get(item[0],{}).get("attempted_at","")))
             for sym,meta in todo[:16]:
                 try:
                     eff=meta["effective_date"]
