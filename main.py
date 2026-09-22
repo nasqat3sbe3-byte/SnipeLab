@@ -543,6 +543,10 @@ async def dashboard_data():
             "split_day_4h_high":h.get("split_day_4h_high"),
             "split_day_4h_status":h.get("split_day_4h_status"),
             "split_day_open":h.get("split_day_open"),
+            "post_split_high_date":h.get("post_split_high_date"),
+            "post_split_low_date":h.get("post_split_low_date"),
+            "quality_warnings":h.get("quality_warnings",[]),
+            "extended_history_complete":h.get("extended_history_complete",False),
             "rsi_daily":h.get("rsi_daily"),
             "top_10_gain_pct":h.get("top_10_gain_pct"),
             "top_10_low":h.get("top_10_low"),
@@ -570,6 +574,34 @@ async def events():
 async def ticker_news(symbol: str):
     symbol = re.sub(r"[^A-Z0-9.-]", "", symbol.upper())[:12]
     return {"symbol":symbol,"items":NEWS.get(symbol,[]),"message":"مصدر الأخبار المستقل وتلخيص الذكاء الاصطناعي قيد الربط؛ لا توجد قراءة مصنفة موثوقة حالياً."}
+
+@app.get("/api/history-coverage")
+async def history_coverage():
+    """Every discovered split and the four requested metrics, with provenance."""
+    rows=[]
+    for sym,meta in sorted(UNIVERSE.items()):
+        h=HISTORY.get(sym) or {}
+        if not meta.get("effective_date"):continue
+        valid=h.get("verified") and h.get("effective_date")==meta["effective_date"]
+        fields={"split_day_open":h.get("split_day_open") if valid else None,
+                "split_day_4h_high":h.get("split_day_4h_high") if valid else None,
+                "post_split_high":h.get("post_split_high") if valid else None,
+                "post_split_high_date":h.get("post_split_high_date") if valid else None,
+                "post_split_low":h.get("post_split_low") if valid else None,
+                "post_split_low_date":h.get("post_split_low_date") if valid else None}
+        missing=[key for key in ("split_day_open","split_day_4h_high","post_split_high","post_split_low") if fields[key] is None]
+        rows.append({"symbol":sym,"effective_date":meta["effective_date"],
+            "ratio":meta.get("ratio"),"split_source":meta.get("source"),
+            **fields,"complete":not missing,"missing":missing,
+            "quality_warnings":h.get("quality_warnings",[]),
+            "extended_history_complete":h.get("extended_history_complete",False),
+            "split_day_4h_status":h.get("split_day_4h_status"),
+            "last_attempt":h.get("attempted_at"),"error":h.get("error")})
+    return {"generated_at":utcnow().isoformat(),"total":len(rows),
+            "four_fields_complete":sum(x["complete"] for x in rows),
+            "pending":sum(not x["complete"] for x in rows),
+            "quality_flagged":sum(bool(x["quality_warnings"]) for x in rows),
+            "rows":rows}
 
 @app.get("/api/diagnostics/{symbol}")
 async def ticker_diagnostics(symbol: str):
