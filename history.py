@@ -270,7 +270,14 @@ async def worker(universe,history,yahoo,save):
                     try:
                         # Keep Yahoo as primary. Query the independent provider
                         # immediately when Yahoo lacks the required day-one bars.
-                        intraday=await split_day_4h_high(client,yahoo,sym,eff)
+                        try:
+                            intraday=await split_day_4h_high(client,yahoo,sym,eff)
+                        except Exception as yahoo_exc:
+                            # Yahoo can reject old 60m windows; do not let its
+                            # HTTP error prevent the other configured providers.
+                            intraday={"split_day_4h_high":None,
+                                      "split_day_4h_status":"yahoo_"+type(yahoo_exc).__name__,
+                                      "extended_history_complete":False}
                         if intraday.get("split_day_4h_high") is None:
                             intraday["fallback_attempts"]=[]
                             for provider in (massive_split_day, twelve_data_split_day, alpaca_split_day):
@@ -279,6 +286,7 @@ async def worker(universe,history,yahoo,save):
                                     intraday["fallback_attempts"].append(
                                         alternative.get("split_day_4h_status","unknown"))
                                     if alternative.get("split_day_4h_high") is not None:
+                                        alternative["fallback_attempts"]=intraday["fallback_attempts"][:]
                                         intraday=alternative
                                         break
                                 except Exception as alternate_exc:
