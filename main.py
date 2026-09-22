@@ -184,7 +184,8 @@ async def market_loop():
                 if row is not None: QUOTES[s]=row; ok+=1
             STATE["market_scan_count"]+=1
             STATE["last_market_scan"]=utcnow().isoformat()
-            STATE["market_ok"]=ok; STATE["market_failed"]=len(batch)-ok\n            STATE["market_total_cached"]=len(QUOTES)
+            STATE["market_ok"]=ok; STATE["market_failed"]=len(batch)-ok
+            STATE["market_total_cached"]=len(QUOTES)
             STATE["last_market_error"]=None if ok else "no quotes returned"
             nxt=(cursor+len(batch)) % len(syms)
             if nxt <= cursor: STATE["market_cycle"]+=1
