@@ -449,8 +449,23 @@ async def top():
 async def dashboard_data():
     rows={}
     for sym,meta in UNIVERSE.items():
-        rows[sym]={"symbol":sym,"effective_date":meta.get("effective_date"),"price":QUOTES.get(sym),"borrow":BORROW.get(sym),"signal":ANALYTICS.get(sym)}
-    return {"server_time":utcnow().isoformat(),"health":{"ok":STATE.get("status")=="running","heartbeat":STATE.get("heartbeat"),"universe_count":len(UNIVERSE),"price_count":len(QUOTES),"borrow_count":len(BORROW),"analytics_count":len(ANALYTICS)},"rows":rows,"events":EVENTS[:40],"halts":HALTS,"news":NEWS}
+        h=HISTORY.get(sym,{})
+        signal={**(ANALYTICS.get(sym) or {}),
+            "history_verified":bool(h.get("verified")),
+            "post_split_low":h.get("post_split_low"),
+            "highest_since_split":h.get("post_split_high"),
+            "split_day_high":h.get("split_day_high"),
+            "split_day_open":h.get("split_day_open"),
+            "rsi_daily":h.get("rsi_daily"),
+            "top_10_gain_pct":h.get("top_10_gain_pct"),
+            "top_10_low":h.get("top_10_low"),
+            "top_10_high":h.get("top_10_high"),
+            "top_10_low_date":h.get("top_10_low_date"),
+            "top_10_high_date":h.get("top_10_high_date"),
+            "top_10_verified":bool(h.get("top_10_verified")),
+            "history_status":h.get("error") or ("verified" if h.get("verified") else "pending")}
+        rows[sym]={"symbol":sym,"effective_date":meta.get("effective_date"),"price":QUOTES.get(sym),"borrow":BORROW.get(sym),"signal":signal}
+    return {"server_time":utcnow().isoformat(),"history_count":sum(bool(h.get("verified")) for h in HISTORY.values()),"history_pending":sum(1 for sym in UNIVERSE if not HISTORY.get(sym,{}).get("verified")),"health":{"ok":STATE.get("status")=="running","heartbeat":STATE.get("heartbeat"),"universe_count":len(UNIVERSE),"price_count":len(QUOTES),"borrow_count":len(BORROW),"analytics_count":len(ANALYTICS)},"rows":rows,"events":EVENTS[:40],"halts":HALTS,"news":NEWS}
 
 @app.get("/halts")
 async def halts():
@@ -468,3 +483,12 @@ async def events():
 async def ticker_news(symbol: str):
     symbol = re.sub(r"[^A-Z0-9.-]", "", symbol.upper())[:12]
     return {"symbol":symbol,"items":NEWS.get(symbol,[]),"message":"مصدر الأخبار المستقل وتلخيص الذكاء الاصطناعي قيد الربط؛ لا توجد قراءة مصنفة موثوقة حالياً."}
+
+@app.get("/api/diagnostics/{symbol}")
+async def ticker_diagnostics(symbol: str):
+    symbol=re.sub(r"[^A-Z0-9.-]","",symbol.upper())[:12]
+    return {"symbol":symbol,"in_split_universe":symbol in UNIVERSE,
+            "split":UNIVERSE.get(symbol),"history":HISTORY.get(symbol),
+            "quote":QUOTES.get(symbol),"borrow":BORROW.get(symbol),
+            "signal":ANALYTICS.get(symbol),
+            "note":"A rally alone does not establish a qualifying reverse split."}
