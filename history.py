@@ -37,31 +37,32 @@ def calculate(effective, candles):
         "updated_at":datetime.now(timezone.utc).isoformat()}
 
 async def worker(universe,history,yahoo,save):
-    await asyncio.sleep(80)
+    await asyncio.sleep(20)
     async with httpx.AsyncClient(timeout=15,follow_redirects=True,headers={"User-Agent":"Mozilla/5.0"}) as client:
         while True:
             today=datetime.now(timezone.utc).date().isoformat()
             todo=[(s,m) for s,m in universe.items() if m.get("effective_date") and m["effective_date"]<=today]
             todo.sort(key=lambda z:history.get(z[0],{}).get("updated_at",""))
-            for sym,meta in todo[:6]:
+            for sym,meta in todo[:16]:
                 try:
                     eff=meta["effective_date"]
-                    start=int(datetime.combine(date.fromisoformat(eff),datetime.min.time(),timezone.utc).timestamp())
+                    start=int(datetime.combine(date.fromisoformat(eff),datetime.min.time(),timezone.utc).timestamp())-86400
                     r=await client.get(yahoo.format(symbol=sym),params={"period1":start,"period2":int(time.time())+86400,"interval":"1d","events":"history"})
                     r.raise_for_status()
                     result=(r.json().get("chart",{}).get("result") or [None])[0]
                     if not result:continue
                     q=((result.get("indicators") or {}).get("quote") or [{}])[0]
                     bars=[]
+                    tz=ZoneInfo((result.get("meta") or {}).get("exchangeTimezoneName") or "America/New_York")
                     for i,t in enumerate(result.get("timestamp") or []):
                         try:
                             v={k:float(q[k][i]) for k in ("open","high","low","close")}
                             if min(v.values())<=0:continue
-                            bars.append({"date":datetime.fromtimestamp(t,timezone.utc).date().isoformat(),**v})
+                            bars.append({"date":datetime.fromtimestamp(t,tz).date().isoformat(),**v})
                         except (IndexError,TypeError,ValueError,KeyError):continue
                     history[sym]=calculate(eff,bars)
                 except Exception as exc:
                     if sym not in history:history[sym]={"verified":False,"error":str(exc)[:100]}
                 await asyncio.sleep(1)
             save(force=True)
-            await asyncio.sleep(30)
+            await asyncio.sleep(15)
