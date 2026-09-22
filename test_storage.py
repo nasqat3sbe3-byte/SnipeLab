@@ -15,5 +15,8 @@ class StorageTests(unittest.TestCase):
                 storage.save({"quotes":{"RETO":{"price":3.0}}})
                 self.assertEqual(storage.load(("quotes",))["quotes"]["RETO"]["price"],3.0)
                 self.assertIn("RETO",storage.load(("universe",))["universe"])
+                meta=storage.snapshot_info()
+                self.assertEqual(meta["count"],3)
+                self.assertIn("saved_at_epoch",meta["collections"]["quotes"])
 
 if __name__=="__main__":unittest.main()
