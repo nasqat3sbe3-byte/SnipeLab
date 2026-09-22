@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import time
 from datetime import datetime, timezone, date
+from zoneinfo import ZoneInfo
 
 import httpx
 from history import worker as historical_worker
@@ -23,6 +24,15 @@ UNIVERSE_SEED = ["MSGY","WCT","NCT","EPOW","CPOP","LGCL","NRSN","HUBC","MGN","FG
 YAHOO = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 FTP_HOST, FTP_USER, FTP_PASSWORD, FTP_FILE = "ftp2.interactivebrokers.com", "shortstock", "", "usa.txt"
 SPLITS_URLS = ("https://stockanalysis.com/actions/splits/2026/", "https://stockanalysis.com/actions/splits/")
+# Exchange-confirmed corporate actions supplement the lagging public calendar.
+# Dates below are first split-adjusted TRADING dates, not legal effective times.
+CONFIRMED_SPLITS = {
+    "WHLR": {"symbol":"WHLR","company":"Wheeler Real Estate Investment Trust, Inc.",
+             "effective_date":"2026-09-22","ratio":"1 for 9",
+             "source":"Nasdaq Equity Corporate Actions ECA2026-666",
+             "source_url":"https://www.nasdaqtrader.com/TraderNews.aspx?id=ECA2026-666"}
+}
+
 
 STATE = {
     "status":"starting","heartbeat":None,"heartbeat_count":0,"booted_at":BOOTED_AT.isoformat(),
@@ -81,6 +91,24 @@ async def heartbeat_loop():
         STATE["status"]="running"; STATE["heartbeat"]=utcnow().isoformat(); STATE["heartbeat_count"]+=1
         await asyncio.sleep(10)
 
+def apply_confirmed_splits():
+    """Protect exchange-confirmed latest splits from stale calendar results."""
+    changed=[]
+    for sym,candidate in CONFIRMED_SPLITS.items():
+        if candidate["effective_date"]>datetime.now(ZoneInfo("America/New_York")).date().isoformat():
+            continue
+        previous=UNIVERSE.get(sym) or {}
+        old=previous.get("effective_date") or ""
+        if old>candidate["effective_date"]:
+            continue
+        if old!=candidate["effective_date"]:
+            HISTORY.pop(sym,None); ANALYTICS.pop(sym,None); TRAIL.pop(sym,None)
+            changed.append(sym)
+        if old!=candidate["effective_date"] or previous.get("source")!=candidate["source"]:
+            UNIVERSE[sym]=dict(candidate)
+    STATE["universe_count"]=len(UNIVERSE)
+    return changed
+
 async def fetch_direct_universe(client):
     await asyncio.sleep(0)
     merged={}
@@ -119,11 +147,13 @@ async def fetch_direct_universe(client):
             TRAIL.pop(sym,None)
         UNIVERSE[sym]=candidate
     # Keep last known confirmed symbols when an upstream page is incomplete.
-    STATE["universe_count"]=len(UNIVERSE); STATE["last_universe_sync"]=utcnow().isoformat(); STATE["universe_error"]=None; STATE["universe_source"]="stockanalysis_direct"
+    apply_confirmed_splits()
+    STATE["universe_count"]=len(UNIVERSE); STATE["last_universe_sync"]=utcnow().isoformat(); STATE["universe_error"]=None; STATE["universe_source"]="stockanalysis_plus_exchange_confirmed"
     return True
 
 async def sync_universe(client):
     STATE["universe_attempts"]+=1
+    apply_confirmed_splits()
     last_error=None
     try:
         if await fetch_direct_universe(client): return
@@ -135,7 +165,8 @@ async def sync_universe(client):
     if not UNIVERSE:
         UNIVERSE.update({s:{"symbol":s,"effective_date":None,"source":"seed"} for s in UNIVERSE_SEED})
         STATE["universe_count"]=len(UNIVERSE)
-    STATE["universe_error"]=last_error or "StockAnalysis feed unavailable"; STATE["universe_source"]="seed" if STATE["last_universe_sync"] is None else STATE["universe_source"]
+    apply_confirmed_splits()
+    STATE["universe_error"]=last_error or "StockAnalysis feed unavailable"; STATE["universe_source"]="exchange_confirmed_fallback" if STATE["last_universe_sync"] is None else STATE["universe_source"]
 
 async def universe_loop():
     # Keep Northflank ingress healthy before any external scraping starts.
