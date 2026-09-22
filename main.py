@@ -105,7 +105,19 @@ async def fetch_direct_universe(client):
                 if previous is None or candidate["effective_date"] > previous["effective_date"]:
                     merged[sym]=candidate
     if not merged: raise RuntimeError("empty direct split feed | "+" | ".join(errors))
-    UNIVERSE.update(merged)
+    # Never replace a newer confirmed split with an older feed row.
+    # When the latest split changes, invalidate calculations tied to the old date.
+    for sym, candidate in merged.items():
+        previous=UNIVERSE.get(sym) or {}
+        old_date=previous.get("effective_date") or ""
+        new_date=candidate["effective_date"]
+        if old_date and old_date>new_date:
+            continue
+        if old_date!=new_date:
+            HISTORY.pop(sym,None)
+            ANALYTICS.pop(sym,None)
+            TRAIL.pop(sym,None)
+        UNIVERSE[sym]=candidate
     # Keep last known confirmed symbols when an upstream page is incomplete.
     STATE["universe_count"]=len(UNIVERSE); STATE["last_universe_sync"]=utcnow().isoformat(); STATE["universe_error"]=None; STATE["universe_source"]="stockanalysis_direct"
     return True
