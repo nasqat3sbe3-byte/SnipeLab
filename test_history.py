@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
-from history import calculate
+from history import calculate, split_day_4h_high
 
 def bars(n=15,start="2026-09-01"):
     d=datetime.fromisoformat(start)
@@ -49,5 +49,27 @@ class HistoryTests(unittest.TestCase):
             mock.now.return_value=datetime(2026,10,1,tzinfo=timezone.utc)
             result=calculate("2026-09-01",x)
         self.assertFalse(result["top_10_verified"])
+
+class ExtendedHoursTests(unittest.IsolatedAsyncioTestCase):
+    async def test_split_day_4h_and_period_extrema(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        tz=ZoneInfo("America/New_York")
+        days=[datetime(2026,9,21,h,tzinfo=tz) for h in (8,12,16)]
+        days.append(datetime(2026,9,22,10,tzinfo=tz))
+        class Response:
+            def raise_for_status(self):pass
+            def json(self):
+                return {"chart":{"result":[{"meta":{"exchangeTimezoneName":"America/New_York"},
+                    "timestamp":[int(d.timestamp()) for d in days],
+                    "indicators":{"quote":[{"high":[5.876,6.47,5.5,7.1],
+                                             "low":[5.0,4.8,4.5,3.2]}]}}]}}
+        class Client:
+            async def get(self,*args,**kwargs):return Response()
+        x=await split_day_4h_high(Client(),"https://example.test/{symbol}","TEST","2026-09-21")
+        self.assertEqual(x["split_day_4h_high"],6.47)
+        self.assertEqual(x["extended_post_split_high"],7.1)
+        self.assertEqual(x["extended_post_split_low"],3.2)
+        self.assertFalse(x["extended_history_complete"])
 
 if __name__=="__main__":unittest.main()
