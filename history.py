@@ -28,7 +28,8 @@ def calculate(effective, candles):
         loss=sum(max(-x,0) for x in diff)/14
         rsi=round(100 if loss==0 else 100-100/(1+gain/loss),2)
     return {"verified":verified,"source":"Yahoo 1d; split adjustment requires validation",
-        "effective_date":effective,\n        "post_split_low":min(b["low"] for b in bars) if verified else None,
+        "effective_date":effective,
+        "post_split_low":min(b["low"] for b in bars) if verified else None,
         "post_split_high":max(b["high"] for b in bars) if verified else None,
         "split_day_high":first["high"] if verified else None,
         "split_day_open":first["open"] if verified else None,
@@ -63,7 +64,8 @@ async def worker(universe,history,yahoo,save):
                     result_data=calculate(eff,bars)
                     if not result_data.get("verified") and not result_data.get("error"):
                         result_data["error"]="First post-split daily bar could not be validated"
-                    if universe.get(sym,{}).get("effective_date")!=eff:continue\n                    history[sym]={**result_data,"attempted_at":datetime.now(timezone.utc).isoformat()}
+                    if universe.get(sym,{}).get("effective_date")!=eff:continue
+                    history[sym]={**result_data,"attempted_at":datetime.now(timezone.utc).isoformat()}
                 except Exception as exc:
                     previous=history.get(sym,{})
                     history[sym]={**previous,"verified":bool(previous.get("verified")),"error":f"{type(exc).__name__}: {str(exc)[:150]}","attempted_at":datetime.now(timezone.utc).isoformat()}
