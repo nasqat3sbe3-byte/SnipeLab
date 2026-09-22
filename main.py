@@ -46,6 +46,8 @@ _LAST_SAVE = 0.0
 def load_persistent_state():
     try:
         d=storage.load(("universe","quotes","analytics","borrow","history","events","halts"))
+        STATE["restored_from_sqlite"]=bool(d)
+        STATE["restored_at"]=utcnow().isoformat() if d else None
         if not d and STATE_FILE.exists():d=json.loads(STATE_FILE.read_text("utf-8"))
         UNIVERSE.update(d.get("universe") or {})
         QUOTES.update(d.get("quotes") or {})
@@ -421,6 +423,20 @@ async def health():
     now=utcnow()
     workers={"market":worker_health(now,STATE.get("last_market_scan"),180),"borrow":worker_health(now,STATE.get("last_borrow_scan"),420),"history":worker_health(now,max((v.get("attempted_at","") for v in HISTORY.values()),default=None),900),"analytics":worker_health(now,STATE.get("last_analytics"),120),"halt":worker_health(now,STATE.get("last_halt_scan"),240)}
     return {"ok":bool(last) and age<30,"heartbeat_age_seconds":age,"workers":workers,"storage":storage.status(),"quotes_cached":len(QUOTES),"history_cached":len(HISTORY),"history_verified":sum(bool(HISTORY.get(sym,{}).get("verified")) for sym in UNIVERSE),"history_failed":sum(bool(HISTORY.get(sym,{}).get("error")) for sym in UNIVERSE),"history_last_attempt":max((v.get("attempted_at","") for v in HISTORY.values()),default=None),**STATE}
+
+@app.get("/api/storage-check")
+async def storage_check():
+    """Read-only proof of snapshots and startup recovery; does not restart service."""
+    try:
+        snapshots=storage.snapshot_info()
+        error=None
+    except Exception as exc:
+        snapshots=None; error=f"{type(exc).__name__}: {str(exc)[:120]}"
+    return {"booted_at":BOOTED_AT.isoformat(),"uptime_seconds":int(time.time()-BOOTED_AT.timestamp()),
+        "restored_from_sqlite":STATE.get("restored_from_sqlite",False),
+        "restored_at":STATE.get("restored_at"),"last_state_save":STATE.get("last_state_save"),
+        "storage":storage.status(),"snapshots":snapshots,"storage_error":error,
+        "counts":{"universe":len(UNIVERSE),"quotes":len(QUOTES),"history":len(HISTORY),"borrow":len(BORROW),"events":len(EVENTS)}}
 
 @app.get("/universe")
 async def universe():
