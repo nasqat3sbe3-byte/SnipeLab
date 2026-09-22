@@ -9,6 +9,7 @@ import time
 from datetime import datetime, timezone, date
 
 import httpx
+from history import worker as historical_worker
 from bs4 import BeautifulSoup
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
@@ -36,6 +37,7 @@ ANALYTICS = {}
 TRAIL = {}
 HALTS = {}
 NEWS = {}
+HISTORY = {}
 STATE_FILE = Path(os.environ.get("SNIPELAB_STATE_FILE","/tmp/snipelab_state.json"))
 _LAST_SAVE = 0.0
 
@@ -45,6 +47,7 @@ def load_persistent_state():
         d=json.loads(STATE_FILE.read_text("utf-8"))
         ANALYTICS.update(d.get("analytics") or {})
         BORROW.update(d.get("borrow") or {})
+        HISTORY.update(d.get("history") or {})
         EVENTS.extend((d.get("events") or [])[:100])
     except Exception as exc:
         STATE["persistence_error"]=f"load {type(exc).__name__}: {str(exc)[:100]}"
@@ -55,7 +58,7 @@ def save_persistent_state(force=False):
     if not force and now-_LAST_SAVE<60:return
     try:
         tmp=STATE_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"saved_at":utcnow().isoformat(),"analytics":ANALYTICS,"borrow":BORROW,"events":EVENTS[:100]},separators=(",",":")),"utf-8")
+        tmp.write_text(json.dumps({"saved_at":utcnow().isoformat(),"analytics":ANALYTICS,"borrow":BORROW,"history":HISTORY,"events":EVENTS[:100]},separators=(",",":")),"utf-8")
         tmp.replace(STATE_FILE); _LAST_SAVE=now
         STATE["last_state_save"]=utcnow().isoformat(); STATE["persistence_error"]=None
     except Exception as exc:
@@ -180,10 +183,11 @@ def readiness_state(meta,q,b,a):
     if not new_low and prior_low is not None and market_day and market_day!=last_day:
         sessions=min(4,sessions+1)
     high=max(float(a.get("highest_since_split") or price),float(q.get("day_high") or price))
-    half=high/2 if high>0 else None
-    half_ok=bool(a.get("half_reached")) or (half is not None and effective_low<=half)
+    hist=HISTORY.get(meta.get("symbol"),{})
+    half=hist.get("split_day_high",0)/2 if hist.get("verified") else None
+    half_ok=bool(half is not None and effective_low<=half)
     av=b.get("available") if b else None
-    price_ok=price>0; av_ok=av is not None and av<=20000
+    price_ok=price>0; av_ok=av is not None and av<10000
     dist_ok=dist is not None and dist<=10; sess_ok=sessions>=4
     missing=[]; close=True
     if not half_ok: missing.append(f"يحقق شرط النصف <= {half:.4f}" if half else "حساب مستوى النصف"); close=False
@@ -197,12 +201,14 @@ def readiness_state(meta,q,b,a):
     if not sess_ok and not new_low:
         missing.append(f"{max(0,4-sessions)} جلسة ثبات إضافية للوصول إلى 4/4")
         close=close and sessions>=2
+    if not hist.get("verified"):missing.append("تاريخ القاع والقمة بعد التقسيم");close=False
+    if hist.get("rsi_daily") is None or hist["rsi_daily"]>=30:missing.append("RSI اليومي أقل من 30");close=False
     if not price_ok: missing.append("تحديث السعر الحالي"); close=False
-    full=price_ok and half_ok and not new_low and av_ok and dist_ok and sess_ok
+    full=price_ok and hist.get("verified") and hist.get("rsi_daily") is not None and hist["rsi_daily"]<30 and half_ok and not new_low and av_ok and dist_ok and sess_ok
     shortlist=full or (price_ok and half_ok and not new_low and close and 1<=len(missing)<=2)
     if av is None: ap=0
-    elif av<=10000: ap=45
-    elif av<=20000: ap=45-15*((av-10000)/10000)
+    elif av<10000: ap=50
+    elif av<=20000: ap=0
     else: ap=0
     if dist is None: dp=0
     elif dist<=10: dp=30
@@ -237,6 +243,7 @@ def refresh_analytics():
         if not active:
             ANALYTICS[sym]={"symbol":sym,"active":False,"effective_date":eff,"price":price,"ignition":ignition}; continue
         st=readiness_state(meta,q,b,a)
+        hist=HISTORY.get(sym,{})
         full=st["full"]; was_ready=bool(a.get("ready"))
         ready_at=a.get("ready_at"); ready_price=a.get("ready_price")
         if full and ready_at is None:
@@ -252,16 +259,19 @@ def refresh_analytics():
         if ignition and ignition["fresh"] and not (a.get("ignition") or {}).get("fresh"):
             add_event(sym,"ignition",f"Momentum +{ignition['pct']:.1f}%",ignition)
         ANALYTICS[sym]={"symbol":sym,"active":True,"effective_date":eff,"price":price,
-            "post_split_low":st["effective_low"],"highest_since_split":st["highest_since_split"],
+            "post_split_low":hist.get("post_split_low"),"highest_since_split":hist.get("post_split_high"),
+            "history_verified":bool(hist.get("verified")),"split_day_high":hist.get("split_day_high"),"split_day_open":hist.get("split_day_open"),"rsi_daily":hist.get("rsi_daily"),
+            "top_10_gain_pct":hist.get("top_10_gain_pct"),"top_10_low":hist.get("top_10_low"),"top_10_high":hist.get("top_10_high"),
+            "top_10_low_date":hist.get("top_10_low_date"),"top_10_high_date":hist.get("top_10_high_date"),"top_10_verified":bool(hist.get("top_10_verified")),
             "half_level":st["half_level"],"half_reached":st["half_reached"],
-            "distance_from_low_pct":round(st["effective_distance_pct"],2) if st["effective_distance_pct"] is not None else None,
+            "distance_from_low_pct":round((price/hist["post_split_low"]-1)*100,2) if hist.get("post_split_low") else None,
             "stability_sessions":st["effective_sessions"],"effective_low":st["effective_low"],
             "effective_distance_pct":round(st["effective_distance_pct"],2) if st["effective_distance_pct"] is not None else None,
             "effective_sessions":st["effective_sessions"],"new_low_today":st["new_low_today"],
             "available":b.get("available") if b else None,"ctb":b.get("ctb") if b else None,"rebate":b.get("rebate") if b else None,
             "readiness_pct":st["readiness_pct"],"score":st["readiness_pct"],"ready":full,
             "near_ready":st["shortlist"] and not full and not launched,"shortlist":st["shortlist"] and not launched,
-            "ready_candidate":(b is not None and b.get("available") is not None and b.get("available")<=20000 and st["effective_distance_pct"] is not None and st["effective_distance_pct"]<=10 and st["effective_sessions"]>=4 and not st["new_low_today"] and not launched),
+            "ready_candidate":(b is not None and b.get("available") is not None and b.get("available")<=20000 and st["effective_distance_pct"] is not None and st["effective_distance_pct"]<=10 and st["effective_sessions"]>=4 and not st["new_low_today"] ),
             "missing_count":st["missing_count"],"missing":st["missing"],"strength":st["strength"],
             "ready_at":ready_at,"ready_price":ready_price,"launched":launched,
             "max_rise_pct":round(max_rise,2) if max_rise is not None else None,"rise_pct":round(max_rise,2) if max_rise is not None else None,
@@ -364,7 +374,7 @@ async def legacy_news_loop_disabled():
 @app.on_event("startup")
 async def startup():
     load_persistent_state()
-    asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(halt_loop())
+    asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(halt_loop()); asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
 
 @app.get("/")
 async def root():
@@ -429,8 +439,8 @@ async def momentum():
 
 @app.get("/top")
 async def top():
-    rows=[x for x in ANALYTICS.values() if x.get("launched")]
-    rows.sort(key=lambda x:x.get("max_rise_pct") or 0,reverse=True)
+    rows=[x for x in ANALYTICS.values() if x.get("top_10_verified") and (x.get("top_10_gain_pct") or 0)>=40]
+    rows.sort(key=lambda x:x.get("top_10_gain_pct") or 0,reverse=True)
     return {"count":len(rows),"rows":rows}
 
 @app.get("/api/dashboard")
