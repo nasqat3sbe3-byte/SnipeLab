@@ -243,7 +243,9 @@ async def worker(universe,history,yahoo,save):
                 except (ValueError,KeyError,TypeError):return True
                 return age>=1800
             todo=[(sym,meta) for sym,meta in todo if retry_due(sym,meta)]
+            # Missing histories always take priority over hourly refreshes.
             todo.sort(key=lambda item:(
+                complete(history.get(item[0],{}),item[1]),
                 -date.fromisoformat(item[1]["effective_date"]).toordinal(),
                 history.get(item[0],{}).get("attempted_at","")))
             for sym,meta in todo[:16]:
