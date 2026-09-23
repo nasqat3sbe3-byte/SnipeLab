@@ -7,8 +7,12 @@ import json
 from pathlib import Path
 import time
 from datetime import datetime, timezone, date
+from zoneinfo import ZoneInfo
 
 import httpx
+from history import worker as historical_worker
+import storage
+from event_rules import borrow_events, ready_event, worker_health
 from bs4 import BeautifulSoup
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
@@ -20,11 +24,20 @@ UNIVERSE_SEED = ["MSGY","WCT","NCT","EPOW","CPOP","LGCL","NRSN","HUBC","MGN","FG
 YAHOO = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 FTP_HOST, FTP_USER, FTP_PASSWORD, FTP_FILE = "ftp2.interactivebrokers.com", "shortstock", "", "usa.txt"
 SPLITS_URLS = ("https://stockanalysis.com/actions/splits/2026/", "https://stockanalysis.com/actions/splits/")
+# Exchange-confirmed corporate actions supplement the lagging public calendar.
+# Dates below are first split-adjusted TRADING dates, not legal effective times.
+CONFIRMED_SPLITS = {
+    "WHLR": {"symbol":"WHLR","company":"Wheeler Real Estate Investment Trust, Inc.",
+             "effective_date":"2026-09-22","ratio":"1 for 9",
+             "source":"Nasdaq Equity Corporate Actions ECA2026-666",
+             "source_url":"https://www.nasdaqtrader.com/TraderNews.aspx?id=ECA2026-666"}
+}
+
 
 STATE = {
     "status":"starting","heartbeat":None,"heartbeat_count":0,"booted_at":BOOTED_AT.isoformat(),
     "universe_count":len(UNIVERSE_SEED),"last_universe_sync":None,"universe_error":None,"universe_attempts":0,"universe_source":"seed",
-    "market_scan_count":0,"last_market_scan":None,"market_ok":0,"market_failed":0,"last_market_error":None,"market_cursor":0,"market_cycle":0,
+    "market_scan_count":0,"last_market_scan":None,"market_ok":0,"market_failed":0,"market_total_cached":0,"last_market_error":None,"market_cursor":0,"market_cycle":0,
     "borrow_scan_count":0,"last_borrow_scan":None,"borrow_ok":0,"borrow_missing":0,"last_borrow_error":None,
     "analytics_count":0,"last_analytics":None,"last_halt_scan":None,"halt_error":None,"last_news_scan":None,"news_error":None,"last_state_save":None,"persistence_error":None,"pid":os.getpid(),
 }
@@ -36,15 +49,22 @@ ANALYTICS = {}
 TRAIL = {}
 HALTS = {}
 NEWS = {}
+HISTORY = {}
 STATE_FILE = Path(os.environ.get("SNIPELAB_STATE_FILE","/tmp/snipelab_state.json"))
 _LAST_SAVE = 0.0
 
 def load_persistent_state():
     try:
-        if not STATE_FILE.exists(): return
-        d=json.loads(STATE_FILE.read_text("utf-8"))
+        d=storage.load(("universe","quotes","analytics","borrow","history","events","halts"))
+        STATE["restored_from_sqlite"]=bool(d)
+        STATE["restored_at"]=utcnow().isoformat() if d else None
+        if not d and STATE_FILE.exists():d=json.loads(STATE_FILE.read_text("utf-8"))
+        UNIVERSE.update(d.get("universe") or {})
+        QUOTES.update(d.get("quotes") or {})
+        HALTS.update(d.get("halts") or {})
         ANALYTICS.update(d.get("analytics") or {})
         BORROW.update(d.get("borrow") or {})
+        HISTORY.update(d.get("history") or {})
         EVENTS.extend((d.get("events") or [])[:100])
     except Exception as exc:
         STATE["persistence_error"]=f"load {type(exc).__name__}: {str(exc)[:100]}"
@@ -54,15 +74,15 @@ def save_persistent_state(force=False):
     now=time.time()
     if not force and now-_LAST_SAVE<60:return
     try:
-        tmp=STATE_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"saved_at":utcnow().isoformat(),"analytics":ANALYTICS,"borrow":BORROW,"events":EVENTS[:100]},separators=(",",":")),"utf-8")
-        tmp.replace(STATE_FILE); _LAST_SAVE=now
+        storage.save({"universe":UNIVERSE,"quotes":QUOTES,"analytics":ANALYTICS,"borrow":BORROW,"history":HISTORY,"events":EVENTS[:100],"halts":HALTS})
+        _LAST_SAVE=now
         STATE["last_state_save"]=utcnow().isoformat(); STATE["persistence_error"]=None
     except Exception as exc:
         STATE["persistence_error"]=f"save {type(exc).__name__}: {str(exc)[:100]}"
 
 def utcnow(): return datetime.now(timezone.utc)
 def add_event(symbol, kind, text, data=None):
+    if kind=="halt" and any(e.get("kind")=="halt" and e.get("symbol")==symbol and e.get("data")== (data or {}) for e in EVENTS):return
     EVENTS.insert(0,{"symbol":symbol,"kind":kind,"text":text,"at":utcnow().isoformat(),"data":data or {}})
     del EVENTS[100:]
 
@@ -70,6 +90,24 @@ async def heartbeat_loop():
     while True:
         STATE["status"]="running"; STATE["heartbeat"]=utcnow().isoformat(); STATE["heartbeat_count"]+=1
         await asyncio.sleep(10)
+
+def apply_confirmed_splits():
+    """Protect exchange-confirmed latest splits from stale calendar results."""
+    changed=[]
+    for sym,candidate in CONFIRMED_SPLITS.items():
+        if candidate["effective_date"]>datetime.now(ZoneInfo("America/New_York")).date().isoformat():
+            continue
+        previous=UNIVERSE.get(sym) or {}
+        old=previous.get("effective_date") or ""
+        if old>candidate["effective_date"]:
+            continue
+        if old!=candidate["effective_date"]:
+            HISTORY.pop(sym,None); ANALYTICS.pop(sym,None); TRAIL.pop(sym,None)
+            changed.append(sym)
+        if old!=candidate["effective_date"] or previous.get("source")!=candidate["source"]:
+            UNIVERSE[sym]=dict(candidate)
+    STATE["universe_count"]=len(UNIVERSE)
+    return changed
 
 async def fetch_direct_universe(client):
     await asyncio.sleep(0)
@@ -87,7 +125,7 @@ async def fetch_direct_universe(client):
             if len(tds)<5 or tds[3].lower()!="reverse": continue
             try: eff=datetime.strptime(tds[0],"%b %d, %Y").date()
             except Exception: continue
-            if eff < date(2026,5,1) or eff > date(2026,12,31): continue
+            if eff < date(2026,5,1) or eff > date(2026,12,30) or eff > utcnow().date(): continue
             sym=tds[1].upper().strip()
             if sym:
                 candidate={"symbol":sym,"company":tds[2],"effective_date":eff.isoformat(),"ratio":tds[4],"source":"stockanalysis"}
@@ -95,43 +133,45 @@ async def fetch_direct_universe(client):
                 if previous is None or candidate["effective_date"] > previous["effective_date"]:
                     merged[sym]=candidate
     if not merged: raise RuntimeError("empty direct split feed | "+" | ".join(errors))
-    UNIVERSE.clear(); UNIVERSE.update(merged)
-    STATE["universe_count"]=len(UNIVERSE); STATE["last_universe_sync"]=utcnow().isoformat(); STATE["universe_error"]=None; STATE["universe_source"]="stockanalysis_direct"
+    # Never replace a newer confirmed split with an older feed row.
+    # When the latest split changes, invalidate calculations tied to the old date.
+    for sym, candidate in merged.items():
+        previous=UNIVERSE.get(sym) or {}
+        old_date=previous.get("effective_date") or ""
+        new_date=candidate["effective_date"]
+        if old_date and old_date>new_date:
+            continue
+        if old_date!=new_date:
+            HISTORY.pop(sym,None)
+            ANALYTICS.pop(sym,None)
+            TRAIL.pop(sym,None)
+        UNIVERSE[sym]=candidate
+    # Keep last known confirmed symbols when an upstream page is incomplete.
+    apply_confirmed_splits()
+    STATE["universe_count"]=len(UNIVERSE); STATE["last_universe_sync"]=utcnow().isoformat(); STATE["universe_error"]=None; STATE["universe_source"]="stockanalysis_plus_exchange_confirmed"
     return True
 
 async def sync_universe(client):
     STATE["universe_attempts"]+=1
+    apply_confirmed_splits()
     last_error=None
     try:
         if await fetch_direct_universe(client): return
     except Exception as exc:
         last_error=f"direct: {type(exc).__name__}"
-    for path in ("/api/hunt","/api/splits"):
-        try:
-            r=await client.get(QANAS_WEB+path,timeout=60); r.raise_for_status(); rows=r.json()
-            if not isinstance(rows,list) or not rows: raise RuntimeError("empty universe")
-            fresh={}
-            today=utcnow().date().isoformat()
-            for x in rows:
-                sym=str(x.get("symbol") or "").upper().strip()
-                eff=str(x.get("effective_date") or "")[:10]
-                if sym and (not eff or eff<=today): fresh[sym]=x
-            if fresh:
-                UNIVERSE.clear(); UNIVERSE.update(fresh)
-                STATE["universe_count"]=len(UNIVERSE); STATE["last_universe_sync"]=utcnow().isoformat()
-                STATE["universe_error"]=None
-                return
-        except Exception as exc: last_error=f"{path}: {type(exc).__name__}"
+    # Never fetch the legacy Qanas service: SnipeLab is fully independent.
+    # Keep the last successfully synced universe when the public feed fails.
     # Render can be slow to wake up. Never leave the watcher empty while it retries.
     if not UNIVERSE:
         UNIVERSE.update({s:{"symbol":s,"effective_date":None,"source":"seed"} for s in UNIVERSE_SEED})
         STATE["universe_count"]=len(UNIVERSE)
-    STATE["universe_error"]=last_error or "unknown"; STATE["universe_source"]="seed" if STATE["last_universe_sync"] is None else STATE["universe_source"]
+    apply_confirmed_splits()
+    STATE["universe_error"]=last_error or "StockAnalysis feed unavailable"; STATE["universe_source"]="exchange_confirmed_fallback" if STATE["last_universe_sync"] is None else STATE["universe_source"]
 
 async def universe_loop():
     # Keep Northflank ingress healthy before any external scraping starts.
-    await asyncio.sleep(15)
-    headers={"User-Agent":"Mozilla/5.0 QanasWatcher/0.3"}
+    await asyncio.sleep(3)
+    headers={"User-Agent":"Mozilla/5.0 SnipeLab/2.0"}
     async with httpx.AsyncClient(follow_redirects=True,headers=headers) as client:
         while True:
             await sync_universe(client)
@@ -139,21 +179,46 @@ async def universe_loop():
 
 async def fetch_quote(client, sem, symbol):
     async with sem:
-        try:
-            r=await client.get(YAHOO.format(symbol=symbol),params={"range":"1d","interval":"1m","includePrePost":"true","events":"history"})
-            r.raise_for_status(); result=(r.json().get("chart",{}).get("result") or [None])[0]
-            if not result:return symbol,None
-            ts=result.get("timestamp") or []; q=((result.get("indicators") or {}).get("quote") or [{}])[0]
-            closes=q.get("close") or []; highs=q.get("high") or []; lows=q.get("low") or []
-            valid=[(int(t),float(closes[i])) for i,t in enumerate(ts) if i<len(closes) and closes[i] is not None and float(closes[i])>0]
-            if not valid:return symbol,None
-            t,p=max(valid,key=lambda z:z[0]); hi=[float(v) for v in highs if v is not None and float(v)>0]; lo=[float(v) for v in lows if v is not None and float(v)>0]
-            return symbol,{"symbol":symbol,"price":p,"day_high":max(hi) if hi else p,"day_low":min(lo) if lo else p,
-                "market_timestamp":datetime.fromtimestamp(t,tz=timezone.utc).isoformat(),"received_at":utcnow().isoformat(),"source":"yahoo_1m_prepost"}
-        except Exception:return symbol,None
+        # The 1m endpoint can be empty outside the session; daily bars are a
+        # clearly labelled fallback, not a claim of live market data.
+        for interval,window in (("1m","1d"),("1d","5d")):
+            try:
+                r=await client.get(YAHOO.format(symbol=symbol),params={"range":window,"interval":interval,"includePrePost":"true","events":"history"})
+                r.raise_for_status()
+                result=(r.json().get("chart",{}).get("result") or [None])[0]
+                if not result:continue
+                ts=result.get("timestamp") or []
+                q=((result.get("indicators") or {}).get("quote") or [{}])[0]
+                closes=q.get("close") or []
+                valid=[(int(t),i,float(closes[i])) for i,t in enumerate(ts) if i<len(closes) and closes[i] is not None and float(closes[i])>0]
+                if not valid:continue
+                t,idx,p=max(valid,key=lambda z:z[0])
+                # Daily fallback must use the last session only, not the whole range.
+                if interval=="1d":
+                    hi=float(q["high"][idx]) if q.get("high") and q["high"][idx] is not None else p
+                    lo=float(q["low"][idx]) if q.get("low") and q["low"][idx] is not None else p
+                else:
+                    hi=max([float(v) for v in (q.get("high") or []) if v is not None and float(v)>0] or [p])
+                    lo=min([float(v) for v in (q.get("low") or []) if v is not None and float(v)>0] or [p])
+                # Only a verified chart reference is used for the +25% alert.
+                meta=result.get("meta") or {}
+                reference=meta.get("chartPreviousClose") or meta.get("previousClose")
+                if interval=="1d" and len(valid)>=2:
+                    earlier=[z for z in valid if z[0]<t]
+                    if earlier: reference=max(earlier,key=lambda z:z[0])[2]
+                try: reference=float(reference) if reference is not None else None
+                except (TypeError,ValueError): reference=None
+                if reference is not None and reference<=0: reference=None
+                return symbol,{"symbol":symbol,"price":p,"day_high":hi,"day_low":lo,
+                    "previous_close":reference,
+                    "market_timestamp":datetime.fromtimestamp(t,tz=timezone.utc).isoformat(),
+                    "received_at":utcnow().isoformat(),"source":"yahoo_"+interval+("_prepost" if interval=="1m" else "_fallback")}
+            except Exception:
+                continue
+        return symbol,None
 
 async def delayed_market_start():
-    await asyncio.sleep(30)
+    await asyncio.sleep(5)
     await market_loop()
 
 async def market_loop():
@@ -162,7 +227,9 @@ async def market_loop():
     limits=httpx.Limits(max_connections=5,max_keepalive_connections=4)
     async with httpx.AsyncClient(timeout=8,follow_redirects=True,headers=headers,limits=limits) as client:
         while True:
-            syms=sorted(UNIVERSE)
+            # Keep the scan order fixed while advancing the cursor.
+            # Sorting by cache status can permanently skip some symbols.
+            syms=sorted(UNIVERSE,key=lambda sym:(sym!="RETO",sym))
             if not syms:
                 await asyncio.sleep(10); continue
             cursor=int(STATE["market_cursor"]) % len(syms)
@@ -172,58 +239,104 @@ async def market_loop():
             rows=await asyncio.gather(*(fetch_quote(client,sem,s) for s in batch))
             ok=0
             for s,row in rows:
-                if row is not None: QUOTES[s]=row; ok+=1
+                if row is not None:
+                    prior=QUOTES.get(s)
+                    # An alert requires a same-session crossing, not an old
+                    # cached price or the first observation after a restart.
+                    if prior and row.get("previous_close") and prior.get("previous_close"):
+                        market_day=str(row.get("market_timestamp") or "")[:10]
+                        prior_day=str(prior.get("market_timestamp") or "")[:10]
+                        old_pct=(float(prior["price"])/float(prior["previous_close"])-1)*100
+                        new_pct=(float(row["price"])/float(row["previous_close"])-1)*100
+                        if market_day and market_day==prior_day and old_pct<25<=new_pct:
+                            add_event(s,"price_25",f"ارتفع +{new_pct:.1f}%",{"rise_pct":round(new_pct,2),"peak_30_ok":peak_30_ok,"peak_gain_pct":peak_gain_pct,
+        "half_gap_pct":half_gap_pct,"half_near":half_near,"low_near":low_near,
+        "market_day":market_day})
+                    QUOTES[s]=row; ok+=1
             STATE["market_scan_count"]+=1
             STATE["last_market_scan"]=utcnow().isoformat()
             STATE["market_ok"]=ok; STATE["market_failed"]=len(batch)-ok
+            STATE["market_total_cached"]=len(QUOTES)
             STATE["last_market_error"]=None if ok else "no quotes returned"
             nxt=(cursor+len(batch)) % len(syms)
             if nxt <= cursor: STATE["market_cycle"]+=1
             STATE["market_cursor"]=nxt
+            save_persistent_state()
             await asyncio.sleep(3)
 
 def readiness_state(meta,q,b,a):
     price=float(q["price"]); live_low=float(q.get("day_low") or price)
-    prior_low=a.get("post_split_low")
+    hist=HISTORY.get(meta.get("symbol"),{})
+    prior_low=hist.get("post_split_low") if hist.get("verified") else None
     new_low=prior_low is not None and live_low<float(prior_low)
     effective_low=live_low if new_low else (float(prior_low) if prior_low is not None else live_low)
     dist=((price/effective_low)-1)*100 if effective_low>0 else None
-    sessions=0 if new_low else int(a.get("stability_sessions") or 0)
+    # Daily historical candles, not dashboard refreshes, determine stability.
+    # Never reset a month of confirmed stability when the service restarts.
+    sessions=0 if new_low else int(hist.get("stability_sessions") or 0)
     market_day=str(q.get("market_timestamp") or "")[:10]
-    last_day=a.get("last_market_day")
-    if not new_low and prior_low is not None and market_day and market_day!=last_day:
-        sessions=min(4,sessions+1)
     high=max(float(a.get("highest_since_split") or price),float(q.get("day_high") or price))
-    half=high/2 if high>0 else None
-    half_ok=bool(a.get("half_reached")) or (half is not None and effective_low<=half)
+    # FIRST check the split-day 4H half target. Once reached, do not
+    # penalize the stock for any later peaks or their 30% rise.
+    split_4h=hist.get("split_day_4h_high")
+    split_half=float(split_4h)/2 if split_4h is not None and float(split_4h)>0 else None
+    split_half_ok=bool(split_half is not None and effective_low<=split_half)
+    later_high=hist.get("later_pre_low_high")
+    later_gain_pct=((float(later_high)/float(split_4h)-1)*100
+                    if later_high is not None and split_4h is not None
+                    and float(split_4h)>0 else None)
+    # Only stocks that have NOT reached the split-day half may use a
+    # subsequent peak, provided it is <=30% above the split-day 4H high.
+    peak_30_ok=(split_half_ok or later_high is None or
+                (later_gain_pct is not None and later_gain_pct<=30.000001))
+    later_eligible=(not split_half_ok and peak_30_ok and
+                    later_high is not None and split_half is not None)
+    half=(float(later_high)/2 if later_eligible else split_half)
+    half_ok=bool(half is not None and effective_low<=half)
+    half_rule_current=hist.get("half_rule_version",0)>=2
+    peak_gain_pct=later_gain_pct
     av=b.get("available") if b else None
-    price_ok=price>0; av_ok=av is not None and av<=20000
-    dist_ok=dist is not None and dist<=10; sess_ok=sessions>=4
+    price_ok=price>0; av_ok=av is not None and av<10000
+    dist_ok=dist is not None and dist<=20; sess_ok=sessions>=4
     missing=[]; close=True
+    if not half_rule_current:
+        missing.append("تحديث حسبة قمة يوم التقسيم والقمة اللاحقة");close=False
+    if not peak_30_ok:
+        missing.append(f"قمة جلسة لاحقة تجاوزت 30% من أعلى 4H يوم التقسيم ({peak_gain_pct:.2f}%)")
+        close=False
     if not half_ok: missing.append(f"يحقق شرط النصف <= {half:.4f}" if half else "حساب مستوى النصف"); close=False
     if new_low: missing.append("كون قاع جديد اليوم: يبدأ الثبات من 0/4"); close=False
     if not av_ok:
-        missing.append("Available ينزل إلى <=20K" if av is not None else "قراءة Available")
-        close=close and av is not None and av<=20000
+        missing.append("Available ينزل إلى أقل من 10K" if av is not None else "قراءة Available")
+        close=close and av is not None and av<10000
     if not dist_ok:
-        missing.append(f"يرجع أقرب للقاع: الآن {dist:.2f}% والهدف <=10%" if dist is not None else "حساب البعد عن القاع")
+        missing.append(f"يرجع أقرب للقاع: الآن {dist:.2f}% والهدف <=20%" if dist is not None else "حساب البعد عن القاع")
         close=close and dist is not None and dist<=20
     if not sess_ok and not new_low:
         missing.append(f"{max(0,4-sessions)} جلسة ثبات إضافية للوصول إلى 4/4")
         close=close and sessions>=2
+    if not hist.get("verified"):missing.append("تاريخ القاع والقمة بعد التقسيم");close=False
     if not price_ok: missing.append("تحديث السعر الحالي"); close=False
-    full=price_ok and half_ok and not new_low and av_ok and dist_ok and sess_ok
-    shortlist=full or (price_ok and half_ok and not new_low and close and 1<=len(missing)<=2)
-    if av is None: ap=0
-    elif av<=10000: ap=45
-    elif av<=20000: ap=45-15*((av-10000)/10000)
-    else: ap=0
-    if dist is None: dp=0
-    elif dist<=10: dp=30
-    elif dist<=20: dp=30-15*((dist-10)/10)
-    else: dp=0
-    sp=25 if sessions>=4 else 19 if sessions==3 else 12 if sessions==2 else 6 if sessions==1 else 0
-    pct=100.0 if full else round(min(99.0,ap+dp+sp),1)
+    full=price_ok and hist.get("verified") and half_rule_current and peak_30_ok and half_ok and not new_low and av_ok and dist_ok and sess_ok
+    # Strict near-ready limits: up to 15% above the half target and
+    # up to 25% above the verified post-split low. These are NOT the
+    # full-ready thresholds (half reached and <=20% from the low).
+    half_gap_pct=((price/half-1)*100 if half is not None and half>0 else None)
+    half_near=half_ok or (half_gap_pct is not None and 0<half_gap_pct<=15)
+    low_near=dist is not None and dist<=25
+    shortlist=full or (price_ok and hist.get("verified") and av is not None
+                       and 1<=len(missing)<=2 and half_near and low_near)
+    # Readiness version 4: the half target MUST contribute to the score.
+    # Previous scoring incorrectly gave 100% for borrow+distance+stability
+    # even when the stock had never reached half of the split-day 4H candle.
+    ap=50 if av_ok else 0
+    dp=20 if dist_ok else 0
+    sp=15 if sess_ok else 11.25 if sessions==3 else 7.5 if sessions==2 else 3.75 if sessions==1 else 0
+    hp=15 if half_ok else 0
+    pct=round(ap+dp+sp+hp-(5 if not peak_30_ok else 0),2)
+    pct=max(0,min(100,pct))
+    if not full:pct=min(99,pct)
+    if not hist.get("verified") or av is None or not half_rule_current:pct=None
     strengths=[]
     if half_ok: strengths.append("شرط النصف ✓")
     if av_ok: strengths.append(f"Available {int(av):,} ✓")
@@ -233,6 +346,9 @@ def readiness_state(meta,q,b,a):
         "missing":" + ".join(missing) if missing else "مكتمل ✓","strength":" | ".join(strengths),
         "new_low_today":new_low,"effective_low":effective_low,"effective_distance_pct":dist,
         "effective_sessions":sessions,"highest_since_split":high,"half_level":half,"half_reached":half_ok,
+        "split_half_reached":split_half_ok,"readiness_rule_version":4,
+        "score_breakdown":{"available":ap,"distance":dp,"stability":sp,"half":hp,
+                           "later_peak_penalty":5 if not peak_30_ok else 0},
         "market_day":market_day}
 
 def refresh_analytics():
@@ -251,11 +367,13 @@ def refresh_analytics():
         if not active:
             ANALYTICS[sym]={"symbol":sym,"active":False,"effective_date":eff,"price":price,"ignition":ignition}; continue
         st=readiness_state(meta,q,b,a)
+        hist=HISTORY.get(sym,{})
         full=st["full"]; was_ready=bool(a.get("ready"))
         ready_at=a.get("ready_at"); ready_price=a.get("ready_price")
-        if full and ready_at is None:
+        if full and not was_ready:
             ready_at=utcnow().isoformat(); ready_price=price
-            add_event(sym,"ready","Entered ready list",{"price":price,"available":b.get("available") if b else None})
+            ev=ready_event(sym,was_ready,full,price,b.get("available") if b else None)
+            if ev:add_event(*ev)
         launched=bool(a.get("launched")); max_rise=a.get("max_rise_pct")
         if ready_price and ready_price>0:
             # Match Qanas: TOP follows the highest observed price after the first qualifying ready moment.
@@ -266,16 +384,27 @@ def refresh_analytics():
         if ignition and ignition["fresh"] and not (a.get("ignition") or {}).get("fresh"):
             add_event(sym,"ignition",f"Momentum +{ignition['pct']:.1f}%",ignition)
         ANALYTICS[sym]={"symbol":sym,"active":True,"effective_date":eff,"price":price,
-            "post_split_low":st["effective_low"],"highest_since_split":st["highest_since_split"],
+            "post_split_low":hist.get("post_split_low"),"highest_since_split":hist.get("post_split_high"),
+            "history_verified":bool(hist.get("verified")),"split_day_high":hist.get("split_day_high"),"split_day_4h_high":hist.get("split_day_4h_high"),"split_day_4h_status":hist.get("split_day_4h_status"),"split_day_open":hist.get("split_day_open"),"rsi_daily":hist.get("rsi_daily"),
+            "top_10_gain_pct":hist.get("top_10_gain_pct"),"top_10_low":hist.get("top_10_low"),"top_10_high":hist.get("top_10_high"),
+            "top_10_low_date":hist.get("top_10_low_date"),"top_10_high_date":hist.get("top_10_high_date"),"top_10_verified":bool(hist.get("top_10_verified")),
+            "top_10_sessions_since_peak":hist.get("top_10_sessions_since_peak"),
+            "top_calculator_version":hist.get("top_calculator_version",0),
+            "top_10_source":hist.get("top_10_source"),
+            "top_10_provisional":bool(hist.get("top_10_provisional")),
             "half_level":st["half_level"],"half_reached":st["half_reached"],
-            "distance_from_low_pct":round(st["effective_distance_pct"],2) if st["effective_distance_pct"] is not None else None,
+            "split_half_reached":st["split_half_reached"],
+            "readiness_rule_version":st["readiness_rule_version"],
+            "score_breakdown":st["score_breakdown"],
+            "half_reference_high":hist.get("half_reference_high") or (hist.get("post_split_high") if hist.get("post_split_high_date") and hist.get("post_split_low_date") and hist["post_split_high_date"]<hist["post_split_low_date"] else None),
+            "distance_from_low_pct":round((price/hist["post_split_low"]-1)*100,2) if hist.get("post_split_low") else None,
             "stability_sessions":st["effective_sessions"],"effective_low":st["effective_low"],
             "effective_distance_pct":round(st["effective_distance_pct"],2) if st["effective_distance_pct"] is not None else None,
             "effective_sessions":st["effective_sessions"],"new_low_today":st["new_low_today"],
             "available":b.get("available") if b else None,"ctb":b.get("ctb") if b else None,"rebate":b.get("rebate") if b else None,
             "readiness_pct":st["readiness_pct"],"score":st["readiness_pct"],"ready":full,
-            "near_ready":st["shortlist"] and not full and not launched,"shortlist":st["shortlist"] and not launched,
-            "ready_candidate":(b is not None and b.get("available") is not None and b.get("available")<=20000 and st["effective_distance_pct"] is not None and st["effective_distance_pct"]<=10 and st["effective_sessions"]>=4 and not st["new_low_today"] and not launched),
+            "near_ready":st["shortlist"] and not full,"shortlist":st["shortlist"],
+            "ready_candidate":(b is not None and b.get("available") is not None and b.get("available")<10000 and hist.get("verified") and st["effective_distance_pct"] is not None and st["effective_distance_pct"]<=10 and st["effective_sessions"]>=4 and not st["new_low_today"] ),
             "missing_count":st["missing_count"],"missing":st["missing"],"strength":st["strength"],
             "ready_at":ready_at,"ready_price":ready_price,"launched":launched,
             "max_rise_pct":round(max_rise,2) if max_rise is not None else None,"rise_pct":round(max_rise,2) if max_rise is not None else None,
@@ -312,7 +441,7 @@ def parse_ibkr(text):
 
 async def delayed_borrow_start():
     # Let universe and price workers settle first on the 256 MB sandbox.
-    await asyncio.sleep(150)
+    await asyncio.sleep(10)
     await borrow_loop()
 
 async def borrow_loop():
@@ -324,15 +453,13 @@ async def borrow_loop():
                 new=rows.get(sym)
                 if not new:continue
                 new={**new,"received_at":now}; old=BORROW.get(sym)
-                if old:
-                    oa,na=old.get("available"),new.get("available")
-                    if oa is not None and na is not None and na<oa:
-                        changed+=1; add_event(sym,"available_down",f"Available {oa:g} -> {na:g}",{"old":oa,"new":na})
-                    if oa!=0 and na==0:add_event(sym,"available_zero","Available reached 0",{"old":oa,"new":0})
+                for ev in borrow_events(sym,old,new):
+                    changed+=1; add_event(*ev)
                 BORROW[sym]=new
             STATE["borrow_scan_count"]+=1; STATE["last_borrow_scan"]=now; STATE["borrow_ok"]=sum(1 for s in UNIVERSE if s in rows)
             STATE["borrow_missing"]=max(0,len(UNIVERSE)-STATE["borrow_ok"]); STATE["last_borrow_error"]=None
         except Exception as exc: STATE["last_borrow_error"]=f"{type(exc).__name__}: {str(exc)[:120]}"
+        save_persistent_state()
         await asyncio.sleep(300)
 
 async def halt_loop():
@@ -346,13 +473,17 @@ async def halt_loop():
                     p=line.split("|")
                     if len(p)>=6 and p[0] and p[0]!="Halt Date":
                         sym=p[2].upper().strip()
-                        if sym in UNIVERSE:fresh[sym]={"symbol":sym,"reason":p[5],"halt_time":p[1],"halt_date":p[0]}
+                        # Nasdaq also lists resumed halts; never call them HALT now.
+                        resumed=len(p)>9 and bool(p[9].strip())
+                        if sym in UNIVERSE and not resumed:
+                            fresh[sym]={"symbol":sym,"reason":p[5],"halt_time":p[1],"halt_date":p[0]}
                 for sym,row in fresh.items():
                     key=row["halt_date"]+" "+row["halt_time"]+" "+row["reason"]
-                    if HALTS.get(sym,{}).get("_key")!=key:add_event(sym,"halt","HALT "+row["reason"],row)
+                    if HALTS.get(sym,{}).get("_key")!=key:add_event(sym,"halt","توقف التداول الآن · "+row["reason"],row)
                     row["_key"]=key
                 HALTS.clear(); HALTS.update(fresh); STATE["last_halt_scan"]=utcnow().isoformat(); STATE["halt_error"]=None
             except Exception as exc:STATE["halt_error"]=f"{type(exc).__name__}: {str(exc)[:100]}"
+            save_persistent_state()
             await asyncio.sleep(120)
 
 async def legacy_news_loop_disabled():
@@ -378,23 +509,16 @@ async def legacy_news_loop_disabled():
 @app.on_event("startup")
 async def startup():
     load_persistent_state()
-    asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(halt_loop())
+    asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(halt_loop()); asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
 
 @app.get("/")
 async def root():
     return {"service":"snipelab-engine","message":"SnipeLab Engine is alive","version":"0.6.0",**STATE,
         "prices_ready":len(QUOTES),"borrow_ready":len(BORROW),"events":len(EVENTS),
-        "uptime_seconds":int(time.time()-BOOTED_AT.timestamp()),
+        "uptime_seconds":int(time.time()-BOOTED_AT.timestamp()),"storage":storage.status(),
         "endpoints":["/dashboard","/health","/universe","/prices","/borrow","/snapshot","/signals","/ready","/zero-short","/momentum","/top","/halts","/news","/events"]}
 
-DASHBOARD = r"""<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>SnipeLab</title><style>
-*{box-sizing:border-box}body{margin:0;background:#05090c;color:#edf2f1;font-family:Tahoma,Arial;padding-bottom:66px}.w{max-width:760px;margin:auto;padding:10px}.head{background:linear-gradient(145deg,#0b1418,#081014);border:1px solid #17272d;border-radius:13px;padding:10px 12px;margin-bottom:8px}.h1{display:flex;justify-content:space-between;align-items:center}.logo{font-size:24px;font-weight:900}.logo i{font-style:normal;color:#39dfa0}.clock{text-align:left;font-size:11px;color:#91a0a4}.server{font-size:10px;color:#39dfa0;margin-top:3px}.marks{display:flex;gap:5px;margin-top:8px}.mark{font-size:9px;background:#0d1b20;border:1px solid #173138;border-radius:6px;padding:4px 6px;color:#8da0a4}.mark.ok{color:#4be2a5}.title{font-size:11px;color:#75868a;margin:10px 2px 6px}.filters{display:flex;gap:5px;overflow:auto;padding-bottom:7px;scrollbar-width:none}.f{border:1px solid #1b2b31;background:#0a1216;color:#9aabad;border-radius:7px;padding:6px 9px;font-size:10px;white-space:nowrap}.f.on{color:#58e4a7;border-color:#286148;background:#10251d}.topdeck{display:flex;gap:7px;overflow:auto;padding:2px 0 6px}.hero{min-width:185px;background:linear-gradient(135deg,#17140c,#0b1114);border:1px solid #59471e;border-radius:11px;padding:9px}.hero .rise{color:#f1c765;font-weight:900;font-size:15px}.card{background:#0a1115;border:1px solid #16242a;border-radius:9px;padding:8px 10px;margin-bottom:6px}.top{display:flex;justify-content:space-between;align-items:center}.sym{font-size:16px;font-weight:900}.score{font-weight:900;color:#50e2a4}.tag{font-size:8px;padding:3px 5px;border-radius:5px;background:#132228;color:#8da1a5;margin-right:4px}.gold{color:#f0c568}.red{color:#ff8177}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-top:7px}.kv small{display:block;color:#62757a;font-size:8px;margin-bottom:2px}.kv b{font-size:10.5px}.low b{color:#58e4a7}.more{display:none;border-top:1px solid #17252a;margin-top:7px;padding-top:7px}.card.open .more{display:grid}.empty{color:#65777b;text-align:center;padding:25px}.events .card{font-size:11px}.time{font-size:9px;color:#65777b}.nav{position:fixed;bottom:0;left:0;right:0;background:#080e11f5;border-top:1px solid #17242a}.navin{max-width:760px;margin:auto;display:grid;grid-template-columns:1fr 1fr}.nav button{background:none;border:0;color:#6d7d81;padding:12px}.nav button.on{color:#52e1a5;font-weight:900}@media(min-width:650px){#cards{display:grid;grid-template-columns:1fr 1fr;gap:6px}.card{margin:0}.events .card{margin-bottom:6px}}</style></head><body><div class="w"><header class="head"><div class="h1"><div class="logo">◈ SnipeLab</div><div class="clock"><b id="clock">--:--:--</b><div id="date"></div></div></div><div id="server" class="server">● المحرك...</div><div class="marks"><span id="mkt" class="mark">● الأسعار</span><span id="ibkr" class="mark">● IBKR</span><span id="sig" class="mark">● الجاهزية</span><span id="haltm" class="mark">● HALT</span></div></header>
-<section id="radar"><div id="topbox"></div><div class="title">🎯 الجاهزية · Available ≤ 20K · قريب من القاع · ثبات 4/4</div><div class="filters"><button class="f on" data-f="ready">الجاهزية</button><button class="f" data-f="all">الكل</button><button class="f" data-f="zero">0 شورت</button><button class="f" data-f="momentum">⚡ لحظي</button><button class="f" data-f="top">👑 TOP</button></div><div id="count" class="title"></div><div id="cards"></div></section><section id="pulse" style="display:none" class="events"><div class="title">🔔 الSnipeLab · الأحداث وHALT والأخبار</div><div id="events"></div></section></div><div class="nav"><div class="navin"><button class="on" data-p="radar">🎯 الرادار</button><button data-p="pulse">🔔 الSnipeLab</button></div></div><script>
-let d={},filter='ready';const N=v=>v==null?'—':Number(v).toLocaleString('en-US',{maximumFractionDigits:1}),P=v=>v==null?'—':Number(v).toFixed(1)+'%',D=v=>v==null?'—':'$'+Number(v).toFixed(Number(v)<1?4:2);async function J(){let r=await fetch('/api/dashboard',{cache:'no-store'});if(!r.ok)throw Error(r.status);return r.json()}function rows(){return Object.values(d.rows||{}).map(x=>({...x,...(x.signal||{}),q:x.price||{},br:x.borrow||{}}))}
-function pick(){let a=rows();if(filter==='ready')a=a.filter(x=>x.ready_candidate||x.ready);if(filter==='zero')a=a.filter(x=>Number(x.br.available??x.available)===0);if(filter==='momentum')a=a.filter(x=>x.ignition?.fresh);if(filter==='top')a=a.filter(x=>x.launched);return a.sort((a,b)=>filter==='ready'?(Number(a.br.available??a.available??1e12)-Number(b.br.available??b.available??1e12)):(Number(b.readiness_pct||0)-Number(a.readiness_pct||0)))}
-function card(x){let av=x.br.available??x.available,pr=x.q.price??x.price;return '<div class="card" onclick="this.classList.toggle(\'open\')"><div class="top"><div><span class="sym">'+x.symbol+'</span>'+(x.ready?'<span class="tag">جاهز</span>':x.ready_candidate?'<span class="tag gold">مرشح</span>':'')+'</div><div><b>'+D(pr)+'</b> <span class="score">'+N(x.readiness_pct)+'%</span></div></div><div class="grid"><div class="kv"><small>Available</small><b>'+N(av)+'</b></div><div class="kv low"><small>أدنى قاع</small><b>'+D(x.effective_low)+'</b></div><div class="kv"><small>البعد عن القاع</small><b>'+P(x.effective_distance_pct)+'</b></div><div class="kv"><small>الثبات</small><b>'+(x.effective_sessions??0)+'/4</b></div></div><div class="more grid"><div class="kv"><small>Rebate</small><b>'+P(x.br.rebate??x.rebate)+'</b></div><div class="kv"><small>CTB</small><b>'+P(x.br.ctb??x.ctb)+'</b></div><div class="kv"><small>النصف</small><b>'+(x.half_reached?'✓ ':'')+D(x.half_level)+'</b></div><div class="kv"><small>أعلى بعد التقسيم</small><b>'+D(x.highest_since_split)+'</b></div><div class="kv"><small>تاريخ التقسيم</small><b>'+(x.effective_date||'—')+'</b></div><div class="kv"><small>Ready Price</small><b>'+D(x.ready_price)+'</b></div></div></div>'}
-function render(){let tops=rows().filter(x=>x.launched).sort((a,b)=>Number(b.max_rise_pct||0)-Number(a.max_rise_pct||0));topbox.innerHTML=tops.length?'<div class="title">👑 TOP · الأسهم المنطلقة</div><div class="topdeck">'+tops.map(x=>'<div class="hero"><div class="top"><b>'+x.symbol+'</b><span>👑</span></div><div class="rise">+'+N(x.max_rise_pct)+'%</div><small>من سعر الجاهزية '+D(x.ready_price)+'</small></div>').join('')+'</div>':'';let a=pick();count.textContent=a.length+' سهم';cards.innerHTML=a.map(card).join('')||'<div class="empty">لا توجد أسهم مطابقة حاليًا</div>';let mix=[...(d.events||[])];Object.values(d.halts||{}).forEach(h=>mix.push({symbol:h.symbol,text:'🚨 HALT · '+h.reason,at:(h.halt_date||'')+' '+(h.halt_time||'')}));Object.entries(d.news||{}).forEach(([s,z])=>(z||[]).filter(n=>n.tone==='positive').forEach(n=>mix.push({symbol:s,text:'🟢 '+n.title,at:n.published_at||''})));events.innerHTML=mix.slice(0,40).map(e=>'<div class="card"><div class="top"><b>'+e.symbol+'</b><span class="time">'+String(e.at||'').replace('T',' ').slice(0,19)+'</span></div><div>'+e.text+'</div></div>').join('')||'<div class="empty">لا توجد أحداث</div>'}
-function clocker(){let n=new Date();clock.textContent=n.toLocaleTimeString('ar-SA');date.textContent=n.toLocaleDateString('ar-SA',{weekday:'short',year:'numeric',month:'short',day:'numeric'})}async function load(){try{d=await J();let h=d.health||{},age=h.heartbeat?Math.max(0,(Date.now()-Date.parse(h.heartbeat))/1000):999;server.textContent='● السيرفر شغال · آخر SnipeLabة '+Math.round(age)+'ث';server.style.color=age<30?'#39dfa0':'#ff8177';mkt.classList.toggle('ok',h.price_count>0);ibkr.classList.toggle('ok',h.borrow_count>0);sig.classList.toggle('ok',h.analytics_count>0);haltm.classList.toggle('ok',true);render()}catch(e){server.textContent='● تعذر الاتصال';server.style.color='#ff8177'}}document.querySelectorAll('.f').forEach(b=>b.onclick=()=>{document.querySelectorAll('.f').forEach(z=>z.classList.remove('on'));b.classList.add('on');filter=b.dataset.f;render()});document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.nav button').forEach(z=>z.classList.remove('on'));b.classList.add('on');radar.style.display=b.dataset.p==='radar'?'block':'none';pulse.style.display=b.dataset.p==='pulse'?'block':'none'});clocker();setInterval(clocker,1000);load();setInterval(load,10000)</script></body></html>"""
+DASHBOARD = (Path(__file__).parent / "dashboard.html").read_text("utf-8")
 
 @app.get("/dashboard",response_class=HTMLResponse)
 async def dashboard():
@@ -403,7 +527,23 @@ async def dashboard():
 @app.get("/health")
 async def health():
     last=STATE["heartbeat"]; age=(utcnow()-datetime.fromisoformat(last)).total_seconds() if last else None
-    return {"ok":bool(last) and age<30,"heartbeat_age_seconds":age,**STATE}
+    now=utcnow()
+    workers={"market":worker_health(now,STATE.get("last_market_scan"),180),"borrow":worker_health(now,STATE.get("last_borrow_scan"),420),"history":worker_health(now,max((v.get("attempted_at","") for v in HISTORY.values()),default=None),900),"analytics":worker_health(now,STATE.get("last_analytics"),120),"halt":worker_health(now,STATE.get("last_halt_scan"),240)}
+    return {"ok":bool(last) and age<30,"heartbeat_age_seconds":age,"workers":workers,"storage":storage.status(),"quotes_cached":len(QUOTES),"history_cached":len(HISTORY),"history_verified":sum(bool(HISTORY.get(sym,{}).get("verified")) for sym in UNIVERSE),"history_failed":sum(bool(HISTORY.get(sym,{}).get("error")) for sym in UNIVERSE),"history_last_attempt":max((v.get("attempted_at","") for v in HISTORY.values()),default=None),**STATE}
+
+@app.get("/api/storage-check")
+async def storage_check():
+    """Read-only proof of snapshots and startup recovery; does not restart service."""
+    try:
+        snapshots=storage.snapshot_info()
+        error=None
+    except Exception as exc:
+        snapshots=None; error=f"{type(exc).__name__}: {str(exc)[:120]}"
+    return {"booted_at":BOOTED_AT.isoformat(),"uptime_seconds":int(time.time()-BOOTED_AT.timestamp()),
+        "restored_from_sqlite":STATE.get("restored_from_sqlite",False),
+        "restored_at":STATE.get("restored_at"),"last_state_save":STATE.get("last_state_save"),
+        "storage":storage.status(),"snapshots":snapshots,"storage_error":error,
+        "counts":{"universe":len(UNIVERSE),"quotes":len(QUOTES),"history":len(HISTORY),"borrow":len(BORROW),"events":len(EVENTS)}}
 
 @app.get("/universe")
 async def universe():
@@ -433,6 +573,7 @@ async def signals():
 
 @app.get("/ready")
 async def ready():
+    refresh_analytics()
     rows=[x for x in ANALYTICS.values() if x.get("ready")]
     rows.sort(key=lambda x:(x.get("available") is None,x.get("available") or 10**18,-(x.get("score") or 0)))
     return {"count":len(rows),"rows":rows}
@@ -450,16 +591,95 @@ async def momentum():
 
 @app.get("/top")
 async def top():
-    rows=[x for x in ANALYTICS.values() if x.get("launched")]
-    rows.sort(key=lambda x:x.get("max_rise_pct") or 0,reverse=True)
+    rows=[x for x in ANALYTICS.values() if x.get("top_10_verified") and (x.get("top_10_gain_pct") or 0)>=40]
+    rows.sort(key=lambda x:x.get("top_10_gain_pct") or 0,reverse=True)
     return {"count":len(rows),"rows":rows}
+
+def data_freshness(row, timestamp_field, max_age_seconds):
+    """Explicit freshness for cached quotes/borrow; no fabricated live claims."""
+    stamp=(row or {}).get(timestamp_field)
+    if not stamp:
+        return {"status":"missing","age_seconds":None,"timestamp":None}
+    try:
+        parsed=datetime.fromisoformat(stamp.replace("Z","+00:00"))
+        age=max(0,int((utcnow()-parsed.astimezone(timezone.utc)).total_seconds()))
+        return {"status":"fresh" if age<=max_age_seconds else "stale",
+                "age_seconds":age,"timestamp":stamp}
+    except (TypeError,ValueError):
+        return {"status":"unknown","age_seconds":None,"timestamp":stamp}
+
+@app.get("/api/data-freshness")
+async def data_freshness_report():
+    """Read-only source coverage and age, without waiting for upstream APIs."""
+    quotes={sym:data_freshness(QUOTES.get(sym),"received_at",900) for sym in UNIVERSE}
+    borrow={sym:data_freshness(BORROW.get(sym),"received_at",1200) for sym in UNIVERSE}
+    def counts(rows):
+        return {state:sum(v["status"]==state for v in rows.values())
+                for state in ("fresh","stale","missing","unknown")}
+    return {"generated_at":utcnow().isoformat(),"universe_count":len(UNIVERSE),
+            "quotes":counts(quotes),"borrow":counts(borrow),
+            "last_market_scan":STATE["last_market_scan"],
+            "last_borrow_scan":STATE["last_borrow_scan"],
+            "last_market_error":STATE["last_market_error"],
+            "last_borrow_error":STATE["last_borrow_error"],
+            "quote_max_age_seconds":900,"borrow_max_age_seconds":1200}
 
 @app.get("/api/dashboard")
 async def dashboard_data():
+    # Dashboard must be read-only. Recomputing the entire universe inside
+    # the HTTP handler can raise on a single malformed quote and cause 500.
+    # The background analytics worker owns refreshes.
     rows={}
     for sym,meta in UNIVERSE.items():
-        rows[sym]={"symbol":sym,"effective_date":meta.get("effective_date"),"price":QUOTES.get(sym),"borrow":BORROW.get(sym),"signal":ANALYTICS.get(sym)}
-    return {"server_time":utcnow().isoformat(),"health":{"ok":STATE.get("status")=="ok","heartbeat":STATE.get("heartbeat"),"universe_count":len(UNIVERSE),"price_count":len(QUOTES),"borrow_count":len(BORROW),"analytics_count":len(ANALYTICS)},"rows":rows,"events":EVENTS[-40:][::-1],"halts":HALTS,"news":NEWS}
+        h=HISTORY.get(sym,{})
+        signal={**(ANALYTICS.get(sym) or {}),
+            "quote_freshness":data_freshness(QUOTES.get(sym),"received_at",900),
+            "borrow_freshness":data_freshness(BORROW.get(sym),"received_at",1200),
+            "history_verified":bool(h.get("verified")),
+            "post_split_low":h.get("post_split_low"),
+            "highest_since_split":h.get("post_split_high"),
+            "split_day_high":h.get("split_day_high"),
+            "split_day_4h_high":h.get("split_day_4h_high"),
+            "split_day_4h_status":h.get("split_day_4h_status"),
+            "split_day_open":h.get("split_day_open"),
+            "post_split_high_date":h.get("post_split_high_date"),
+            "post_split_low_date":h.get("post_split_low_date"),
+            "quality_warnings":h.get("quality_warnings",[]),
+            "extended_history_complete":h.get("extended_history_complete",False),
+            "rsi_daily":h.get("rsi_daily"),
+            "top_10_gain_pct":h.get("top_10_gain_pct"),
+            "top_10_low":h.get("top_10_low"),
+            "top_10_high":h.get("top_10_high"),
+            "top_10_low_date":h.get("top_10_low_date"),
+            "top_10_high_date":h.get("top_10_high_date"),
+            "top_10_verified":bool(h.get("top_10_verified")),
+            "top_10_sessions_since_peak":h.get("top_10_sessions_since_peak"),
+            "top_calculator_version":h.get("top_calculator_version",0),
+            "top_10_source":h.get("top_10_source"),
+            "top_10_provisional":bool(h.get("top_10_provisional")),
+            "history_status":h.get("error") or ("verified" if h.get("verified") else "pending")}
+        # A same-day live rise is a separate, explicitly provisional measure:
+        # never mix it silently with the completed-session low-to-high TOP.
+        q=QUOTES.get(sym) or {}
+        try:
+            from zoneinfo import ZoneInfo
+            market_day=datetime.fromisoformat(q["market_timestamp"].replace("Z","+00:00")).astimezone(ZoneInfo("America/New_York")).date()
+            received=datetime.fromisoformat(q["received_at"].replace("Z","+00:00"))
+            reference=float(q["previous_close"])
+            high=float(q["day_high"])
+            quote_current=(utcnow()-received).total_seconds()<=900
+            if (reference>0 and high>=reference and quote_current
+                    and market_day==utcnow().astimezone(ZoneInfo("America/New_York")).date()
+                    and h.get("verified")):
+                signal["live_day_rise_pct"]=round((high/reference-1)*100,2)
+                signal["live_day_rise_source"]="previous_close_to_day_high"
+                signal["live_day_rise_provisional"]=True
+        except (KeyError,TypeError,ValueError,OverflowError,ZeroDivisionError):
+            pass
+        rows[sym]={"symbol":sym,"company_name":meta.get("company_name") or meta.get("name") or (QUOTES.get(sym) or {}).get("short_name"),"effective_date":meta.get("effective_date"),"price":QUOTES.get(sym),"borrow":BORROW.get(sym),"signal":signal}
+    relevant_kinds={"price_25","halt","available_10k","available_zero","ready"}
+    important_events=[e for e in EVENTS if e.get("kind") in relevant_kinds]
+    return {"server_time":utcnow().isoformat(),"uptime_seconds":int(time.time()-BOOTED_AT.timestamp()),"storage":storage.status(),"history_count":sum(bool(HISTORY.get(sym,{}).get("verified")) for sym in UNIVERSE),"history_pending":sum(1 for sym in UNIVERSE if not HISTORY.get(sym,{}).get("verified")),"health":{"ok":STATE.get("status")=="running","heartbeat":STATE.get("heartbeat"),"universe_count":len(UNIVERSE),"price_count":len(QUOTES),"borrow_count":len(BORROW),"analytics_count":len(ANALYTICS)},"rows":rows,"events":important_events[:40],"halts":HALTS,"news":NEWS}
 
 @app.get("/halts")
 async def halts():
@@ -472,3 +692,150 @@ async def news():
 @app.get("/events")
 async def events():
     return {"count":len(EVENTS),"events":EVENTS}
+
+# Independent per-ticker RSS cache; no dependency on the disabled legacy site.
+_NEWS_CACHE = {}
+_NEWS_INFLIGHT = {}
+_NEWS_TTL = 1800
+
+@app.get("/api/news/{symbol}")
+async def ticker_news(symbol: str):
+    """Source-backed headlines, optional Arabic summary when an AI key is configured."""
+    from xml.etree import ElementTree as ET
+    from urllib.parse import quote
+    from email.utils import parsedate_to_datetime
+    symbol = re.sub(r"[^A-Z0-9.-]", "", symbol.upper())[:12]
+    if not symbol or symbol not in UNIVERSE:
+        return {"symbol":symbol,"items":[],"message":"الرمز غير موجود في قائمة الأسهم الحالية."}
+    cached = _NEWS_CACHE.get(symbol)
+    if cached and time.time()-cached["at"] < _NEWS_TTL:
+        return cached["result"]
+    if symbol in _NEWS_INFLIGHT:
+        try:
+            return await asyncio.wait_for(asyncio.shield(_NEWS_INFLIGHT[symbol]),timeout=12)
+        except (asyncio.TimeoutError,Exception):
+            return cached["result"] if cached else {"symbol":symbol,"items":[],"message":"الأخبار قيد التحديث."}
+    async def gather():
+        items=[]
+        try:
+            query=quote(f'"{symbol}" stock NASDAQ OR NYSE when:7d')
+            url=f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
+            async with httpx.AsyncClient(timeout=8,follow_redirects=True) as client:
+                response=await client.get(url,headers={"User-Agent":"SnipeLab/2.0 news reader"})
+                response.raise_for_status()
+            root=ET.fromstring(response.content)
+            for item in root.findall("./channel/item")[:5]:
+                title=(item.findtext("title") or "").strip()
+                link=(item.findtext("link") or "").strip()
+                if not title or not link.startswith("https://"):continue
+                published=item.findtext("pubDate") or ""
+                try:published=parsedate_to_datetime(published).astimezone(timezone.utc).isoformat()
+                except (ValueError,TypeError):pass
+                source_node=item.find("source")
+                source=source_node.text if source_node is not None else "Google News"
+                items.append({"title":title,"url":link,"source":source,
+                              "published_at":published,"sentiment":None,"summary_ar":None})
+            # No inferred Arabic summaries or sentiment from untranslated titles.
+            # An optional key enables a grounded summary of ONLY the retrieved titles.
+            key=os.environ.get("OPENAI_API_KEY")
+            if items and key:
+                try:
+                    headlines=[{"title":x["title"],"source":x["source"],"date":x["published_at"]} for x in items[:3]]
+                    request={"model":os.environ.get("SNIPELAB_NEWS_MODEL","gpt-4o-mini"),
+                             "response_format":{"type":"json_object"},
+                             "temperature":0,
+                             "messages":[{"role":"system","content":"Summarize ONLY the supplied news headlines in concise Arabic. Return JSON with summary_ar (string, maximum 60 Arabic words) and sentiment (positive, negative, neutral). If headlines lack enough information to classify, use neutral. Do not invent events, numbers, facts or investment advice. Distinguish headlines from verified company announcements."},
+                                         {"role":"user","content":json.dumps(headlines,ensure_ascii=False)}]}
+                    async with httpx.AsyncClient(timeout=12) as client:
+                        result=await client.post("https://api.openai.com/v1/chat/completions",
+                            headers={"Authorization":"Bearer "+key},json=request)
+                        result.raise_for_status()
+                    parsed=json.loads(result.json()["choices"][0]["message"]["content"])
+                    tone=parsed.get("sentiment")
+                    if tone not in ("positive","negative","neutral"):tone=None
+                    summary=str(parsed.get("summary_ar") or "").strip()[:600]
+                    if summary:
+                        items[0]["summary_ar"]=summary
+                        items[0]["sentiment"]=tone
+                except Exception:
+                    pass  # Preserve sourced headlines without inventing a summary.
+            message=("أخبار من مصادر منشورة. التصنيف الآلي للعنوان لا يُعد توصية تداول."
+                     if any(x.get("summary_ar") for x in items)
+                     else "عناوين من مصادر منشورة؛ الملخص العربي والتصنيف غير متاحين حالياً.")
+            result={"symbol":symbol,"items":items,"message":message}
+        except Exception as exc:
+            result={"symbol":symbol,"items":cached["result"]["items"] if cached else [],
+                    "message":"تعذر تحديث الأخبار من المصدر؛ قد تكون النتائج السابقة قديمة.",
+                    "error":type(exc).__name__}
+        _NEWS_CACHE[symbol]={"at":time.time(),"result":result}
+        return result
+    task=asyncio.create_task(gather())
+    _NEWS_INFLIGHT[symbol]=task
+    try:return await task
+    finally:_NEWS_INFLIGHT.pop(symbol,None)
+
+@app.get("/api/history-coverage")
+async def history_coverage():
+    """Every discovered split and the four requested metrics, with provenance."""
+    rows=[]
+    for sym,meta in sorted(UNIVERSE.items()):
+        h=HISTORY.get(sym) or {}
+        if not meta.get("effective_date"):continue
+        valid=h.get("verified") and h.get("effective_date")==meta["effective_date"]
+        fields={"split_day_open":h.get("split_day_open") if valid else None,
+                "split_day_4h_high":h.get("split_day_4h_high") if valid else None,
+                "post_split_high":h.get("post_split_high") if valid else None,
+                "post_split_high_date":h.get("post_split_high_date") if valid else None,
+                "post_split_low":h.get("post_split_low") if valid else None,
+                "post_split_low_date":h.get("post_split_low_date") if valid else None}
+        missing=[key for key in ("split_day_open","split_day_4h_high","post_split_high","post_split_low") if fields[key] is None]
+        warnings=h.get("quality_warnings",[])
+        if not valid or missing:audit_status="pending"
+        elif any(w in warnings for w in ("invalid_extrema","rolling_extrema_inconsistent")):audit_status="inconsistent"
+        elif warnings or not h.get("extended_history_complete",False):audit_status="needs_validation"
+        else:audit_status="verified"
+        rows.append({"symbol":sym,"audit_status":audit_status,"effective_date":meta["effective_date"],
+            "ratio":meta.get("ratio"),"split_source":meta.get("source"),
+            **fields,"complete":not missing,"missing":missing,
+            "quality_warnings":h.get("quality_warnings",[]),
+            "extended_history_complete":h.get("extended_history_complete",False),
+            "split_day_4h_status":h.get("split_day_4h_status"),
+            "last_attempt":h.get("attempted_at"),"error":h.get("error")})
+    return {"generated_at":utcnow().isoformat(),"total":len(rows),
+            "four_fields_complete":sum(x["complete"] for x in rows),
+            "pending":sum(not x["complete"] for x in rows),
+            "quality_flagged":sum(bool(x["quality_warnings"]) for x in rows),
+            "needs_validation":sum(x["audit_status"]=="needs_validation" for x in rows),
+            "inconsistent":sum(x["audit_status"]=="inconsistent" for x in rows),
+            "audited":sum(x["audit_status"]=="verified" for x in rows),
+            "pending_never_attempted":sum(x["audit_status"]=="pending" and not x["last_attempt"] for x in rows),
+            "pending_attempted":sum(x["audit_status"]=="pending" and bool(x["last_attempt"]) for x in rows),
+            "warning_counts":{w:sum(w in x["quality_warnings"] for x in rows)
+                              for w in sorted({w for x in rows for w in x["quality_warnings"]})},
+            "rows":rows}
+
+@app.get("/api/history-audit")
+async def history_audit():
+    """Compact actionable report; do not confuse field coverage with validation."""
+    report=await history_coverage()
+    rows=report.pop("rows")
+    pending=[x for x in rows if x["audit_status"]=="pending"]
+    return {**report,
+        "pending_symbols":[{"symbol":x["symbol"],"effective_date":x["effective_date"],
+            "missing":x["missing"],"error":x["error"],
+            "split_day_4h_status":x["split_day_4h_status"],
+            "last_attempt":x["last_attempt"]} for x in pending],
+        "quality_examples":[{"symbol":x["symbol"],"warnings":x["quality_warnings"]}
+            for x in rows if x["quality_warnings"]][:20],
+        "note":"Completed fields are not independent price validation."}
+
+@app.get("/api/diagnostics/{symbol}")
+async def ticker_diagnostics(symbol: str):
+    symbol=re.sub(r"[^A-Z0-9.-]","",symbol.upper())[:12]
+    # Never serve a restored pre-v4 readiness score after a deployment.
+    # Diagnostics must remain available even if a background calculation fails.
+    return {"symbol":symbol,"in_split_universe":symbol in UNIVERSE,"server_time":utcnow().isoformat(),"last_market_scan":STATE["last_market_scan"],"last_borrow_scan":STATE["last_borrow_scan"],
+            "split":UNIVERSE.get(symbol),"history":HISTORY.get(symbol),
+            "quote":QUOTES.get(symbol),"borrow":BORROW.get(symbol),
+            "signal":ANALYTICS.get(symbol),
+            "note":"A rally alone does not establish a qualifying reverse split."}
