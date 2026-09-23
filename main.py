@@ -433,10 +433,13 @@ async def halt_loop():
                     p=line.split("|")
                     if len(p)>=6 and p[0] and p[0]!="Halt Date":
                         sym=p[2].upper().strip()
-                        if sym in UNIVERSE:fresh[sym]={"symbol":sym,"reason":p[5],"halt_time":p[1],"halt_date":p[0]}
+                        # Nasdaq also lists resumed halts; never call them HALT now.
+                        resumed=len(p)>9 and bool(p[9].strip())
+                        if sym in UNIVERSE and not resumed:
+                            fresh[sym]={"symbol":sym,"reason":p[5],"halt_time":p[1],"halt_date":p[0]}
                 for sym,row in fresh.items():
                     key=row["halt_date"]+" "+row["halt_time"]+" "+row["reason"]
-                    if HALTS.get(sym,{}).get("_key")!=key:add_event(sym,"halt","HALT "+row["reason"],row)
+                    if HALTS.get(sym,{}).get("_key")!=key:add_event(sym,"halt","توقف التداول الآن · "+row["reason"],row)
                     row["_key"]=key
                 HALTS.clear(); HALTS.update(fresh); STATE["last_halt_scan"]=utcnow().isoformat(); STATE["halt_error"]=None
             except Exception as exc:STATE["halt_error"]=f"{type(exc).__name__}: {str(exc)[:100]}"
