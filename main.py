@@ -274,7 +274,14 @@ def readiness_state(meta,q,b,a):
     sessions=0 if new_low else int(hist.get("stability_sessions") or 0)
     market_day=str(q.get("market_timestamp") or "")[:10]
     high=max(float(a.get("highest_since_split") or price),float(q.get("day_high") or price))
-    half=hist["split_day_4h_high"]/2 if hist.get("verified") and hist.get("split_day_4h_high") is not None else None
+    # Half target follows the highest verified POST-SPLIT peak reached
+    # before the low. It is not locked to the opening/split-day 4H candle.
+    # Never credit a peak that happened after the low (look-ahead bias).
+    peak=hist.get("half_reference_high")
+    if peak is None and hist.get("post_split_high_date") and hist.get("post_split_low_date"):
+        if hist["post_split_high_date"] < hist["post_split_low_date"]:
+            peak=hist.get("post_split_high")
+    half=float(peak)/2 if hist.get("verified") and peak is not None else None
     half_ok=bool(half is not None and effective_low<=half)
     av=b.get("available") if b else None
     price_ok=price>0; av_ok=av is not None and av<10000
@@ -358,6 +365,7 @@ def refresh_analytics():
             "top_10_source":hist.get("top_10_source"),
             "top_10_provisional":bool(hist.get("top_10_provisional")),
             "half_level":st["half_level"],"half_reached":st["half_reached"],
+            "half_reference_high":hist.get("half_reference_high") or (hist.get("post_split_high") if hist.get("post_split_high_date") and hist.get("post_split_low_date") and hist["post_split_high_date"]<hist["post_split_low_date"] else None),
             "distance_from_low_pct":round((price/hist["post_split_low"]-1)*100,2) if hist.get("post_split_low") else None,
             "stability_sessions":st["effective_sessions"],"effective_low":st["effective_low"],
             "effective_distance_pct":round(st["effective_distance_pct"],2) if st["effective_distance_pct"] is not None else None,
