@@ -260,10 +260,14 @@ async def worker(universe,history,yahoo,save):
                 return (age<=18 and h.get("verified") and
                         h.get("top_10_sessions_since_peak") is None and
                         h.get("top_10_gain_pct") is None)
+            # Fix old persisted rows whose four OHLC fields are complete but
+            # whose TOP metrics predate the current calculator. Process recent
+            # TOP-missing splits before other historical refreshes.
             todo.sort(key=lambda item:(
                 not top_recalc_due(item[0],item[1]),
+                -date.fromisoformat(item[1]["effective_date"]).toordinal()
+                    if top_recalc_due(item[0],item[1]) else 0,
                 complete(history.get(item[0],{}),item[1]),
-                -date.fromisoformat(item[1]["effective_date"]).toordinal(),
                 history.get(item[0],{}).get("attempted_at","")))
             for sym,meta in todo[:16]:
                 try:
