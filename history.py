@@ -304,7 +304,7 @@ async def worker(universe,history,yahoo,save):
                 h=history.get(sym,{})
                 age=(datetime.now(timezone.utc).date()-date.fromisoformat(meta["effective_date"])).days
                 return (age<=30 and h.get("verified") and
-                        h.get("top_calculator_version",0)<2)
+                        h.get("top_calculator_version",0)<3)
             # Fix old persisted rows whose four OHLC fields are complete but
             # whose TOP metrics predate the current calculator. Process recent
             # TOP-missing splits before other historical refreshes.
