@@ -249,7 +249,8 @@ async def market_loop():
                         old_pct=(float(prior["price"])/float(prior["previous_close"])-1)*100
                         new_pct=(float(row["price"])/float(row["previous_close"])-1)*100
                         if market_day and market_day==prior_day and old_pct<25<=new_pct:
-                            add_event(s,"price_25",f"ارتفع +{new_pct:.1f}%",{"rise_pct":round(new_pct,2),"market_day":market_day})
+                            add_event(s,"price_25",f"ارتفع +{new_pct:.1f}%",{"rise_pct":round(new_pct,2),"peak_30_ok":peak_30_ok,"peak_gain_pct":peak_gain_pct,
+        "market_day":market_day})
                     QUOTES[s]=row; ok+=1
             STATE["market_scan_count"]+=1
             STATE["last_market_scan"]=utcnow().isoformat()
@@ -283,10 +284,21 @@ def readiness_state(meta,q,b,a):
             peak=hist.get("post_split_high")
     half=float(peak)/2 if hist.get("verified") and peak is not None else None
     half_ok=bool(half is not None and effective_low<=half)
+    # A post-split peak above 130% of the split-day opening is a separate
+    # readiness gate, not a reason to discard the stock from the shortlist.
+    opening=hist.get("split_day_open")
+    peak_gain_pct=((float(peak)/float(opening)-1)*100
+                   if peak is not None and opening is not None and float(opening)>0 else None)
+    peak_30_ok=peak_gain_pct is not None and peak_gain_pct<=30.000001
     av=b.get("available") if b else None
     price_ok=price>0; av_ok=av is not None and av<10000
     dist_ok=dist is not None and dist<=20; sess_ok=sessions>=4
     missing=[]; close=True
+    if not peak_30_ok:
+        missing.append(
+            f"القمة بعد التقسيم تجاوزت 30% من الافتتاح ({peak_gain_pct:.2f}%)"
+            if peak_gain_pct is not None else "التحقق من حد القمة 30%")
+        close=False
     if not half_ok: missing.append(f"يحقق شرط النصف <= {half:.4f}" if half else "حساب مستوى النصف"); close=False
     if new_low: missing.append("كون قاع جديد اليوم: يبدأ الثبات من 0/4"); close=False
     if not av_ok:
@@ -300,7 +312,7 @@ def readiness_state(meta,q,b,a):
         close=close and sessions>=2
     if not hist.get("verified"):missing.append("تاريخ القاع والقمة بعد التقسيم");close=False
     if not price_ok: missing.append("تحديث السعر الحالي"); close=False
-    full=price_ok and hist.get("verified") and half_ok and not new_low and av_ok and dist_ok and sess_ok
+    full=price_ok and hist.get("verified") and peak_30_ok and half_ok and not new_low and av_ok and dist_ok and sess_ok
     shortlist=full or (price_ok and hist.get("verified") and av is not None and 1<=len(missing)<=2)
     if av is None: ap=0
     elif av<10000: ap=50
@@ -310,7 +322,10 @@ def readiness_state(meta,q,b,a):
     elif dist<=20: dp=30
     else: dp=0
     sp=20 if sessions>=4 else 15 if sessions==3 else 10 if sessions==2 else 5 if sessions==1 else 0
-    pct=100.0 if full else round(min(99.0,ap+dp+sp),1)
+    # Reserve 15 points for the 30% peak gate so a failed gate never
+    # displays misleading 99% readiness.
+    pct=round(min(100.0, (ap+dp+sp)*0.85+(15 if peak_30_ok else 0)),1)
+    if full:pct=100.0
     if not hist.get("verified") or av is None:pct=None
     strengths=[]
     if half_ok: strengths.append("شرط النصف ✓")
