@@ -626,9 +626,9 @@ async def data_freshness_report():
 
 @app.get("/api/dashboard")
 async def dashboard_data():
-    # Recompute from current history/quotes before rendering; old SQLite
-    # analytics snapshots must not keep a previous readiness rule alive.
-    refresh_analytics()
+    # Dashboard must be read-only. Recomputing the entire universe inside
+    # the HTTP handler can raise on a single malformed quote and cause 500.
+    # The background analytics worker owns refreshes.
     rows={}
     for sym,meta in UNIVERSE.items():
         h=HISTORY.get(sym,{})
@@ -833,8 +833,7 @@ async def history_audit():
 async def ticker_diagnostics(symbol: str):
     symbol=re.sub(r"[^A-Z0-9.-]","",symbol.upper())[:12]
     # Never serve a restored pre-v4 readiness score after a deployment.
-    if symbol in UNIVERSE and symbol in QUOTES:
-        refresh_analytics()
+    # Diagnostics must remain available even if a background calculation fails.
     return {"symbol":symbol,"in_split_universe":symbol in UNIVERSE,"server_time":utcnow().isoformat(),"last_market_scan":STATE["last_market_scan"],"last_borrow_scan":STATE["last_borrow_scan"],
             "split":UNIVERSE.get(symbol),"history":HISTORY.get(symbol),
             "quote":QUOTES.get(symbol),"borrow":BORROW.get(symbol),
