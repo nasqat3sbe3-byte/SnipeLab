@@ -47,6 +47,12 @@ def calculate(effective, candles):
         "split_day_open":first["open"] if verified else None,
         "post_split_high_date":max(bars,key=lambda b:b["high"])["date"] if verified else None,
         "post_split_low_date":min(bars,key=lambda b:b["low"])["date"] if verified else None,
+        # Reference peak must precede the observed low; daily OHLC cannot
+        # establish intraday order for highs and lows on the same date.
+        "half_reference_high":(
+            max((b["high"] for b in bars
+                 if b["date"]<min(bars,key=lambda x:x["low"])["date"]),default=None)
+            if verified else None),
         "rsi_daily":rsi,"first_bar":first["date"],"bar_count":len(bars),
         "top_10_verified":bool(top and verified and top["top_10_gain_pct"]>=40),
         "top_calculated_at":datetime.now(timezone.utc).isoformat(),
