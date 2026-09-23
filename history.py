@@ -45,7 +45,9 @@ def calculate(effective, candles):
         "post_split_high_date":max(bars,key=lambda b:b["high"])["date"] if verified else None,
         "post_split_low_date":min(bars,key=lambda b:b["low"])["date"] if verified else None,
         "rsi_daily":rsi,"first_bar":first["date"],"bar_count":len(bars),
-        "top_10_verified":bool(top and verified and top["top_10_gain_pct"]>=40),**(top or {}),
+        "top_10_verified":bool(top and verified and top["top_10_gain_pct"]>=40),
+        "top_calculated_at":datetime.now(timezone.utc).isoformat(),
+        "top_calculator_version":2,**(top or {}),
         "updated_at":datetime.now(timezone.utc).isoformat()}
 
 async def split_day_4h_high(client, yahoo, symbol, effective):
@@ -236,8 +238,17 @@ async def worker(universe,history,yahoo,save):
                          "post_split_high","post_split_low")))
             # Completed histories still need periodic extrema updates as new sessions trade.
             # Keep the last good snapshot visible while a refresh is in progress.
+            # Migrate persisted histories produced before TOP-wave calculation.
+            # Do not wait an hour for a row with all four OHLC fields present.
+            def needs_top_migration(sym,meta):
+                h=history.get(sym,{})
+                return (h.get("effective_date")==meta["effective_date"]
+                        and h.get("top_calculator_version",0)<2
+                        and (datetime.now(timezone.utc).date()-
+                             date.fromisoformat(meta["effective_date"])).days<=30)
             todo=[(sym,meta) for sym,meta in todo
-                  if not complete(history.get(sym,{}),meta)
+                  if needs_top_migration(sym,meta)
+                  or not complete(history.get(sym,{}),meta)
                   or (time.time()-datetime.fromisoformat(
                       history[sym].get("attempted_at", "1970-01-01T00:00:00+00:00")
                   ).timestamp() >= 3600)]
@@ -250,16 +261,16 @@ async def worker(universe,history,yahoo,save):
                     age=now_epoch-datetime.fromisoformat(h["attempted_at"]).timestamp()
                 except (ValueError,KeyError,TypeError):return True
                 return age>=1800
-            todo=[(sym,meta) for sym,meta in todo if retry_due(sym,meta)]
+            todo=[(sym,meta) for sym,meta in todo
+                  if needs_top_migration(sym,meta) or retry_due(sym,meta)]
             # Recent split histories missing TOP-wave calculations must be
             # recalculated promptly, even when the four core fields are complete.
             # Older split histories with no rally stay on the normal refresh cycle.
             def top_recalc_due(sym,meta):
                 h=history.get(sym,{})
                 age=(datetime.now(timezone.utc).date()-date.fromisoformat(meta["effective_date"])).days
-                return (age<=18 and h.get("verified") and
-                        h.get("top_10_sessions_since_peak") is None and
-                        h.get("top_10_gain_pct") is None)
+                return (age<=30 and h.get("verified") and
+                        h.get("top_calculator_version",0)<2)
             # Fix old persisted rows whose four OHLC fields are complete but
             # whose TOP metrics predate the current calculator. Process recent
             # TOP-missing splits before other historical refreshes.
