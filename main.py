@@ -610,6 +610,24 @@ async def dashboard_data():
             "top_10_verified":bool(h.get("top_10_verified")),
             "top_10_sessions_since_peak":h.get("top_10_sessions_since_peak"),
             "history_status":h.get("error") or ("verified" if h.get("verified") else "pending")}
+        # A same-day live rise is a separate, explicitly provisional measure:
+        # never mix it silently with the completed-session low-to-high TOP.
+        q=QUOTES.get(sym) or {}
+        try:
+            from zoneinfo import ZoneInfo
+            market_day=datetime.fromisoformat(q["market_timestamp"].replace("Z","+00:00")).astimezone(ZoneInfo("America/New_York")).date()
+            received=datetime.fromisoformat(q["received_at"].replace("Z","+00:00"))
+            reference=float(q["previous_close"])
+            high=float(q["day_high"])
+            quote_current=(utcnow()-received).total_seconds()<=900
+            if (reference>0 and high>=reference and quote_current
+                    and market_day==utcnow().astimezone(ZoneInfo("America/New_York")).date()
+                    and h.get("verified")):
+                signal["live_day_rise_pct"]=round((high/reference-1)*100,2)
+                signal["live_day_rise_source"]="previous_close_to_day_high"
+                signal["live_day_rise_provisional"]=True
+        except (KeyError,TypeError,ValueError,OverflowError,ZeroDivisionError):
+            pass
         rows[sym]={"symbol":sym,"company_name":meta.get("company_name") or meta.get("name") or (QUOTES.get(sym) or {}).get("short_name"),"effective_date":meta.get("effective_date"),"price":QUOTES.get(sym),"borrow":BORROW.get(sym),"signal":signal}
     relevant_kinds={"price_25","halt","available_10k","available_zero","ready"}
     important_events=[e for e in EVENTS if e.get("kind") in relevant_kinds]
