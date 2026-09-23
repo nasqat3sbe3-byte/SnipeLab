@@ -53,6 +53,22 @@ def calculate(effective, candles):
         "top_calculator_version":3,**(top or {}),
         "updated_at":datetime.now(timezone.utc).isoformat()}
 
+def stability_from_bars(result, candles):
+    """Count completed trading sessions after the latest recorded split low."""
+    result["stability_sessions"]=0
+    result["stability_low_date"]=result.get("post_split_low_date")
+    low=result.get("post_split_low")
+    low_date=result.get("post_split_low_date")
+    if not result.get("verified") or not low or not low_date:return result
+    today=datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+    completed=sorted((b for b in candles if low_date<b["date"]<today),key=lambda b:b["date"])
+    for b in completed:
+        if b["low"]<float(low)-max(0.000001,float(low)*0.00001):
+            result["stability_error"]="newer_daily_low_than_recorded"
+            return result
+    result["stability_sessions"]=min(4,len(completed))
+    return result
+
 def include_extended_top(result, candles, today=None):
     """Include an observed extended-hours high only against earlier daily lows.
 
@@ -282,7 +298,7 @@ async def worker(universe,history,yahoo,save):
                 age=(datetime.now(timezone.utc).date()-
                      date.fromisoformat(meta["effective_date"])).days
                 return (h.get("effective_date")==meta["effective_date"]
-                        and h.get("top_calculator_version",0)<3
+                        and (h.get("stability_sessions") is None or h.get("top_calculator_version",0)<3)
                         and (bool(h.get("top_10_verified"))
                              or (h.get("top_10_gain_pct") or 0)>=40
                              or age<=90))
@@ -310,7 +326,7 @@ async def worker(universe,history,yahoo,save):
                 h=history.get(sym,{})
                 age=(datetime.now(timezone.utc).date()-date.fromisoformat(meta["effective_date"])).days
                 return (h.get("verified") and
-                        h.get("top_calculator_version",0)<3 and
+                        (h.get("stability_sessions") is None or h.get("top_calculator_version",0)<3) and
                         (bool(h.get("top_10_verified"))
                          or (h.get("top_10_gain_pct") or 0)>=40
                          or age<=90))
@@ -371,6 +387,7 @@ async def worker(universe,history,yahoo,save):
                                         provider.__name__+":"+type(alternate_exc).__name__)
                         result_data.update(intraday)
                         include_extended_top(result_data,bars)
+                        stability_from_bars(result_data,bars)
                         if result_data.get("partial_exchange_coverage"):
                             result_data.setdefault("quality_warnings",[]).append("partial_exchange_coverage")
                         if result_data.get("verified") and result_data.get("split_day_4h_high") is not None:
@@ -384,6 +401,7 @@ async def worker(universe,history,yahoo,save):
                                 if result_data["extended_post_split_low"]<result_data["post_split_low"]:
                                     result_data["post_split_low_date"]=result_data.get("extended_post_split_low_date")
                                 result_data["post_split_low"]=min(result_data["post_split_low"],result_data["extended_post_split_low"])
+                            stability_from_bars(result_data,bars)
                             result_data["extrema_source"]="Yahoo daily plus available extended-hours 60m"
                             result_data["split_adjustment_requires_validation"]=True
                     except Exception as exc:
