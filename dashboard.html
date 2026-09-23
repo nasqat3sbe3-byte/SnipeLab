@@ -20,17 +20,14 @@ function isTop(x){return topStats(x)!==null}
 function badge(x){return isTop(x)?'توب':x.ready&&x.history_verified?'جاهز':x.near_ready&&x.history_verified?'تحت الجاهزية':'قيد المتابعة'}
 function filtered(){let a=rows(),q=$('query').value.trim().toUpperCase();if(q)a=a.filter(x=>x.symbol.toUpperCase().includes(q)||String(x.company_name||x.name||'').toUpperCase().includes(q));if(selected==='ready')a=a.filter(x=>!isTop(x)&&x.ready&&x.history_verified);if(selected==='near')a=a.filter(x=>!isTop(x)&&x.near_ready&&x.history_verified&&!x.ready);if(selected==='borrow')a=a.filter(x=>x.b.available!=null&&x.b.available<10000);if(selected==='top')a=a.filter(isTop);a.sort((x,y)=>{
   if(selected==='top')return topStats(y).gain-topStats(x).gain;
-  if(selected==='near'){
-    // A nearly complete stock with <10K borrow outranks a zero-borrow
-    // stock still missing two conditions. Within the same tier, sort by
-    // lowest available first, then readiness; missing borrow goes last.
-    const tier=z=>{
-      const low=z.b.available!=null&&z.b.available<10000;
-      const missing=Number.isFinite(z.missing_count)?z.missing_count:99;
-      return (low?0:2)+(missing<=1?0:1);
+  if(selected==='near'||selected==='borrow'){
+    // Strictly sort by available borrow ascending; readiness only breaks ties.
+    const available=z=>{
+      const n=Number(z.b.available);
+      return z.b.available==null||!Number.isFinite(n)||n<0
+        ?Number.POSITIVE_INFINITY:n;
     };
-    return tier(x)-tier(y)
-      ||(x.b.available??Number.POSITIVE_INFINITY)-(y.b.available??Number.POSITIVE_INFINITY)
+    return available(x)-available(y)
       ||(y.readiness_pct??-1)-(x.readiness_pct??-1)
       ||x.symbol.localeCompare(y.symbol);
   }
