@@ -326,18 +326,16 @@ def readiness_state(meta,q,b,a):
     low_near=dist is not None and dist<=25
     shortlist=full or (price_ok and hist.get("verified") and av is not None
                        and 1<=len(missing)<=2 and half_near and low_near)
-    if av is None: ap=0
-    elif av<10000: ap=50
-    elif av<=20000: ap=0
-    else: ap=0
-    if dist is None: dp=0
-    elif dist<=20: dp=30
-    else: dp=0
-    sp=20 if sessions>=4 else 15 if sessions==3 else 10 if sessions==2 else 5 if sessions==1 else 0
-    # Reserve 15 points for the 30% peak gate so a failed gate never
-    # displays misleading 99% readiness.
-    pct=round(min(100.0, (ap+dp+sp)*0.85+(15 if peak_30_ok else 0)),1)
-    if full:pct=100.0
+    # Readiness version 4: the half target MUST contribute to the score.
+    # Previous scoring incorrectly gave 100% for borrow+distance+stability
+    # even when the stock had never reached half of the split-day 4H candle.
+    ap=50 if av_ok else 0
+    dp=20 if dist_ok else 0
+    sp=15 if sess_ok else 11.25 if sessions==3 else 7.5 if sessions==2 else 3.75 if sessions==1 else 0
+    hp=15 if half_ok else 0
+    pct=round(ap+dp+sp+hp-(5 if not peak_30_ok else 0),2)
+    pct=max(0,min(100,pct))
+    if not full:pct=min(99,pct)
     if not hist.get("verified") or av is None or not half_rule_current:pct=None
     strengths=[]
     if half_ok: strengths.append("شرط النصف ✓")
@@ -348,7 +346,9 @@ def readiness_state(meta,q,b,a):
         "missing":" + ".join(missing) if missing else "مكتمل ✓","strength":" | ".join(strengths),
         "new_low_today":new_low,"effective_low":effective_low,"effective_distance_pct":dist,
         "effective_sessions":sessions,"highest_since_split":high,"half_level":half,"half_reached":half_ok,
-        "split_half_reached":split_half_ok,
+        "split_half_reached":split_half_ok,"readiness_rule_version":4,
+        "score_breakdown":{"available":ap,"distance":dp,"stability":sp,"half":hp,
+                           "later_peak_penalty":5 if not peak_30_ok else 0},
         "market_day":market_day}
 
 def refresh_analytics():
@@ -393,6 +393,9 @@ def refresh_analytics():
             "top_10_source":hist.get("top_10_source"),
             "top_10_provisional":bool(hist.get("top_10_provisional")),
             "half_level":st["half_level"],"half_reached":st["half_reached"],
+            "split_half_reached":st["split_half_reached"],
+            "readiness_rule_version":st["readiness_rule_version"],
+            "score_breakdown":st["score_breakdown"],
             "half_reference_high":hist.get("half_reference_high") or (hist.get("post_split_high") if hist.get("post_split_high_date") and hist.get("post_split_low_date") and hist["post_split_high_date"]<hist["post_split_low_date"] else None),
             "distance_from_low_pct":round((price/hist["post_split_low"]-1)*100,2) if hist.get("post_split_low") else None,
             "stability_sessions":st["effective_sessions"],"effective_low":st["effective_low"],
@@ -570,6 +573,7 @@ async def signals():
 
 @app.get("/ready")
 async def ready():
+    refresh_analytics()
     rows=[x for x in ANALYTICS.values() if x.get("ready")]
     rows.sort(key=lambda x:(x.get("available") is None,x.get("available") or 10**18,-(x.get("score") or 0)))
     return {"count":len(rows),"rows":rows}
@@ -622,6 +626,9 @@ async def data_freshness_report():
 
 @app.get("/api/dashboard")
 async def dashboard_data():
+    # Recompute from current history/quotes before rendering; old SQLite
+    # analytics snapshots must not keep a previous readiness rule alive.
+    refresh_analytics()
     rows={}
     for sym,meta in UNIVERSE.items():
         h=HISTORY.get(sym,{})
@@ -825,6 +832,9 @@ async def history_audit():
 @app.get("/api/diagnostics/{symbol}")
 async def ticker_diagnostics(symbol: str):
     symbol=re.sub(r"[^A-Z0-9.-]","",symbol.upper())[:12]
+    # Never serve a restored pre-v4 readiness score after a deployment.
+    if symbol in UNIVERSE and symbol in QUOTES:
+        refresh_analytics()
     return {"symbol":symbol,"in_split_universe":symbol in UNIVERSE,"server_time":utcnow().isoformat(),"last_market_scan":STATE["last_market_scan"],"last_borrow_scan":STATE["last_borrow_scan"],
             "split":UNIVERSE.get(symbol),"history":HISTORY.get(symbol),
             "quote":QUOTES.get(symbol),"borrow":BORROW.get(symbol),
