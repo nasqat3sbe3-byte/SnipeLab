@@ -287,10 +287,15 @@ def readiness_state(meta,q,b,a):
               if v is not None),default=None)
     half=float(peak)/2 if hist.get("verified") and peak is not None else None
     half_ok=bool(half is not None and effective_low<=half)
-    later_gain_pct=((float(later_high)/float(opening)-1)*100
-                    if later_high is not None and opening is not None
-                    and float(opening)>0 else None)
-    peak_30_ok=(later_gain_pct is None or later_gain_pct<=30.000001)
+    # The +30% allowance for LATER sessions starts from the actual
+    # split-day 4H candle high, NOT from the split-day opening price.
+    # Missing 4H data must remain unverified, never silently pass.
+    split_4h=hist.get("split_day_4h_high")
+    later_gain_pct=((float(later_high)/float(split_4h)-1)*100
+                    if later_high is not None and split_4h is not None
+                    and float(split_4h)>0 else None)
+    peak_30_ok=(later_high is None or
+                (later_gain_pct is not None and later_gain_pct<=30.000001))
     # Old cached rows lack later-session provenance. Do not claim a
     # complete readiness result until the history backfill finishes.
     half_rule_current=hist.get("half_rule_version",0)>=2
@@ -302,7 +307,7 @@ def readiness_state(meta,q,b,a):
     if not half_rule_current:
         missing.append("تحديث حسبة قمة يوم التقسيم والقمة اللاحقة");close=False
     if not peak_30_ok:
-        missing.append(f"قمة جلسة لاحقة تجاوزت 30% من الافتتاح ({peak_gain_pct:.2f}%)")
+        missing.append(f"قمة جلسة لاحقة تجاوزت 30% من أعلى 4H يوم التقسيم ({peak_gain_pct:.2f}%)")
         close=False
     if not half_ok: missing.append(f"يحقق شرط النصف <= {half:.4f}" if half else "حساب مستوى النصف"); close=False
     if new_low: missing.append("كون قاع جديد اليوم: يبدأ الثبات من 0/4"); close=False
