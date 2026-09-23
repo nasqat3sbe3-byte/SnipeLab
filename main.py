@@ -355,6 +355,9 @@ def refresh_analytics():
             "top_10_gain_pct":hist.get("top_10_gain_pct"),"top_10_low":hist.get("top_10_low"),"top_10_high":hist.get("top_10_high"),
             "top_10_low_date":hist.get("top_10_low_date"),"top_10_high_date":hist.get("top_10_high_date"),"top_10_verified":bool(hist.get("top_10_verified")),
             "top_10_sessions_since_peak":hist.get("top_10_sessions_since_peak"),
+            "top_calculator_version":hist.get("top_calculator_version",0),
+            "top_10_source":hist.get("top_10_source"),
+            "top_10_provisional":bool(hist.get("top_10_provisional")),
             "half_level":st["half_level"],"half_reached":st["half_reached"],
             "distance_from_low_pct":round((price/hist["post_split_low"]-1)*100,2) if hist.get("post_split_low") else None,
             "stability_sessions":st["effective_sessions"],"effective_low":st["effective_low"],
@@ -609,6 +612,9 @@ async def dashboard_data():
             "top_10_high_date":h.get("top_10_high_date"),
             "top_10_verified":bool(h.get("top_10_verified")),
             "top_10_sessions_since_peak":h.get("top_10_sessions_since_peak"),
+            "top_calculator_version":h.get("top_calculator_version",0),
+            "top_10_source":h.get("top_10_source"),
+            "top_10_provisional":bool(h.get("top_10_provisional")),
             "history_status":h.get("error") or ("verified" if h.get("verified") else "pending")}
         # A same-day live rise is a separate, explicitly provisional measure:
         # never mix it silently with the completed-session low-to-high TOP.
