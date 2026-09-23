@@ -276,10 +276,16 @@ async def worker(universe,history,yahoo,save):
             # Do not wait an hour for a row with all four OHLC fields present.
             def needs_top_migration(sym,meta):
                 h=history.get(sym,{})
+                # Previously TOP-listed symbols must migrate regardless of
+                # split age; the 30-day gate stranded older names like RETO.
+                # Also migrate newer split histories within the last 90 days.
+                age=(datetime.now(timezone.utc).date()-
+                     date.fromisoformat(meta["effective_date"])).days
                 return (h.get("effective_date")==meta["effective_date"]
                         and h.get("top_calculator_version",0)<3
-                        and (datetime.now(timezone.utc).date()-
-                             date.fromisoformat(meta["effective_date"])).days<=30)
+                        and (bool(h.get("top_10_verified"))
+                             or (h.get("top_10_gain_pct") or 0)>=40
+                             or age<=90))
             todo=[(sym,meta) for sym,meta in todo
                   if needs_top_migration(sym,meta)
                   or not complete(history.get(sym,{}),meta)
@@ -303,13 +309,18 @@ async def worker(universe,history,yahoo,save):
             def top_recalc_due(sym,meta):
                 h=history.get(sym,{})
                 age=(datetime.now(timezone.utc).date()-date.fromisoformat(meta["effective_date"])).days
-                return (age<=30 and h.get("verified") and
-                        h.get("top_calculator_version",0)<3)
+                return (h.get("verified") and
+                        h.get("top_calculator_version",0)<3 and
+                        (bool(h.get("top_10_verified"))
+                         or (h.get("top_10_gain_pct") or 0)>=40
+                         or age<=90))
             # Fix old persisted rows whose four OHLC fields are complete but
             # whose TOP metrics predate the current calculator. Process recent
             # TOP-missing splits before other historical refreshes.
             todo.sort(key=lambda item:(
                 not top_recalc_due(item[0],item[1]),
+                -(history.get(item[0],{}).get("top_10_gain_pct") or 0)
+                    if top_recalc_due(item[0],item[1]) else 0,
                 -date.fromisoformat(item[1]["effective_date"]).toordinal()
                     if top_recalc_due(item[0],item[1]) else 0,
                 complete(history.get(item[0],{}),item[1]),
