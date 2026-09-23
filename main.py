@@ -200,7 +200,17 @@ async def fetch_quote(client, sem, symbol):
                 else:
                     hi=max([float(v) for v in (q.get("high") or []) if v is not None and float(v)>0] or [p])
                     lo=min([float(v) for v in (q.get("low") or []) if v is not None and float(v)>0] or [p])
+                # Only a verified chart reference is used for the +25% alert.
+                meta=result.get("meta") or {}
+                reference=meta.get("chartPreviousClose") or meta.get("previousClose")
+                if interval=="1d" and len(valid)>=2:
+                    earlier=[z for z in valid if z[0]<t]
+                    if earlier: reference=max(earlier,key=lambda z:z[0])[2]
+                try: reference=float(reference) if reference is not None else None
+                except (TypeError,ValueError): reference=None
+                if reference is not None and reference<=0: reference=None
                 return symbol,{"symbol":symbol,"price":p,"day_high":hi,"day_low":lo,
+                    "previous_close":reference,
                     "market_timestamp":datetime.fromtimestamp(t,tz=timezone.utc).isoformat(),
                     "received_at":utcnow().isoformat(),"source":"yahoo_"+interval+("_prepost" if interval=="1m" else "_fallback")}
             except Exception:
@@ -229,7 +239,18 @@ async def market_loop():
             rows=await asyncio.gather(*(fetch_quote(client,sem,s) for s in batch))
             ok=0
             for s,row in rows:
-                if row is not None: QUOTES[s]=row; ok+=1
+                if row is not None:
+                    prior=QUOTES.get(s)
+                    # An alert requires a same-session crossing, not an old
+                    # cached price or the first observation after a restart.
+                    if prior and row.get("previous_close") and prior.get("previous_close"):
+                        market_day=str(row.get("market_timestamp") or "")[:10]
+                        prior_day=str(prior.get("market_timestamp") or "")[:10]
+                        old_pct=(float(prior["price"])/float(prior["previous_close"])-1)*100
+                        new_pct=(float(row["price"])/float(row["previous_close"])-1)*100
+                        if market_day and market_day==prior_day and old_pct<25<=new_pct:
+                            add_event(s,"price_25",f"ارتفع +{new_pct:.1f}%",{"rise_pct":round(new_pct,2),"market_day":market_day})
+                    QUOTES[s]=row; ok+=1
             STATE["market_scan_count"]+=1
             STATE["last_market_scan"]=utcnow().isoformat()
             STATE["market_ok"]=ok; STATE["market_failed"]=len(batch)-ok
@@ -588,7 +609,9 @@ async def dashboard_data():
             "top_10_sessions_since_peak":h.get("top_10_sessions_since_peak"),
             "history_status":h.get("error") or ("verified" if h.get("verified") else "pending")}
         rows[sym]={"symbol":sym,"company_name":meta.get("company_name") or meta.get("name") or (QUOTES.get(sym) or {}).get("short_name"),"effective_date":meta.get("effective_date"),"price":QUOTES.get(sym),"borrow":BORROW.get(sym),"signal":signal}
-    return {"server_time":utcnow().isoformat(),"uptime_seconds":int(time.time()-BOOTED_AT.timestamp()),"storage":storage.status(),"history_count":sum(bool(HISTORY.get(sym,{}).get("verified")) for sym in UNIVERSE),"history_pending":sum(1 for sym in UNIVERSE if not HISTORY.get(sym,{}).get("verified")),"health":{"ok":STATE.get("status")=="running","heartbeat":STATE.get("heartbeat"),"universe_count":len(UNIVERSE),"price_count":len(QUOTES),"borrow_count":len(BORROW),"analytics_count":len(ANALYTICS)},"rows":rows,"events":EVENTS[:40],"halts":HALTS,"news":NEWS}
+    relevant_kinds={"price_25","halt","available_10k","available_zero","ready"}
+    important_events=[e for e in EVENTS if e.get("kind") in relevant_kinds]
+    return {"server_time":utcnow().isoformat(),"uptime_seconds":int(time.time()-BOOTED_AT.timestamp()),"storage":storage.status(),"history_count":sum(bool(HISTORY.get(sym,{}).get("verified")) for sym in UNIVERSE),"history_pending":sum(1 for sym in UNIVERSE if not HISTORY.get(sym,{}).get("verified")),"health":{"ok":STATE.get("status")=="running","heartbeat":STATE.get("heartbeat"),"universe_count":len(UNIVERSE),"price_count":len(QUOTES),"borrow_count":len(BORROW),"analytics_count":len(ANALYTICS)},"rows":rows,"events":important_events[:40],"halts":HALTS,"news":NEWS}
 
 @app.get("/halts")
 async def halts():
