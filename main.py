@@ -276,29 +276,23 @@ def readiness_state(meta,q,b,a):
     sessions=0 if new_low else int(hist.get("stability_sessions") or 0)
     market_day=str(q.get("market_timestamp") or "")[:10]
     high=max(float(a.get("highest_since_split") or price),float(q.get("day_high") or price))
-    # Day-one high is unrestricted: e.g. MSGY opened at 2.75 and hit
-    # 5.88 the same session, giving a 2.94 half target. The +30% cap
-    # applies ONLY to highs formed on subsequent sessions before the low.
-    opening=hist.get("split_day_open")
-    split_high=max((float(v) for v in
-                    (hist.get("split_day_high"),hist.get("split_day_4h_high"))
-                    if v is not None),default=None)
-    later_high=hist.get("later_pre_low_high")
-    peak=max((float(v) for v in (split_high,later_high)
-              if v is not None),default=None)
-    half=float(peak)/2 if hist.get("verified") and peak is not None else None
-    half_ok=bool(half is not None and effective_low<=half)
-    # The +30% allowance for LATER sessions starts from the actual
-    # split-day 4H candle high, NOT from the split-day opening price.
-    # Missing 4H data must remain unverified, never silently pass.
+    # FIRST check the split-day 4H half target. Once reached, do not
+    # penalize the stock for any later peaks or their 30% rise.
     split_4h=hist.get("split_day_4h_high")
+    split_half=float(split_4h)/2 if split_4h is not None and float(split_4h)>0 else None
+    split_half_ok=bool(split_half is not None and effective_low<=split_half)
+    later_high=hist.get("later_pre_low_high")
     later_gain_pct=((float(later_high)/float(split_4h)-1)*100
                     if later_high is not None and split_4h is not None
                     and float(split_4h)>0 else None)
-    peak_30_ok=(later_high is None or
+    # Only stocks that have NOT reached the split-day half may use a
+    # subsequent peak, provided it is <=30% above the split-day 4H high.
+    peak_30_ok=(split_half_ok or later_high is None or
                 (later_gain_pct is not None and later_gain_pct<=30.000001))
-    # Old cached rows lack later-session provenance. Do not claim a
-    # complete readiness result until the history backfill finishes.
+    later_eligible=(not split_half_ok and peak_30_ok and
+                    later_high is not None and split_half is not None)
+    half=(float(later_high)/2 if later_eligible else split_half)
+    half_ok=bool(half is not None and effective_low<=half)
     half_rule_current=hist.get("half_rule_version",0)>=2
     peak_gain_pct=later_gain_pct
     av=b.get("available") if b else None
@@ -354,6 +348,7 @@ def readiness_state(meta,q,b,a):
         "missing":" + ".join(missing) if missing else "مكتمل ✓","strength":" | ".join(strengths),
         "new_low_today":new_low,"effective_low":effective_low,"effective_distance_pct":dist,
         "effective_sessions":sessions,"highest_since_split":high,"half_level":half,"half_reached":half_ok,
+        "split_half_reached":split_half_ok,
         "market_day":market_day}
 
 def refresh_analytics():
