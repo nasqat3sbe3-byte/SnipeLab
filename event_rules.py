@@ -1,12 +1,19 @@
 """Pure transition rules for SnipeLab event center."""
 def borrow_events(symbol, previous, current):
-    """Only emit transitions between two confirmed readings."""
-    if not previous or not current:return []
-    old=previous.get("available"); new=current.get("available")
-    if old is None or new is None:return []
+    """Only important threshold crossings between two confirmed readings."""
+    if not previous or not current:
+        return []
+    old=previous.get("available")
+    new=current.get("available")
+    if old is None or new is None or old == new:
+        return []
     result=[]
-    if new<old:result.append((symbol,"available_down",f"Available {old:g} -> {new:g}",{"old":old,"new":new}))
-    if old!=0 and new==0:result.append((symbol,"available_zero","Available reached 0",{"old":old,"new":new}))
+    if old>0 and new==0:
+        result.append((symbol,"available_zero",
+                       "أصبح الشورت المتاح 0",{"old":old,"new":new}))
+    elif old>10000 and 0<new<=10000:
+        result.append((symbol,"available_10k",
+                       "دخل الشورت المتاح 10K وأقل",{"old":old,"new":new}))
     return result
 
 def ready_event(symbol,previous,current,price,available):
