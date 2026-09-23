@@ -269,11 +269,10 @@ def readiness_state(meta,q,b,a):
     new_low=prior_low is not None and live_low<float(prior_low)
     effective_low=live_low if new_low else (float(prior_low) if prior_low is not None else live_low)
     dist=((price/effective_low)-1)*100 if effective_low>0 else None
-    sessions=0 if new_low else int(a.get("stability_sessions") or 0)
+    # Daily historical candles, not dashboard refreshes, determine stability.
+    # Never reset a month of confirmed stability when the service restarts.
+    sessions=0 if new_low else int(hist.get("stability_sessions") or 0)
     market_day=str(q.get("market_timestamp") or "")[:10]
-    last_day=a.get("last_market_day")
-    if not new_low and prior_low is not None and market_day and last_day and market_day!=last_day:
-        sessions=min(4,sessions+1)
     high=max(float(a.get("highest_since_split") or price),float(q.get("day_high") or price))
     half=hist["split_day_4h_high"]/2 if hist.get("verified") and hist.get("split_day_4h_high") is not None else None
     half_ok=bool(half is not None and effective_low<=half)
