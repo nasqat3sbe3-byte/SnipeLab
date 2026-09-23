@@ -31,6 +31,25 @@ function filtered(){let a=rows(),q=$('query').value.trim().toUpperCase();if(q)a=
       ||(y.readiness_pct??-1)-(x.readiness_pct??-1)
       ||x.symbol.localeCompare(y.symbol);
   }
+  if(selected==='all'){
+    // All: prioritize low borrow (<10K), with fully ready stocks first
+    // within that group. Then non-ready low-borrow stocks, followed by
+    // >=10K and unknown borrow, always ascending Available inside a group.
+    const available=z=>{
+      if(z.b.available==null)return Number.POSITIVE_INFINITY;
+      const n=Number(z.b.available);
+      return Number.isFinite(n)&&n>=0?n:Number.POSITIVE_INFINITY;
+    };
+    const tier=z=>{
+      const av=available(z);
+      if(av<10000)return z.ready&&z.history_verified?0:1;
+      return av===Number.POSITIVE_INFINITY?3:2;
+    };
+    return tier(x)-tier(y)
+      ||available(x)-available(y)
+      ||(y.readiness_pct??-1)-(x.readiness_pct??-1)
+      ||x.symbol.localeCompare(y.symbol);
+  }
   return (y.ready?1:0)-(x.ready?1:0)
     ||(y.readiness_pct||0)-(x.readiness_pct||0)
     ||(x.b.available??1e12)-(y.b.available??1e12);
