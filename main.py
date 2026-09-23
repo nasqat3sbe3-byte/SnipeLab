@@ -275,29 +275,34 @@ def readiness_state(meta,q,b,a):
     sessions=0 if new_low else int(hist.get("stability_sessions") or 0)
     market_day=str(q.get("market_timestamp") or "")[:10]
     high=max(float(a.get("highest_since_split") or price),float(q.get("day_high") or price))
-    # Half target follows the highest verified POST-SPLIT peak reached
-    # before the low. It is not locked to the opening/split-day 4H candle.
-    # Never credit a peak that happened after the low (look-ahead bias).
-    peak=hist.get("half_reference_high")
-    if peak is None and hist.get("post_split_high_date") and hist.get("post_split_low_date"):
-        if hist["post_split_high_date"] < hist["post_split_low_date"]:
-            peak=hist.get("post_split_high")
+    # Day-one high is unrestricted: e.g. MSGY opened at 2.75 and hit
+    # 5.88 the same session, giving a 2.94 half target. The +30% cap
+    # applies ONLY to highs formed on subsequent sessions before the low.
+    opening=hist.get("split_day_open")
+    split_high=max((float(v) for v in
+                    (hist.get("split_day_high"),hist.get("split_day_4h_high"))
+                    if v is not None),default=None)
+    later_high=hist.get("later_pre_low_high")
+    peak=max((float(v) for v in (split_high,later_high)
+              if v is not None),default=None)
     half=float(peak)/2 if hist.get("verified") and peak is not None else None
     half_ok=bool(half is not None and effective_low<=half)
-    # A post-split peak above 130% of the split-day opening is a separate
-    # readiness gate, not a reason to discard the stock from the shortlist.
-    opening=hist.get("split_day_open")
-    peak_gain_pct=((float(peak)/float(opening)-1)*100
-                   if peak is not None and opening is not None and float(opening)>0 else None)
-    peak_30_ok=peak_gain_pct is not None and peak_gain_pct<=30.000001
+    later_gain_pct=((float(later_high)/float(opening)-1)*100
+                    if later_high is not None and opening is not None
+                    and float(opening)>0 else None)
+    peak_30_ok=(later_gain_pct is None or later_gain_pct<=30.000001)
+    # Old cached rows lack later-session provenance. Do not claim a
+    # complete readiness result until the history backfill finishes.
+    half_rule_current=hist.get("half_rule_version",0)>=2
+    peak_gain_pct=later_gain_pct
     av=b.get("available") if b else None
     price_ok=price>0; av_ok=av is not None and av<10000
     dist_ok=dist is not None and dist<=20; sess_ok=sessions>=4
     missing=[]; close=True
+    if not half_rule_current:
+        missing.append("تحديث حسبة قمة يوم التقسيم والقمة اللاحقة");close=False
     if not peak_30_ok:
-        missing.append(
-            f"القمة بعد التقسيم تجاوزت 30% من الافتتاح ({peak_gain_pct:.2f}%)"
-            if peak_gain_pct is not None else "التحقق من حد القمة 30%")
+        missing.append(f"قمة جلسة لاحقة تجاوزت 30% من الافتتاح ({peak_gain_pct:.2f}%)")
         close=False
     if not half_ok: missing.append(f"يحقق شرط النصف <= {half:.4f}" if half else "حساب مستوى النصف"); close=False
     if new_low: missing.append("كون قاع جديد اليوم: يبدأ الثبات من 0/4"); close=False
@@ -312,7 +317,7 @@ def readiness_state(meta,q,b,a):
         close=close and sessions>=2
     if not hist.get("verified"):missing.append("تاريخ القاع والقمة بعد التقسيم");close=False
     if not price_ok: missing.append("تحديث السعر الحالي"); close=False
-    full=price_ok and hist.get("verified") and peak_30_ok and half_ok and not new_low and av_ok and dist_ok and sess_ok
+    full=price_ok and hist.get("verified") and half_rule_current and peak_30_ok and half_ok and not new_low and av_ok and dist_ok and sess_ok
     shortlist=full or (price_ok and hist.get("verified") and av is not None and 1<=len(missing)<=2)
     if av is None: ap=0
     elif av<10000: ap=50
@@ -326,7 +331,7 @@ def readiness_state(meta,q,b,a):
     # displays misleading 99% readiness.
     pct=round(min(100.0, (ap+dp+sp)*0.85+(15 if peak_30_ok else 0)),1)
     if full:pct=100.0
-    if not hist.get("verified") or av is None:pct=None
+    if not hist.get("verified") or av is None or not half_rule_current:pct=None
     strengths=[]
     if half_ok: strengths.append("شرط النصف ✓")
     if av_ok: strengths.append(f"Available {int(av):,} ✓")
