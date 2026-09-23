@@ -13,14 +13,22 @@ def calculate(effective, candles):
     verified=0<=gap<=4
     ny_today=datetime.now(ZoneInfo("America/New_York")).date().isoformat()
     completed=[b for b in bars if b["date"]<ny_today]
-    ten=completed[-10:]
+    # A TOP wave stays visible for TEN COMPLETED trading sessions after its
+    # peak, not ten calendar days and not until its low falls out of a window.
+    # For each peak in the latest ten sessions, compare with earlier lows
+    # in at most ten trading sessions (inclusive). This permits a new wave.
     top=None
-    if len(ten)==10:
-        for i,lo in enumerate(ten):
-            for hi in ten[i:]:
-                rise=(hi["high"]/lo["low"]-1)*100
-                if top is None or rise>top["top_10_gain_pct"]:
-                    top={"top_10_gain_pct":round(rise,2),"top_10_low":lo["low"],"top_10_high":hi["high"],"top_10_low_date":lo["date"],"top_10_high_date":hi["date"]}
+    for peak_i in range(max(0,len(completed)-10),len(completed)):
+        peak=completed[peak_i]
+        for low_i in range(max(0,peak_i-9),peak_i+1):
+            low=completed[low_i]
+            rise=(peak["high"]/low["low"]-1)*100
+            sessions_since_peak=len(completed)-1-peak_i
+            if top is None or rise>top["top_10_gain_pct"]:
+                top={"top_10_gain_pct":round(rise,2),
+                     "top_10_low":low["low"],"top_10_high":peak["high"],
+                     "top_10_low_date":low["date"],"top_10_high_date":peak["date"],
+                     "top_10_sessions_since_peak":sessions_since_peak}
     closes=[b["close"] for b in completed]
     rsi=None
     if len(closes)>=15:
@@ -37,7 +45,7 @@ def calculate(effective, candles):
         "post_split_high_date":max(bars,key=lambda b:b["high"])["date"] if verified else None,
         "post_split_low_date":min(bars,key=lambda b:b["low"])["date"] if verified else None,
         "rsi_daily":rsi,"first_bar":first["date"],"bar_count":len(bars),
-        "top_10_verified":bool(top and verified),**(top or {}),
+        "top_10_verified":bool(top and verified and top["top_10_gain_pct"]>=40),**(top or {}),
         "updated_at":datetime.now(timezone.utc).isoformat()}
 
 async def split_day_4h_high(client, yahoo, symbol, effective):
