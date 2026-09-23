@@ -18,9 +18,11 @@ def calculate(effective, candles):
     # For each peak in the latest ten sessions, compare with earlier lows
     # in at most ten trading sessions (inclusive). This permits a new wave.
     top=None
-    for peak_i in range(max(0,len(completed)-10),len(completed)):
+    # Daily OHLC cannot establish whether a same-day low came before a high.
+    # Only compare a peak with lows from STRICTLY EARLIER sessions.
+    for peak_i in range(max(1,len(completed)-10),len(completed)):
         peak=completed[peak_i]
-        for low_i in range(max(0,peak_i-9),peak_i+1):
+        for low_i in range(max(0,peak_i-10),peak_i):
             low=completed[low_i]
             rise=(peak["high"]/low["low"]-1)*100
             sessions_since_peak=len(completed)-1-peak_i
@@ -28,7 +30,8 @@ def calculate(effective, candles):
                 top={"top_10_gain_pct":round(rise,2),
                      "top_10_low":low["low"],"top_10_high":peak["high"],
                      "top_10_low_date":low["date"],"top_10_high_date":peak["date"],
-                     "top_10_sessions_since_peak":sessions_since_peak}
+                     "top_10_sessions_since_peak":sessions_since_peak,
+                     "top_10_source":"daily_prior_session_low_to_later_high"}
     closes=[b["close"] for b in completed]
     rsi=None
     if len(closes)>=15:
@@ -47,8 +50,39 @@ def calculate(effective, candles):
         "rsi_daily":rsi,"first_bar":first["date"],"bar_count":len(bars),
         "top_10_verified":bool(top and verified and top["top_10_gain_pct"]>=40),
         "top_calculated_at":datetime.now(timezone.utc).isoformat(),
-        "top_calculator_version":2,**(top or {}),
+        "top_calculator_version":3,**(top or {}),
         "updated_at":datetime.now(timezone.utc).isoformat()}
+
+def include_extended_top(result, candles, today=None):
+    """Include an observed extended-hours high only against earlier daily lows.
+
+    A same-day low/high ordering cannot be proven from daily candles alone.
+    Never manufacture a rise from a later low or an unconfirmed high.
+    """
+    if not result.get("verified"):return result
+    high=result.get("extended_post_split_high")
+    high_day=result.get("extended_post_split_high_date")
+    if high is None or not high_day:return result
+    today=today or datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+    bars=sorted((b for b in candles if b["date"]>=result["effective_date"]
+                 and b["low"]>0 and b["date"]<high_day),key=lambda b:b["date"])
+    if not bars:return result
+    # Include today as a provisional intraday high, but do not mislabel it
+    # as a completed-session historical observation.
+    prior=bars[-10:]
+    low=min(prior,key=lambda b:b["low"])
+    gain=round((float(high)/low["low"]-1)*100,2)
+    completed_count=sum(1 for b in candles if high_day<b["date"]<today)
+    if gain>=40 and (not result.get("top_10_verified")
+                     or gain>result.get("top_10_gain_pct",0)):
+        result.update({"top_10_gain_pct":gain,"top_10_low":low["low"],
+            "top_10_high":float(high),"top_10_low_date":low["date"],
+            "top_10_high_date":high_day,
+            "top_10_sessions_since_peak":completed_count,
+            "top_10_verified":True,
+            "top_10_source":"extended_high_vs_prior_daily_low",
+            "top_10_provisional":high_day==today})
+    return result
 
 async def split_day_4h_high(client, yahoo, symbol, effective):
     """Extended-hours hourly extrema from latest split through today.
@@ -243,7 +277,7 @@ async def worker(universe,history,yahoo,save):
             def needs_top_migration(sym,meta):
                 h=history.get(sym,{})
                 return (h.get("effective_date")==meta["effective_date"]
-                        and h.get("top_calculator_version",0)<2
+                        and h.get("top_calculator_version",0)<3
                         and (datetime.now(timezone.utc).date()-
                              date.fromisoformat(meta["effective_date"])).days<=30)
             todo=[(sym,meta) for sym,meta in todo
@@ -325,6 +359,7 @@ async def worker(universe,history,yahoo,save):
                                     intraday["fallback_attempts"].append(
                                         provider.__name__+":"+type(alternate_exc).__name__)
                         result_data.update(intraday)
+                        include_extended_top(result_data,bars)
                         if result_data.get("partial_exchange_coverage"):
                             result_data.setdefault("quality_warnings",[]).append("partial_exchange_coverage")
                         if result_data.get("verified") and result_data.get("split_day_4h_high") is not None:
