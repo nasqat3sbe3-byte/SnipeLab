@@ -251,8 +251,17 @@ async def worker(universe,history,yahoo,save):
                 except (ValueError,KeyError,TypeError):return True
                 return age>=1800
             todo=[(sym,meta) for sym,meta in todo if retry_due(sym,meta)]
-            # Missing histories always take priority over hourly refreshes.
+            # Recent split histories missing TOP-wave calculations must be
+            # recalculated promptly, even when the four core fields are complete.
+            # Older split histories with no rally stay on the normal refresh cycle.
+            def top_recalc_due(sym,meta):
+                h=history.get(sym,{})
+                age=(datetime.now(timezone.utc).date()-date.fromisoformat(meta["effective_date"])).days
+                return (age<=18 and h.get("verified") and
+                        h.get("top_10_sessions_since_peak") is None and
+                        h.get("top_10_gain_pct") is None)
             todo.sort(key=lambda item:(
+                not top_recalc_due(item[0],item[1]),
                 complete(history.get(item[0],{}),item[1]),
                 -date.fromisoformat(item[1]["effective_date"]).toordinal(),
                 history.get(item[0],{}).get("attempted_at","")))
