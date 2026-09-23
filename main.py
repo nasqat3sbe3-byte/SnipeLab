@@ -279,7 +279,7 @@ def readiness_state(meta,q,b,a):
     half_ok=bool(half is not None and effective_low<=half)
     av=b.get("available") if b else None
     price_ok=price>0; av_ok=av is not None and av<10000
-    dist_ok=dist is not None and dist<=10; sess_ok=sessions>=4
+    dist_ok=dist is not None and dist<=20; sess_ok=sessions>=4
     missing=[]; close=True
     if not half_ok: missing.append(f"يحقق شرط النصف <= {half:.4f}" if half else "حساب مستوى النصف"); close=False
     if new_low: missing.append("كون قاع جديد اليوم: يبدأ الثبات من 0/4"); close=False
@@ -287,27 +287,25 @@ def readiness_state(meta,q,b,a):
         missing.append("Available ينزل إلى أقل من 10K" if av is not None else "قراءة Available")
         close=close and av is not None and av<10000
     if not dist_ok:
-        missing.append(f"يرجع أقرب للقاع: الآن {dist:.2f}% والهدف <=10%" if dist is not None else "حساب البعد عن القاع")
+        missing.append(f"يرجع أقرب للقاع: الآن {dist:.2f}% والهدف <=20%" if dist is not None else "حساب البعد عن القاع")
         close=close and dist is not None and dist<=20
     if not sess_ok and not new_low:
         missing.append(f"{max(0,4-sessions)} جلسة ثبات إضافية للوصول إلى 4/4")
         close=close and sessions>=2
     if not hist.get("verified"):missing.append("تاريخ القاع والقمة بعد التقسيم");close=False
-    if hist.get("rsi_daily") is None or hist["rsi_daily"]>=30:missing.append("RSI اليومي أقل من 30");close=False
     if not price_ok: missing.append("تحديث السعر الحالي"); close=False
-    full=price_ok and hist.get("verified") and hist.get("rsi_daily") is not None and hist["rsi_daily"]<30 and half_ok and not new_low and av_ok and dist_ok and sess_ok
+    full=price_ok and hist.get("verified") and half_ok and not new_low and av_ok and dist_ok and sess_ok
     shortlist=full or (price_ok and hist.get("verified") and av is not None and 1<=len(missing)<=2)
     if av is None: ap=0
     elif av<10000: ap=50
     elif av<=20000: ap=0
     else: ap=0
     if dist is None: dp=0
-    elif dist<=10: dp=30
-    elif dist<=20: dp=30-15*((dist-10)/10)
+    elif dist<=20: dp=30
     else: dp=0
     sp=20 if sessions>=4 else 15 if sessions==3 else 10 if sessions==2 else 5 if sessions==1 else 0
     pct=100.0 if full else round(min(99.0,ap+dp+sp),1)
-    if not hist.get("verified") or av is None or hist.get("rsi_daily") is None:pct=None
+    if not hist.get("verified") or av is None:pct=None
     strengths=[]
     if half_ok: strengths.append("شرط النصف ✓")
     if av_ok: strengths.append(f"Available {int(av):,} ✓")
