@@ -49,10 +49,17 @@ def calculate(effective, candles):
         "post_split_low_date":min(bars,key=lambda b:b["low"])["date"] if verified else None,
         # Reference peak must precede the observed low; daily OHLC cannot
         # establish intraday order for highs and lows on the same date.
+        # The split-day high is ALWAYS eligible, even when it rose >30%
+        # above the opening. The 30% limit applies only to LATER sessions.
         "half_reference_high":(
-            max((b["high"] for b in bars
+            max([first["high"]]+[b["high"] for b in bars[1:]
+                 if b["date"]<min(bars,key=lambda x:x["low"])["date"]])
+            if verified else None),
+        "later_pre_low_high":(
+            max((b["high"] for b in bars[1:]
                  if b["date"]<min(bars,key=lambda x:x["low"])["date"]),default=None)
             if verified else None),
+        "half_rule_version":2,
         "rsi_daily":rsi,"first_bar":first["date"],"bar_count":len(bars),
         "top_10_verified":bool(top and verified and top["top_10_gain_pct"]>=40),
         "top_calculated_at":datetime.now(timezone.utc).isoformat(),
@@ -304,7 +311,7 @@ async def worker(universe,history,yahoo,save):
                 age=(datetime.now(timezone.utc).date()-
                      date.fromisoformat(meta["effective_date"])).days
                 return (h.get("effective_date")==meta["effective_date"]
-                        and (h.get("stability_sessions") is None or h.get("top_calculator_version",0)<3)
+                        and (h.get("stability_sessions") is None or h.get("top_calculator_version",0)<3 or h.get("half_rule_version",0)<2)
                         and (bool(h.get("top_10_verified"))
                              or (h.get("top_10_gain_pct") or 0)>=40
                              or age<=90))
@@ -393,6 +400,11 @@ async def worker(universe,history,yahoo,save):
                                         provider.__name__+":"+type(alternate_exc).__name__)
                         result_data.update(intraday)
                         include_extended_top(result_data,bars)
+                        # Split-day extended 4H may exceed Yahoo's daily high.
+                        if result_data.get("split_day_4h_high") is not None:
+                            result_data["half_reference_high"]=max(
+                                result_data.get("half_reference_high") or 0,
+                                result_data["split_day_4h_high"])
                         stability_from_bars(result_data,bars)
                         if result_data.get("partial_exchange_coverage"):
                             result_data.setdefault("quality_warnings",[]).append("partial_exchange_coverage")
