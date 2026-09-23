@@ -32,24 +32,21 @@ function filtered(){let a=rows(),q=$('query').value.trim().toUpperCase();if(q)a=
       ||x.symbol.localeCompare(y.symbol);
   }
   if(selected==='all'){
-    // Priority is STATUS FIRST, then strictly ascending Available within
-    // each group: ready -> other <10K -> remaining >=10K -> unknown.
-    // TOP labels do not override the borrow order in the All tab.
+    // All tab: readiness percentage DESCENDING is the primary key.
+    // Only when readiness percentages are equal, sort Available ASCENDING
+    // (0, 15, 200, ...). Unknown readiness/borrow goes last.
+    const score=z=>{
+      if(z.readiness_pct==null||z.readiness_pct==='')return -Infinity;
+      const n=Number(z.readiness_pct);
+      return Number.isFinite(n)?n:-Infinity;
+    };
     const available=z=>{
       if(z.b.available==null||z.b.available==='')return Infinity;
       const n=Number(String(z.b.available).replace(/,/g,''));
       return Number.isFinite(n)&&n>=0?n:Infinity;
     };
-    const group=z=>{
-      const av=available(z);
-      if(z.ready===true&&z.history_verified===true)return 0;
-      if(av<10000)return 1;
-      if(Number.isFinite(av))return 2;
-      return 3;
-    };
-    return group(x)-group(y)
+    return score(y)-score(x)
       ||available(x)-available(y)
-      ||(y.readiness_pct??-1)-(x.readiness_pct??-1)
       ||x.symbol.localeCompare(y.symbol);
   }
   return (y.ready?1:0)-(x.ready?1:0)
