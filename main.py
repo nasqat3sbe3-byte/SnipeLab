@@ -250,6 +250,7 @@ async def market_loop():
                         new_pct=(float(row["price"])/float(row["previous_close"])-1)*100
                         if market_day and market_day==prior_day and old_pct<25<=new_pct:
                             add_event(s,"price_25",f"ارتفع +{new_pct:.1f}%",{"rise_pct":round(new_pct,2),"peak_30_ok":peak_30_ok,"peak_gain_pct":peak_gain_pct,
+        "half_gap_pct":half_gap_pct,"half_near":half_near,"low_near":low_near,
         "market_day":market_day})
                     QUOTES[s]=row; ok+=1
             STATE["market_scan_count"]+=1
@@ -323,7 +324,14 @@ def readiness_state(meta,q,b,a):
     if not hist.get("verified"):missing.append("تاريخ القاع والقمة بعد التقسيم");close=False
     if not price_ok: missing.append("تحديث السعر الحالي"); close=False
     full=price_ok and hist.get("verified") and half_rule_current and peak_30_ok and half_ok and not new_low and av_ok and dist_ok and sess_ok
-    shortlist=full or (price_ok and hist.get("verified") and av is not None and 1<=len(missing)<=2)
+    # Strict near-ready limits: up to 15% above the half target and
+    # up to 25% above the verified post-split low. These are NOT the
+    # full-ready thresholds (half reached and <=20% from the low).
+    half_gap_pct=((price/half-1)*100 if half is not None and half>0 else None)
+    half_near=half_ok or (half_gap_pct is not None and 0<half_gap_pct<=15)
+    low_near=dist is not None and dist<=25
+    shortlist=full or (price_ok and hist.get("verified") and av is not None
+                       and 1<=len(missing)<=2 and half_near and low_near)
     if av is None: ap=0
     elif av<10000: ap=50
     elif av<=20000: ap=0
