@@ -601,10 +601,86 @@ async def news():
 async def events():
     return {"count":len(EVENTS),"events":EVENTS}
 
+# Independent per-ticker RSS cache; no dependency on the disabled legacy site.
+_NEWS_CACHE = {}
+_NEWS_INFLIGHT = {}
+_NEWS_TTL = 1800
+
 @app.get("/api/news/{symbol}")
 async def ticker_news(symbol: str):
+    """Source-backed headlines, optional Arabic summary when an AI key is configured."""
+    from xml.etree import ElementTree as ET
+    from urllib.parse import quote
+    from email.utils import parsedate_to_datetime
     symbol = re.sub(r"[^A-Z0-9.-]", "", symbol.upper())[:12]
-    return {"symbol":symbol,"items":NEWS.get(symbol,[]),"message":"مصدر الأخبار المستقل وتلخيص الذكاء الاصطناعي قيد الربط؛ لا توجد قراءة مصنفة موثوقة حالياً."}
+    if not symbol or symbol not in UNIVERSE:
+        return {"symbol":symbol,"items":[],"message":"الرمز غير موجود في قائمة الأسهم الحالية."}
+    cached = _NEWS_CACHE.get(symbol)
+    if cached and time.time()-cached["at"] < _NEWS_TTL:
+        return cached["result"]
+    if symbol in _NEWS_INFLIGHT:
+        try:
+            return await asyncio.wait_for(asyncio.shield(_NEWS_INFLIGHT[symbol]),timeout=12)
+        except (asyncio.TimeoutError,Exception):
+            return cached["result"] if cached else {"symbol":symbol,"items":[],"message":"الأخبار قيد التحديث."}
+    async def gather():
+        items=[]
+        try:
+            query=quote(f'"{symbol}" stock NASDAQ OR NYSE when:7d')
+            url=f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
+            async with httpx.AsyncClient(timeout=8,follow_redirects=True) as client:
+                response=await client.get(url,headers={"User-Agent":"SnipeLab/2.0 news reader"})
+                response.raise_for_status()
+            root=ET.fromstring(response.content)
+            for item in root.findall("./channel/item")[:5]:
+                title=(item.findtext("title") or "").strip()
+                link=(item.findtext("link") or "").strip()
+                if not title or not link.startswith("https://"):continue
+                published=item.findtext("pubDate") or ""
+                try:published=parsedate_to_datetime(published).astimezone(timezone.utc).isoformat()
+                except (ValueError,TypeError):pass
+                source_node=item.find("source")
+                source=source_node.text if source_node is not None else "Google News"
+                items.append({"title":title,"url":link,"source":source,
+                              "published_at":published,"sentiment":None,"summary_ar":None})
+            # No inferred Arabic summaries or sentiment from untranslated titles.
+            # An optional key enables a grounded summary of ONLY the retrieved titles.
+            key=os.environ.get("OPENAI_API_KEY")
+            if items and key:
+                try:
+                    headlines=[{"title":x["title"],"source":x["source"],"date":x["published_at"]} for x in items[:3]]
+                    request={"model":os.environ.get("SNIPELAB_NEWS_MODEL","gpt-4o-mini"),
+                             "response_format":{"type":"json_object"},
+                             "temperature":0,
+                             "messages":[{"role":"system","content":"Summarize ONLY the supplied news headlines in concise Arabic. Return JSON with summary_ar (string, maximum 60 Arabic words) and sentiment (positive, negative, neutral). If headlines lack enough information to classify, use neutral. Do not invent events, numbers, facts or investment advice. Distinguish headlines from verified company announcements."},
+                                         {"role":"user","content":json.dumps(headlines,ensure_ascii=False)}]}
+                    async with httpx.AsyncClient(timeout=12) as client:
+                        result=await client.post("https://api.openai.com/v1/chat/completions",
+                            headers={"Authorization":"Bearer "+key},json=request)
+                        result.raise_for_status()
+                    parsed=json.loads(result.json()["choices"][0]["message"]["content"])
+                    tone=parsed.get("sentiment")
+                    if tone not in ("positive","negative","neutral"):tone=None
+                    summary=str(parsed.get("summary_ar") or "").strip()[:600]
+                    if summary:
+                        items[0]["summary_ar"]=summary
+                        items[0]["sentiment"]=tone
+                except Exception:
+                    pass  # Preserve sourced headlines without inventing a summary.
+            message=("أخبار من مصادر منشورة. التصنيف الآلي للعنوان لا يُعد توصية تداول."
+                     if any(x.get("summary_ar") for x in items)
+                     else "عناوين من مصادر منشورة؛ الملخص العربي والتصنيف غير متاحين حالياً.")
+            result={"symbol":symbol,"items":items,"message":message}
+        except Exception as exc:
+            result={"symbol":symbol,"items":cached["result"]["items"] if cached else [],
+                    "message":"تعذر تحديث الأخبار من المصدر؛ قد تكون النتائج السابقة قديمة.",
+                    "error":type(exc).__name__}
+        _NEWS_CACHE[symbol]={"at":time.time(),"result":result}
+        return result
+    task=asyncio.create_task(gather())
+    _NEWS_INFLIGHT[symbol]=task
+    try:return await task
+    finally:_NEWS_INFLIGHT.pop(symbol,None)
 
 @app.get("/api/history-coverage")
 async def history_coverage():
