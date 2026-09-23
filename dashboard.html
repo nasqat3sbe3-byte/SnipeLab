@@ -32,20 +32,22 @@ function filtered(){let a=rows(),q=$('query').value.trim().toUpperCase();if(q)a=
       ||x.symbol.localeCompare(y.symbol);
   }
   if(selected==='all'){
-    // All: prioritize low borrow (<10K), with fully ready stocks first
-    // within that group. Then non-ready low-borrow stocks, followed by
-    // >=10K and unknown borrow, always ascending Available inside a group.
+    // Priority is STATUS FIRST, then strictly ascending Available within
+    // each group: ready -> other <10K -> remaining >=10K -> unknown.
+    // TOP labels do not override the borrow order in the All tab.
     const available=z=>{
-      if(z.b.available==null)return Number.POSITIVE_INFINITY;
-      const n=Number(z.b.available);
-      return Number.isFinite(n)&&n>=0?n:Number.POSITIVE_INFINITY;
+      if(z.b.available==null||z.b.available==='')return Infinity;
+      const n=Number(String(z.b.available).replace(/,/g,''));
+      return Number.isFinite(n)&&n>=0?n:Infinity;
     };
-    const tier=z=>{
+    const group=z=>{
       const av=available(z);
-      if(av<10000)return z.ready&&z.history_verified?0:1;
-      return av===Number.POSITIVE_INFINITY?3:2;
+      if(z.ready===true&&z.history_verified===true)return 0;
+      if(av<10000)return 1;
+      if(Number.isFinite(av))return 2;
+      return 3;
     };
-    return tier(x)-tier(y)
+    return group(x)-group(y)
       ||available(x)-available(y)
       ||(y.readiness_pct??-1)-(x.readiness_pct??-1)
       ||x.symbol.localeCompare(y.symbol);
