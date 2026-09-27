@@ -265,91 +265,62 @@ async def market_loop():
             await asyncio.sleep(3)
 
 def readiness_state(meta,q,b,a):
-    price=float(q["price"]); live_low=float(q.get("day_low") or price)
+    """Version 5: four user-defined criteria; stability is informational only."""
+    price=float(q["price"])
     hist=HISTORY.get(meta.get("symbol"),{})
-    prior_low=hist.get("post_split_low") if hist.get("verified") else None
-    new_low=prior_low is not None and live_low<float(prior_low)
-    effective_low=live_low if new_low else (float(prior_low) if prior_low is not None else live_low)
-    dist=((price/effective_low)-1)*100 if effective_low>0 else None
-    # Daily historical candles, not dashboard refreshes, determine stability.
-    # Never reset a month of confirmed stability when the service restarts.
+    verified=bool(hist.get("verified"))
+    prior_low=hist.get("post_split_low") if verified else None
+    day_low=float(q.get("day_low") or price)
+    new_low=prior_low is not None and day_low<float(prior_low)
+    effective_low=min(float(prior_low),day_low) if prior_low is not None else None
+    dist=((price/effective_low)-1)*100 if effective_low and effective_low>0 else None
     sessions=0 if new_low else int(hist.get("stability_sessions") or 0)
-    market_day=str(q.get("market_timestamp") or "")[:10]
-    high=max(float(a.get("highest_since_split") or price),float(q.get("day_high") or price))
-    # FIRST check the split-day 4H half target. Once reached, do not
-    # penalize the stock for any later peaks or their 30% rise.
     split_4h=hist.get("split_day_4h_high")
-    split_half=float(split_4h)/2 if split_4h is not None and float(split_4h)>0 else None
-    split_half_ok=bool(split_half is not None and effective_low<=split_half)
-    later_high=hist.get("later_pre_low_high")
-    later_gain_pct=((float(later_high)/float(split_4h)-1)*100
-                    if later_high is not None and split_4h is not None
-                    and float(split_4h)>0 else None)
-    # Only stocks that have NOT reached the split-day half may use a
-    # subsequent peak, provided it is <=30% above the split-day 4H high.
-    peak_30_ok=(split_half_ok or later_high is None or
-                (later_gain_pct is not None and later_gain_pct<=30.000001))
-    later_eligible=(not split_half_ok and peak_30_ok and
-                    later_high is not None and split_half is not None)
-    half=(float(later_high)/2 if later_eligible else split_half)
-    half_ok=bool(half is not None and effective_low<=half)
-    half_rule_current=hist.get("half_rule_version",0)>=2
-    peak_gain_pct=later_gain_pct
-    av=b.get("available") if b else None
-    price_ok=price>0; av_ok=av is not None and av<10000
-    dist_ok=dist is not None and dist<=20; sess_ok=sessions>=4
-    missing=[]; close=True
-    if not half_rule_current:
-        missing.append("تحديث حسبة قمة يوم التقسيم والقمة اللاحقة");close=False
-    if not peak_30_ok:
-        missing.append(f"قمة جلسة لاحقة تجاوزت 30% من أعلى 4H يوم التقسيم ({peak_gain_pct:.2f}%)")
-        close=False
-    if not half_ok: missing.append(f"يحقق شرط النصف <= {half:.4f}" if half else "حساب مستوى النصف"); close=False
-    if new_low: missing.append("كون قاع جديد اليوم: يبدأ الثبات من 0/4"); close=False
-    if not av_ok:
-        missing.append("Available ينزل إلى أقل من 10K" if av is not None else "قراءة Available")
-        close=close and av is not None and av<10000
-    if not dist_ok:
-        missing.append(f"يرجع أقرب للقاع: الآن {dist:.2f}% والهدف <=20%" if dist is not None else "حساب البعد عن القاع")
-        close=close and dist is not None and dist<=20
-    if not sess_ok and not new_low:
-        missing.append(f"{max(0,4-sessions)} جلسة ثبات إضافية للوصول إلى 4/4")
-        close=close and sessions>=2
-    if not hist.get("verified"):missing.append("تاريخ القاع والقمة بعد التقسيم");close=False
-    if not price_ok: missing.append("تحديث السعر الحالي"); close=False
-    full=price_ok and hist.get("verified") and half_rule_current and peak_30_ok and half_ok and not new_low and av_ok and dist_ok and sess_ok
-    # Strict near-ready limits: up to 15% above the half target and
-    # up to 25% above the verified post-split low. These are NOT the
-    # full-ready thresholds (half reached and <=20% from the low).
-    half_gap_pct=((price/half-1)*100 if half is not None and half>0 else None)
-    half_near=half_ok or (half_gap_pct is not None and 0<half_gap_pct<=15)
-    low_near=dist is not None and dist<=25
-    shortlist=full or (price_ok and hist.get("verified") and av is not None
-                       and 1<=len(missing)<=2 and half_near and low_near)
-    # Readiness version 4: the half target MUST contribute to the score.
-    # Previous scoring incorrectly gave 100% for borrow+distance+stability
-    # even when the stock had never reached half of the split-day 4H candle.
-    ap=50 if av_ok else 0
-    dp=20 if dist_ok else 0
-    sp=15 if sess_ok else 11.25 if sessions==3 else 7.5 if sessions==2 else 3.75 if sessions==1 else 0
-    hp=15 if half_ok else 0
-    pct=round(ap+dp+sp+hp-(5 if not peak_30_ok else 0),2)
-    pct=max(0,min(100,pct))
-    if not full:pct=min(99,pct)
-    if not hist.get("verified") or av is None or not half_rule_current:pct=None
-    strengths=[]
-    if half_ok: strengths.append("شرط النصف ✓")
-    if av_ok: strengths.append(f"Available {int(av):,} ✓")
-    if dist_ok: strengths.append(f"عن القاع {dist:.2f}% ✓")
-    if sess_ok: strengths.append("ثبات 4/4 ✓")
-    return {"full":full,"shortlist":shortlist,"readiness_pct":pct,"missing_count":len(missing),
-        "missing":" + ".join(missing) if missing else "مكتمل ✓","strength":" | ".join(strengths),
-        "new_low_today":new_low,"effective_low":effective_low,"effective_distance_pct":dist,
-        "effective_sessions":sessions,"highest_since_split":high,"half_level":half,"half_reached":half_ok,
-        "split_half_reached":split_half_ok,"readiness_rule_version":4,
-        "score_breakdown":{"available":ap,"distance":dp,"stability":sp,"half":hp,
-                           "later_peak_penalty":5 if not peak_30_ok else 0},
-        "market_day":market_day}
+    half=float(split_4h)/2 if split_4h is not None and float(split_4h)>0 else None
+    # Historical post-split low is sufficient: a single touch permanently
+    # satisfies the half-candle condition. No later-peak substitution.
+    half_ok=bool(verified and half is not None and effective_low is not None and effective_low<=half)
+    half_rule_current=hist.get("half_rule_version",0)>=2 and half is not None
+    raw_av=b.get("available") if b else None
+    try:
+        av=float(str(raw_av).replace(",","")) if raw_av is not None else None
+        if av is not None and (not 0<=av<float("inf")):av=None
+    except (TypeError,ValueError):av=None
+    raw_rsi=hist.get("rsi_daily")
+    try:
+        rsi=float(raw_rsi) if raw_rsi is not None else None
+        if rsi is not None and not 0<=rsi<=100:rsi=None
+    except (TypeError,ValueError):rsi=None
+    av_ok=av is not None and av<15000
+    rsi_ok=rsi is not None and rsi<30
+    dist_ok=dist is not None and 0<=dist<=20
+    ap=(35 if av<1000 else 30 if av<5000 else 25 if av<10000 else 15 if av<15000 else 0) if av is not None else 0
+    rp=(25 if rsi<25 else 20 if rsi<30 else 10 if rsi<35 else 0) if rsi is not None else 0
+    dp=(20 if dist<=5 else 15 if dist<=10 else 10 if dist<=15 else 5 if dist<=20 else 0) if dist is not None and dist>=0 else 0
+    hp=20 if half_ok else 0
+    # A missing source is not a failed condition or a zero Available reading.
+    complete=verified and half_rule_current and av is not None and rsi is not None and dist is not None
+    full=bool(complete and av_ok and rsi_ok and half_ok and dist_ok)
+    conditions=[("Available أقل من 15K",av_ok,av is not None),
+                ("RSI اليومي أقل من 30",rsi_ok,rsi is not None),
+                ("لمس نصف أعلى شمعة التقسيم",half_ok,verified and half_rule_current),
+                ("يبعد عن القاع 20% أو أقل",dist_ok,verified and dist is not None)]
+    missing=[name for name,ok,known in conditions if not ok and known]
+    missing.extend(name+" (بيانات ناقصة)" for name,ok,known in conditions if not known)
+    met=sum(bool(ok) for _,ok,known in conditions if known)
+    # Near-ready: exactly one or two unmet conditions; all four sources
+    # must be known. Keep TOP as an independent label in the dashboard.
+    shortlist=bool(complete and not full and met>=2)
+    pct=round(ap+rp+dp+hp,2) if complete else None
+    strengths=[name+" ✓" for name,ok,known in conditions if ok and known]
+    return {"full":full,"shortlist":shortlist,"readiness_pct":pct,
+        "missing_count":len(missing),"missing":" + ".join(missing) if missing else "مكتمل ✓",
+        "strength":" | ".join(strengths),"new_low_today":new_low,
+        "effective_low":effective_low,"effective_distance_pct":dist,
+        "effective_sessions":sessions,"highest_since_split":hist.get("post_split_high"),
+        "half_level":half,"half_reached":half_ok,"split_half_reached":half_ok,
+        "readiness_rule_version":5,"score_breakdown":{"available":ap,"rsi":rp,"distance":dp,"half":hp},
+        "market_day":str(q.get("market_timestamp") or "")[:10]}
 
 def refresh_analytics():
     now=time.time()
