@@ -51,12 +51,13 @@ HALTS = {}
 NEWS = {}
 HISTORY = {}
 BORROW_HISTORY = {}
+RADAR_MEMORY = {}
 STATE_FILE = Path(os.environ.get("SNIPELAB_STATE_FILE","/tmp/snipelab_state.json"))
 _LAST_SAVE = 0.0
 
 def load_persistent_state():
     try:
-        d=storage.load(("universe","quotes","analytics","borrow","history","events","halts","borrow_history"))
+        d=storage.load(("universe","quotes","analytics","borrow","history","events","halts","borrow_history","radar_memory"))
         STATE["restored_from_sqlite"]=bool(d)
         STATE["restored_at"]=utcnow().isoformat() if d else None
         if not d and STATE_FILE.exists():d=json.loads(STATE_FILE.read_text("utf-8"))
@@ -68,6 +69,7 @@ def load_persistent_state():
         HISTORY.update(d.get("history") or {})
         EVENTS.extend((d.get("events") or [])[:100])
         BORROW_HISTORY.update(d.get("borrow_history") or {})
+        RADAR_MEMORY.update(d.get("radar_memory") or {})
     except Exception as exc:
         STATE["persistence_error"]=f"load {type(exc).__name__}: {str(exc)[:100]}"
 
@@ -76,7 +78,7 @@ def save_persistent_state(force=False):
     now=time.time()
     if not force and now-_LAST_SAVE<60:return
     try:
-        storage.save({"universe":UNIVERSE,"quotes":QUOTES,"analytics":ANALYTICS,"borrow":BORROW,"history":HISTORY,"events":EVENTS[:100],"halts":HALTS,"borrow_history":BORROW_HISTORY})
+        storage.save({"universe":UNIVERSE,"quotes":QUOTES,"analytics":ANALYTICS,"borrow":BORROW,"history":HISTORY,"events":EVENTS[:100],"halts":HALTS,"borrow_history":BORROW_HISTORY,"radar_memory":RADAR_MEMORY})
         _LAST_SAVE=now
         STATE["last_state_save"]=utcnow().isoformat(); STATE["persistence_error"]=None
     except Exception as exc:
@@ -359,6 +361,30 @@ def refresh_analytics():
             ANALYTICS[sym]={"symbol":sym,"active":False,"effective_date":eff,"price":price,"ignition":ignition}; continue
         st=readiness_state(meta,q,b,a)
         hist=HISTORY.get(sym,{})
+        if hist.get("verified") and b and b.get("available") is not None:
+            try:
+                av=float(b["available"]);rsi=float(hist["rsi_daily"])
+                dist=float(st["effective_distance_pct"]);sessions=int(st["effective_sessions"])
+                missing=[name for name,ok in (("الشورت",av<15000),("RSI",rsi<=35),
+                    ("نصف القمة",st["half_reached"] is True),("القاع",dist<=25),
+                    ("الثبات",sessions>=2)) if not ok]
+                stage="ready" if not missing else "radar" if len(missing)<=2 and av<=20000 and rsi<=40 and dist<=35 else "watch"
+                memory=RADAR_MEMORY.setdefault(sym,{"timeline":[],"first_radar":None,"first_ready":None})
+                prev=memory["timeline"][-1] if memory["timeline"] else None
+                if not prev or prev["stage"]!=stage or prev["missing"]!=missing:
+                    memory["timeline"].append({"at":utcnow().isoformat(),"stage":stage,"missing":missing,
+                        "price":price,"available":av,"rsi":rsi,"distance_pct":dist,"sessions":sessions})
+                    memory["timeline"]=memory["timeline"][-80:]
+                for name,active in (("radar",stage=="radar"),("ready",stage=="ready")):
+                    key="first_"+name
+                    if active and not memory[key]:
+                        memory[key]={"at":utcnow().isoformat(),"price":price,"high_observed":price,"low_observed":price,"last_observed":price}
+                    if memory[key]:
+                        rec=memory[key];rec["high_observed"]=max(rec["high_observed"],price)
+                        rec["low_observed"]=min(rec["low_observed"],price);rec["last_observed"]=price
+                        rec["last_at"]=utcnow().isoformat()
+            except (TypeError,ValueError,KeyError,OverflowError):
+                pass
         full=st["full"]; was_ready=bool(a.get("ready"))
         ready_at=a.get("ready_at"); ready_price=a.get("ready_price")
         if full and not was_ready:
@@ -620,6 +646,25 @@ async def data_freshness_report():
             "last_market_error":STATE["last_market_error"],
             "last_borrow_error":STATE["last_borrow_error"],
             "quote_max_age_seconds":900,"borrow_max_age_seconds":1200}
+
+@app.get("/api/radar-memory/{symbol}")
+async def radar_memory(symbol: str):
+    symbol=re.sub(r"[^A-Z0-9.-]","",symbol.upper())[:12]
+    return {"symbol":symbol,"memory":RADAR_MEMORY.get(symbol,{}),"note":"Only observed quotes since feature deployment; not intraday high/low."}
+
+@app.get("/api/lab")
+async def signal_lab():
+    signals=[]
+    for sym,m in RADAR_MEMORY.items():
+        for stage in ("radar","ready"):
+            rec=m.get("first_"+stage)
+            if rec and rec.get("price"):
+                base=rec["price"]
+                signals.append({"symbol":sym,"stage":stage,**rec,
+                    "max_observed_pct":round((rec["high_observed"]/base-1)*100,2),
+                    "min_observed_pct":round((rec["low_observed"]/base-1)*100,2)})
+    return {"count":len(signals),"signals":sorted(signals,key=lambda x:x["at"],reverse=True)[:200],
+        "note":"Observed quote snapshots only, not historical backtest or trades."}
 
 @app.get("/api/borrow-history/{symbol}")
 async def borrow_history(symbol: str):
