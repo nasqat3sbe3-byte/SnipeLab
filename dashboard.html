@@ -69,6 +69,34 @@ body{background:var(--bg);color:#e6efed}
  .moregrid{gap:5px!important}.action button{padding:9px!important}
 }
 @media(max-width:350px){.head .brand{font-size:20px!important}.compact-numbers .number strong{font-size:11px!important}.stock{padding:8px!important}.price{font-size:16px!important}.summary button{font-size:8px!important}}
+
+/* Luxe color-only skin. No width, spacing, breakpoint, markup or filter changes. */
+:root{--bg:#0e1417;--panel:#172226;--edge:#3b5052;--gold:#f0c681;--teal:#63d9cc;--green:#74e5b7;--red:#fa8998;--muted:#a9bdc0}
+body{background:radial-gradient(ellipse at 94% 0%,#23312b 0%,transparent 29%),radial-gradient(ellipse at 3% 55%,#26251e 0%,transparent 27%),#0e1417;color:#f1f5f1}
+.head .brand{color:#f4c98a;text-shadow:0 0 22px #edb96b18}.head .brand-mark{color:#56dfd2;text-shadow:0 0 15px #56dfd244}
+.head-market{border-top-color:#405353!important}.head-market .market-state{background:#263236!important;color:#dcece9!important}
+.events{background:linear-gradient(115deg,#222824,#1b272a);border-color:#8c7048;box-shadow:inset 0 1px #ffffff08}
+.summary button{background:linear-gradient(145deg,#1b292e,#172226);border-color:#3d5456;color:#b5c8c8}
+.summary button.on,.summary button.active{background:linear-gradient(135deg,#423323,#2c2a23);border-color:#d7ab69;box-shadow:inset 0 1px #f3d8a21a}
+.summary button.on b,.summary button.active b{color:#f6ce8e}
+.search{background:#1a292e;border-color:#456064;color:#f0f7f5}
+.browse-tools{background:#0e1417ed}
+.filters button{background:linear-gradient(145deg,#203035,#182428);border-color:#496165;color:#dceae7}
+.filters button.on{background:linear-gradient(135deg,#ffdfa3,#dfad61);border-color:#f5ca88;color:#252016;box-shadow:0 2px 12px #e9b96b28}
+.stock{background:linear-gradient(140deg,#1c2c30,#152226);border-color:#4a6060;box-shadow:0 4px 18px #00000024,inset 0 1px #ffffff09}
+.stock.ready{border-color:#5aa98b;box-shadow:0 3px 17px #55c69a12,inset 0 1px #ffffff0b}
+.stock.top{border-color:#d6aa68;background:linear-gradient(125deg,#302c23,#1b2a2b)}
+.sym{color:#ffe0a9;text-shadow:0 0 14px #eebc7620}
+.number{background:linear-gradient(145deg,#16262b,#111e22);border-color:#3c5558}
+.number small{color:#aabfc0}.number strong{color:#e9f4f0}.number strong.good{color:#7ae8bb}.number strong.bad{color:#fa8998}
+.score{background:linear-gradient(100deg,#574025,#49351e);color:#ffd38d}
+.stability-pill.good{border-color:#459b79;background:#18382f;color:#83edbb}
+.stability-pill.bad{border-color:#a36b66;background:#372629;color:#ff9aa6}
+.label.ready{border-color:#479b79;background:#18352d;color:#83e6b3}
+.label.top{border-color:#b88a48;background:#3d3120;color:#ffd58e}
+.stock details{border-top-color:#385153}.stock summary{color:#f1c77d}
+.action button{background:#203b39;border-color:#547d76;color:#e8f8f3}
+.news-item{border-bottom-color:#334b4c}
 </style></head><body><main class="shell"><header class="head"><div class="head-primary"><div class="brand-wrap"><div class="brand"><span class="brand-mark">◎</span>SnipeLab</div><div class="brand-sub">ماسح أسهم التقسيم العكسي</div></div><div class="uptime offline" id="uptime"><small><span class="dot"></span>جارٍ فحص السيرفر</small><b>—</b></div></div><div class="head-market"><span class="market-heading">♧ حالة السوق</span><span class="market-state" id="marketState">جارٍ التحقق</span></div></header><section class="events"><div class="event-head"><span>ϟ آخر التنبيهات <small id="eventCount" class="event-count"></small></span><button id="eventToggle" type="button">عرض الكل ⌄</button></div><div id="eventsList" aria-live="polite"><div class="event-line">جارٍ تحميل الأحداث...</div></div></section><div class="summary" aria-label="إحصائيات قابلة للضغط"><button data-filter="all" type="button"><b id="countAll">—</b>جميع الأسهم</button><button data-filter="borrow" type="button"><b id="countBorrow">—</b>Available &lt;15K</button><button data-filter="ready" type="button"><b id="countReady">—</b>الجاهز</button><button data-filter="near" type="button"><b id="countNear">—</b>تحت الجاهزية</button></div><div class="browse-tools"><input id="query" class="search" type="search" placeholder="ابحث باسم السهم أو الشركة..." aria-label="البحث عن سهم"><div class="filters" role="group" aria-label="فلترة الأسهم"><button class="on" data-filter="all">الكل</button><button data-filter="ready">الجاهز</button><button data-filter="near">تحت الجاهزية</button><button data-filter="borrow">Available &lt;15K</button><button data-filter="top">♛ توب</button></div></div><div id="status" class="status">جارٍ تحميل بيانات الأسهم...</div><section id="stocks" class="stocks" aria-live="polite"></section></main><script>
 'use strict';
 let payload={rows:{},events:[],news:{}},selected='all',limit=24,showAllEvents=false,loading=false,serverBoot=0,newsLoaded=new Set(),newsLoading=new Set();
