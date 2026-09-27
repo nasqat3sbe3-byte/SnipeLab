@@ -18,8 +18,36 @@ function topStats(x){
 }
 function isTop(x){return topStats(x)!==null}
 function badge(x){return isTop(x)?'توب':x.ready&&x.history_verified?'جاهز':x.near_ready&&x.history_verified?'تحت الجاهزية':'قيد المتابعة'}
-function filtered(){let a=rows(),q=$('query').value.trim().toUpperCase();if(q)a=a.filter(x=>x.symbol.toUpperCase().includes(q)||String(x.company_name||x.name||'').toUpperCase().includes(q));if(selected==='ready')a=a.filter(x=>!isTop(x)&&x.ready&&x.history_verified);if(selected==='near')a=a.filter(x=>!isTop(x)&&x.near_ready&&x.history_verified&&!x.ready);if(selected==='borrow')a=a.filter(x=>x.b.available!=null&&x.b.available<15000);if(selected==='top')a=a.filter(isTop);a.sort((x,y)=>{
+function filtered(){let a=rows(),q=$('query').value.trim().toUpperCase();if(q)a=a.filter(x=>x.symbol.toUpperCase().includes(q)||String(x.company_name||x.name||'').toUpperCase().includes(q));if(selected==='ready')a=a.filter(x=>{
+  if(isTop(x)||!x.history_verified)return false;
+  if(x.ready)return true;
+  const av=Number(x.b.available),rsi=Number(x.rsi_daily),sessions=Number(x.stability_sessions);
+  const lowDistance=Number(x.effective_distance_pct);
+  // Show high-match candidates missing only stability and/or low distance.
+  // Keep borrow, RSI and historical half-touch mandatory.
+  return x.b.available!=null&&Number.isFinite(av)&&av<15000
+    &&x.rsi_daily!=null&&Number.isFinite(rsi)&&rsi<=35
+    &&x.half_reached===true
+    &&Number.isFinite(sessions)&&sessions>=0&&sessions<2
+    ||(!isTop(x)&&x.history_verified&&!x.ready
+      &&x.b.available!=null&&Number.isFinite(av)&&av<15000
+      &&x.rsi_daily!=null&&Number.isFinite(rsi)&&rsi<=35
+      &&x.half_reached===true&&x.effective_distance_pct!=null
+      &&Number.isFinite(lowDistance)&&lowDistance>25);
+});if(selected==='near')a=a.filter(x=>!isTop(x)&&x.near_ready&&x.history_verified&&!x.ready);if(selected==='borrow')a=a.filter(x=>x.b.available!=null&&x.b.available<15000);if(selected==='top')a=a.filter(isTop);a.sort((x,y)=>{
   if(selected==='top')return topStats(y).gain-topStats(x).gain;
+  if(selected==='ready'){
+    const av=z=>{const n=Number(z.b.available);return z.b.available==null||!Number.isFinite(n)?Infinity:n;};
+    const sessions=z=>Math.max(0,Number(z.stability_sessions)||0);
+    const gap=z=>z.effective_distance_pct==null?Infinity:Math.max(0,Number(z.effective_distance_pct)-25);
+    // Ready first; then highest conditions score, fewer stability sessions
+    // missing, closest to the low-distance threshold, lowest Available.
+    return Number(!!y.ready)-Number(!!x.ready)
+      ||(Number(y.readiness_pct)||0)-(Number(x.readiness_pct)||0)
+      ||Math.max(0,2-sessions(x))-Math.max(0,2-sessions(y))
+      ||gap(x)-gap(y)||av(x)-av(y)
+      ||x.symbol.localeCompare(y.symbol);
+  }
   if(selected==='near'||selected==='borrow'){
     // Strictly sort by available borrow ascending; readiness only breaks ties.
     const available=z=>{
