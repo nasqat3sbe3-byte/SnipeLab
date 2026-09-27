@@ -60,30 +60,39 @@ function filtered(){let a=rows(),q=$('query').value.trim().toUpperCase();if(q)a=
       ||x.symbol.localeCompare(y.symbol);
   }
   if(selected==='all'){
-    // Ready first. Among the rest, never promote >25K borrow above
-    // qualifying low-borrow names just because other conditions passed.
-    // Within each borrow band: fulfilled-conditions score DESC, then
-    // Available ASC, then symbol for deterministic ordering.
     const available=z=>{
       if(z.b.available==null||z.b.available==='')return Infinity;
       const n=Number(String(z.b.available).replace(/,/g,''));
       return Number.isFinite(n)&&n>=0?n:Infinity;
     };
-    const group=z=>{
-      const av=available(z);
-      if(z.ready===true&&z.history_verified===true)return 0;
-      if(av<15000)return 1;
-      if(av<=25000)return 2;
-      if(Number.isFinite(av))return 3;
-      return 4;
+    const distance=z=>{
+      if(z.effective_distance_pct==null)return Infinity;
+      const n=Number(z.effective_distance_pct);
+      return Number.isFinite(n)&&n>=0?n:Infinity;
     };
     const score=z=>{
+      if(z.readiness_pct==null)return -1;
       const n=Number(z.readiness_pct);
-      return z.readiness_pct!=null&&Number.isFinite(n)?n:-1;
+      return Number.isFinite(n)?n:-1;
+    };
+    const group=z=>{
+      const av=available(z),dist=distance(z);
+      // Distance is a hard display-priority gate, not an extra score.
+      // Ready must also pass the current <=25% low-distance check.
+      if(z.ready===true&&z.history_verified===true&&dist<=25&&av<15000)return 0;
+      if(av<15000&&dist<=25)return 1;
+      if(av<15000&&dist<=30)return 2;
+      if(av<=25000&&dist<=25)return 3;
+      if(av<=25000&&dist<=30)return 4;
+      if(Number.isFinite(av)&&dist<=25)return 5;
+      if(Number.isFinite(av)&&dist<=30)return 6;
+      if(Number.isFinite(av)&&Number.isFinite(dist))return 7;
+      return 8;
     };
     return group(x)-group(y)
       ||score(y)-score(x)
       ||available(x)-available(y)
+      ||distance(x)-distance(y)
       ||x.symbol.localeCompare(y.symbol);
   }
   return (y.ready?1:0)-(x.ready?1:0)
