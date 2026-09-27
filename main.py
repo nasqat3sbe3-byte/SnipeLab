@@ -466,9 +466,10 @@ async def borrow_loop():
         try:
             text=await asyncio.wait_for(asyncio.to_thread(download_ibkr),timeout=30)
             rows=parse_ibkr(text); now=utcnow().isoformat(); changed=0
+            if not rows:raise ValueError("IBKR returned zero valid USD rows; existing readings preserved")
             for sym in list(UNIVERSE):
                 new=rows.get(sym)
-                if not new:continue
+                if new is None:continue
                 new={**new,"received_at":now}; old=BORROW.get(sym)
                 for ev in borrow_events(sym,old,new):
                     changed+=1; add_event(*ev)
@@ -478,7 +479,7 @@ async def borrow_loop():
                 if not history or any(history[-1].get(k)!=sample[k] for k in ("available","ctb","rebate")) or (datetime.fromisoformat(now)-datetime.fromisoformat(history[-1]["at"])).total_seconds()>=3600:
                     history.append(sample)
                 cutoff=time.time()-3*86400
-                history[:]=[p for p in history if datetime.fromisoformat(p["at"]).timestamp()>=cutoff][-100:]
+                history[:]=[p for p in history if datetime.fromisoformat(p["at"]).timestamp()>=cutoff][-300:]
             STATE["borrow_scan_count"]+=1; STATE["last_borrow_scan"]=now; STATE["borrow_ok"]=sum(1 for s in UNIVERSE if s in rows)
             STATE["borrow_missing"]=max(0,len(UNIVERSE)-STATE["borrow_ok"]); STATE["last_borrow_error"]=None
         except Exception as exc: STATE["last_borrow_error"]=f"{type(exc).__name__}: {str(exc)[:120]}"
@@ -669,7 +670,7 @@ async def signal_lab():
 @app.get("/api/borrow-history/{symbol}")
 async def borrow_history(symbol: str):
     symbol=re.sub(r"[^A-Z0-9.-]","",symbol.upper())[:12]
-    return {"symbol":symbol,"period_days":3,"source":"IBKR public FTP","snapshots":BORROW_HISTORY.get(symbol,[]),"note":"Recording starts after deployment; no invented historical values."}
+    return {"symbol":symbol,"period_days":3,"source":"IBKR public FTP","last_scan":STATE.get("last_borrow_scan"),"scan_error":STATE.get("last_borrow_error"),"last_reading":BORROW.get(symbol),"snapshots":BORROW_HISTORY.get(symbol,[]),"note":"Recording starts after deployment; no invented historical values."}
 
 @app.get("/api/dashboard")
 async def dashboard_data():
