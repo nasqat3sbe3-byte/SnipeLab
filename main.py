@@ -296,9 +296,10 @@ def readiness_state(meta,q,b,a):
     av_ok=av is not None and av<15000
     rsi_ok=rsi is not None and rsi<30
     dist_ok=dist is not None and 0<=dist<=20
-    ap=(35 if av<1000 else 30 if av<5000 else 25 if av<10000 else 15 if av<15000 else 0) if av is not None else 0
-    rp=(25 if rsi<25 else 20 if rsi<30 else 10 if rsi<35 else 0) if rsi is not None else 0
-    dp=(20 if dist<=5 else 15 if dist<=10 else 10 if dist<=15 else 5 if dist<=20 else 0) if dist is not None and dist>=0 else 0
+    # v6 weights: borrow 55, daily RSI 20, split-day 4H half touch 20, low distance 5.
+    ap=(55 if av<1000 else 47 if av<5000 else 39 if av<10000 else 24 if av<15000 else 0) if av is not None else 0
+    rp=(20 if rsi<25 else 16 if rsi<30 else 8 if rsi<35 else 0) if rsi is not None else 0
+    dp=(5 if dist<=5 else 4 if dist<=10 else 3 if dist<=15 else 1 if dist<=20 else 0) if dist is not None and dist>=0 else 0
     hp=20 if half_ok else 0
     # A missing source is not a failed condition or a zero Available reading.
     complete=verified and half_rule_current and av is not None and rsi is not None and dist is not None
@@ -321,7 +322,7 @@ def readiness_state(meta,q,b,a):
         "effective_low":effective_low,"effective_distance_pct":dist,
         "effective_sessions":sessions,"highest_since_split":hist.get("post_split_high"),
         "half_level":half,"half_reached":half_ok,"split_half_reached":half_ok,
-        "readiness_rule_version":5,"score_breakdown":{"available":ap,"rsi":rp,"distance":dp,"half":hp},
+        "readiness_rule_version":6,"score_breakdown":{"available":ap,"rsi":rp,"distance":dp,"half":hp},
         "market_day":str(q.get("market_timestamp") or "")[:10]}
 
 def refresh_analytics():
