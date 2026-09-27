@@ -105,6 +105,15 @@ body{background:radial-gradient(ellipse at 94% 0%,#23312b 0%,transparent 29%),ra
 .chart-dialog::backdrop{background:#030708d9}.chart-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:3px 4px 10px;color:#f0ca8a}.chart-head div{display:flex;gap:9px;align-items:center}.chart-head a{color:#9ae3d6;text-decoration:none;font-size:12px}.chart-head button{background:#263a3b;color:#f3e8d2;border:1px solid #4b6565;border-radius:7px;padding:6px 10px}
 #tvChart{width:100%;height:calc(100% - 83px);background:#152429;border-radius:7px;overflow:hidden}.tradingview-widget-container__widget{width:100%;height:100%}.chart-loading{padding:24px;text-align:center;color:#a9c7c3}.chart-note{font-size:10px;color:#9bb4b5;padding-top:8px}
 @media(max-width:600px){.missing-pill{font-size:9px;padding:2px 5px}.quick-actions{margin-top:5px}.quick-actions button{font-size:10px;padding:4px 8px}.chart-dialog{inset:1vh 1vw;width:98vw;height:95dvh;max-height:95dvh;padding:7px}.chart-head a{font-size:10px}#tvChart{height:calc(100% - 76px)}}
+
+.radar-explain{margin-top:4px;max-width:100%;border:0!important;padding:0!important}
+.radar-explain summary.missing-pill{display:inline-block;list-style:none;cursor:pointer;margin:0!important;padding:4px 7px!important;border:1px solid #d7a95b!important;border-radius:6px!important;background:#3c3020!important;color:#f9d79c!important;font-size:10px!important;font-weight:bold}
+.radar-explain summary::-webkit-details-marker{display:none}
+.radar-checks{margin-top:7px;padding:7px;background:#142528;border:1px solid #4c6460;border-radius:8px;display:grid;gap:5px;min-width:0}
+.radar-check{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;line-height:1.5}
+.radar-check b{flex:none}.radar-check span{text-align:left;color:#c2d4d0;overflow-wrap:anywhere}
+.radar-check.passed b{color:#77e5b3}.radar-check.pending b{color:#f2c579}
+@media(max-width:600px){.radar-explain summary.missing-pill{font-size:9px!important;padding:3px 5px!important}.radar-check{font-size:9px}}
 </style></head><body><main class="shell"><header class="head"><div class="head-primary"><div class="brand-wrap"><div class="brand"><span class="brand-mark">◎</span>SnipeLab</div><div class="brand-sub">ماسح أسهم التقسيم العكسي</div></div><div class="uptime offline" id="uptime"><small><span class="dot"></span>جارٍ فحص السيرفر</small><b>—</b></div></div><div class="head-market"><span class="market-heading">♧ حالة السوق</span><span class="market-state" id="marketState">جارٍ التحقق</span></div></header><section class="events"><div class="event-head"><span>ϟ آخر التنبيهات <small id="eventCount" class="event-count"></small></span><button id="eventToggle" type="button">عرض الكل ⌄</button></div><div id="eventsList" aria-live="polite"><div class="event-line">جارٍ تحميل الأحداث...</div></div></section><div class="summary" aria-label="إحصائيات قابلة للضغط"><button data-filter="all" type="button"><b id="countAll">—</b>جميع الأسهم</button><button data-filter="borrow" type="button"><b id="countBorrow">—</b>Available &lt;15K</button><button data-filter="ready" type="button"><b id="countReady">—</b>الجاهز</button><button data-filter="near" type="button"><b id="countNear">—</b>تحت الجاهزية</button></div><div class="browse-tools"><input id="query" class="search" type="search" placeholder="ابحث باسم السهم أو الشركة..." aria-label="البحث عن سهم"><div class="filters" role="group" aria-label="فلترة الأسهم"><button class="on" data-filter="all">الكل</button><button data-filter="ready">الجاهز</button><button data-filter="near">تحت الجاهزية</button><button data-filter="borrow">Available &lt;15K</button><button data-filter="radar">◉ الرادار <span id="radarCount"></span></button><button data-filter="top">♛ توب</button></div></div><div id="status" class="status">جارٍ تحميل بيانات الأسهم...</div><section id="stocks" class="stocks" aria-live="polite"></section></main><dialog id="chartDialog" class="chart-dialog" aria-label="شارت TradingView"><div class="chart-head"><strong id="chartTitle">الشارت</strong><div><a id="chartExternal" href="https://www.tradingview.com/chart/" target="_blank" rel="noopener noreferrer">فتح TradingView ↗</a><button type="button" id="chartClose" aria-label="إغلاق الشارت">✕</button></div></div><div id="tvChart" class="tradingview-widget-container"><div class="chart-loading">جارٍ تحميل شارت TradingView…</div></div><div class="chart-note">الشارت من TradingView؛ بعض بيانات السوق قد تكون متأخرة حسب المزود.</div></dialog><script>
 'use strict';
 let payload={rows:{},events:[],news:{}},selected='all',limit=24,showAllEvents=false,loading=false,serverBoot=0,newsLoaded=new Set(),newsLoading=new Set();
@@ -147,17 +156,35 @@ function radarCandidate(x){
  const c=conditionState(x);
  return !!c&&c.missing.length>=1&&c.missing.length<=2&&c.av<=20000&&c.rsi<=40&&c.dist<=35;
 }
+function displayedReadiness(x){
+ const base=Number(x.readiness_pct);
+ if(x.readiness_pct==null||!Number.isFinite(base))return null;
+ const c=conditionState(x);
+ if(!c)return Math.min(base,99);
+ const stabilityPenalty=Math.max(0,2-Math.min(2,c.sessions))*5;
+ return Math.max(0,Math.min(base-stabilityPenalty,c.missing.length?99:100));
+}
+function radarExplanation(x){
+ const c=conditionState(x);if(!c)return '';
+ const lines=[
+ ['الشورت',c.av<15000,'Available '+fmt(c.av)+' / المطلوب أقل من 15,000'],
+ ['RSI',c.rsi<=35,'RSI '+fmt(c.rsi)+' / المطلوب 35 أو أقل'],
+ ['نصف القمة',!!x.half_reached,x.half_reached?'وصل إلى نصف أعلى قمة':'لم يصل إلى نصف أعلى قمة بعد'],
+ ['القاع',c.dist<=25,'البعد '+pct(c.dist)+' / المطلوب 25% أو أقل'],
+ ['الثبات',c.sessions>=2,'الثبات '+Math.min(4,Math.floor(c.sessions))+'/2 / المطلوب جلستان دون كسر القاع']
+ ];
+ return '<div class="radar-checks">'+lines.map(([name,ok,desc])=>'<div class="radar-check '+(ok?'passed':'pending')+'"><b>'+(ok?'✓ ':'◌ ')+esc(name)+'</b><span>'+esc(desc)+'</span></div>').join('')+'</div>';
+}
 function missingLabel(x){
- if(x.ready)return '';
  const c=conditionState(x);
  if(!c||!c.missing.length)return '';
- return '<span class="missing-pill" title="'+esc('المتبقي: '+c.missing.join('، '))+'">'+
- (c.missing.length===1?'ينقصه شرط واحد':'ينقصه '+fmt(c.missing.length)+' شروط')+'</span>';
+ return '<details class="radar-explain"><summary class="missing-pill" title="'+esc('المتبقي: '+c.missing.join('، '))+'">'+
+ (c.missing.length===1?'ينقصه شرط واحد':'ينقصه '+fmt(c.missing.length)+' شروط')+' ⌄</summary>'+radarExplanation(x)+'</details>';
 }
 function badge(x){return isTop(x)?'توب':x.ready&&x.history_verified?'جاهز':x.near_ready&&x.history_verified?'تحت الجاهزية':'قيد المتابعة'}
 function filtered(){let a=rows(),q=$('query').value.trim().toUpperCase();if(selected==='all'||selected==='ready'||selected==='near')a=a.filter(x=>!topQuarantined(x));if(q)a=a.filter(x=>x.symbol.toUpperCase().includes(q)||String(x.company_name||x.name||'').toUpperCase().includes(q));if(selected==='ready')a=a.filter(x=>{
   if(isTop(x)||!x.history_verified)return false;
-  if(x.ready)return true;
+  if(x.ready&&conditionState(x)?.missing.length===0)return true;
   const av=x.b.available==null?NaN:Number(x.b.available);
   const rsi=x.rsi_daily==null?NaN:Number(x.rsi_daily);
   const sessions=x.stability_sessions==null?NaN:Number(x.stability_sessions);
@@ -183,7 +210,7 @@ function filtered(){let a=rows(),q=$('query').value.trim().toUpperCase();if(sele
     const dist=z=>Number(z.effective_distance_pct);
     // Ready first. Then low <=25% candidates, prioritizing those
     // missing one stability session; last are 25-30% near-low cases.
-    const group=z=>z.ready?0:dist(z)<=25?1:2;
+    const group=z=>z.ready&&conditionState(z)?.missing.length===0?0:dist(z)<=25?1:2;
     return group(x)-group(y)
       ||(group(x)===1?Math.max(0,2-sessions(x))-Math.max(0,2-sessions(y)):0)
       ||(Number(y.readiness_pct)||0)-(Number(x.readiness_pct)||0)
@@ -262,7 +289,7 @@ function card(x){
  const stabilityClass=sessions==null?'':sessions>=2?'good':'bad';
  return '<article class="stock '+(x.ready?'ready':top?'top':'')+'" data-symbol="'+esc(x.symbol)+'">'+
  '<div class="stock-top"><div><div class="sym">'+esc(x.symbol)+'</div><div class="split-date">التقسيم: '+esc(x.effective_date||'غير متوفر')+'</div><div class="label '+(x.ready?'ready':top?'top':'')+'">'+esc(rank)+'</div>'+missingLabel(x)+'</div>'+
- '<div class="price-box"><div class="price-line">'+quoteDisplay(x.q,x.quote_freshness)+'<span class="stability-pill '+stabilityClass+'" title="جلسات الثبات من آخر أربع جلسات؛ يكفي 2/4 للجاهزية">'+esc(stability)+'</span></div><div class="score">الجاهزية '+pct(x.readiness_pct)+'</div></div></div>'+
+ '<div class="price-box"><div class="price-line">'+quoteDisplay(x.q,x.quote_freshness)+'<span class="stability-pill '+stabilityClass+'" title="جلسات الثبات من آخر أربع جلسات؛ يكفي 2/4 للجاهزية">'+esc(stability)+'</span></div><div class="score">الجاهزية '+pct(displayedReadiness(x))+'</div></div></div>'+
  '<div class="numbers compact-numbers">'+metric('Available',fmt(av),av!=null&&av<15000?'good':'')+metric('RSI اليومي',fmt(x.rsi_daily),x.rsi_daily!=null&&x.rsi_daily<=35?'good':'')+metric('بعده عن القاع',x.history_verified?pct(x.effective_distance_pct??x.distance_from_low_pct):'—',x.effective_distance_pct!=null&&x.effective_distance_pct<=25?'good':'')+'</div>'+
  '<div class="quick-actions"><button type="button" data-action="chart" data-symbol="'+esc(x.symbol)+'">▥ الشارت</button></div><details class="stock-more"><summary>التفاصيل والشروط الناقصة</summary><div class="moregrid">'+metric('نصف أعلى قمة',money(half))+metric('القاع التاريخي',money(low))+metric('أعلى قمة بعد التقسيم',money(x.highest_since_split))+metric('جلسات الثبات',stability,stabilityClass)+metric('CTB',pct(x.b.ctb))+metric('Rebate',pct(x.b.rebate),x.b.rebate<0?'bad':'')+metric('افتتاح التقسيم',money(x.split_day_open))+metric('أعلى شمعة 4H يوم التقسيم',money(x.split_day_4h_high))+metric('الشروط الناقصة',x.missing_count==null?'—':fmt(x.missing_count))+'</div><div class="action"><button type="button" data-action="chart" data-symbol="'+esc(x.symbol)+'">الشارت</button><button type="button" data-action="news" data-symbol="'+esc(x.symbol)+'">تحديث الأخبار</button></div><div class="status">'+esc(x.missing||'')+'</div>'+(x.score_breakdown?'<div class="status">الجاهزية: Available '+fmt(x.score_breakdown.available)+'/55 · RSI '+fmt(x.score_breakdown.rsi)+'/20 · القاع '+fmt(x.score_breakdown.distance)+'/5 · نصف القمة '+fmt(x.score_breakdown.half)+'/20</div>':'')+'</details>'+
  '<details class="stock-news"><summary>آخر الأخبار ('+news.length+')</summary><div class="news" id="news-'+esc(x.symbol)+'">'+newsHtml(news,x.symbol)+'</div></details></article>';
