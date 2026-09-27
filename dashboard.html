@@ -339,8 +339,8 @@ async function showBorrowHistory(symbol){
  try{
   const r=await fetch('/api/borrow-history/'+encodeURIComponent(symbol),{cache:'no-store'});
   if(!r.ok)throw Error('HTTP '+r.status);
-  const data=await r.json(),samples=data.snapshots||[];
-  $('historyBody').innerHTML=samples.length?'<div class="history-list">'+samples.slice().reverse().map(p=>'<div class="history-entry"><small>'+esc(new Date(p.at).toLocaleString('ar-SA'))+'</small><div class="numbers compact-numbers">'+metric('Available',fmt(p.available))+metric('CTB',pct(p.ctb))+metric('Rebate',pct(p.rebate))+'</div></div>').join('')+'</div><p class="status">المصدر: '+esc(data.source)+' · تُحفظ القراءات من تاريخ تفعيل الميزة، ولا تُنشأ بيانات سابقة افتراضياً.</p>':'<p class="status">لم تُحفظ قراءات بعد. يبدأ التاريخ من أول تحديث للشورت بعد نشر الميزة.</p>';
+  const data=await r.json(),samples=data.snapshots||[];const health='<p class="status">'+(data.scan_error?'⚠ تعذر تحديث IBKR: '+esc(data.scan_error):data.last_scan?'آخر فحص IBKR: '+esc(new Date(data.last_scan).toLocaleString('ar-SA')):'⚠ لم يكتمل فحص IBKR بعد')+'</p>';
+  $('historyBody').innerHTML=samples.length?'<div class="history-list">'+samples.slice().reverse().map(p=>'<div class="history-entry"><small>'+esc(new Date(p.at).toLocaleString('ar-SA'))+'</small><div class="numbers compact-numbers">'+metric('Available',fmt(p.available))+metric('CTB',pct(p.ctb))+metric('Rebate',pct(p.rebate))+'</div></div>').join('')+'</div>'+health+'<p class="status">المصدر: '+esc(data.source)+' · تُحفظ القراءات من تاريخ تفعيل الميزة، ولا تُنشأ بيانات سابقة افتراضياً.</p>':'<p class="status">لا توجد قراءات محفوظة لهذا السهم. هذا لا يعني أن Available يساوي صفراً.</p>'+health;
  }catch(e){$('historyBody').textContent='تعذر تحميل التاريخ: '+e.message}
 }
 $('historyClose').addEventListener('click',()=>$('historyDialog').close());
