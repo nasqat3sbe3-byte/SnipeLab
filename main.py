@@ -267,7 +267,7 @@ async def market_loop():
             await asyncio.sleep(3)
 
 def readiness_state(meta,q,b,a):
-    """Version 5: four user-defined criteria; stability is informational only."""
+    """Four weighted factors plus mandatory 4-session post-low stability gate."""
     price=float(q["price"])
     hist=HISTORY.get(meta.get("symbol"),{})
     verified=bool(hist.get("verified"))
@@ -313,17 +313,20 @@ def readiness_state(meta,q,b,a):
     hp=20 if half_ok else 0
     # A missing source is not a failed condition or a zero Available reading.
     complete=verified and half_rule_current and av is not None and rsi is not None and dist is not None
-    full=bool(complete and av_ok and rsi_ok and half_ok and dist_ok)
+    stable_ok=verified and sessions>=4 and not new_low
+    full=bool(complete and av_ok and rsi_ok and half_ok and dist_ok and stable_ok)
     conditions=[("Available أقل من 15K",av_ok,av is not None),
                 ("RSI اليومي أقل من 30",rsi_ok,rsi is not None),
                 ("لمس نصف أعلى شمعة التقسيم",half_ok,verified and half_rule_current),
-                ("يبعد عن القاع 20% أو أقل",dist_ok,verified and dist is not None)]
+                ("يبعد عن القاع 20% أو أقل",dist_ok,verified and dist is not None),
+                ("ثبات 4 جلسات فوق القاع دون كسره",stable_ok,verified)]
     missing=[name for name,ok,known in conditions if not ok and known]
     missing.extend(name+" (بيانات ناقصة)" for name,ok,known in conditions if not known)
     met=sum(bool(ok) for _,ok,known in conditions if known)
-    # Near-ready: exactly one or two unmet conditions; all four sources
-    # must be known. Keep TOP as an independent label in the dashboard.
-    shortlist=bool(complete and not full and met>=2)
+    # Near-ready requires 3/4 market factors and at least one stable
+    # completed session. A fresh low or zero stability cannot be ready.
+    market_met=sum((av_ok,rsi_ok,half_ok,dist_ok))
+    shortlist=bool(complete and not full and not new_low and sessions>=1 and market_met>=3)
     pct=round(ap+rp+dp+hp,2) if complete else None
     strengths=[name+" ✓" for name,ok,known in conditions if ok and known]
     return {"full":full,"shortlist":shortlist,"readiness_pct":pct,
@@ -332,7 +335,7 @@ def readiness_state(meta,q,b,a):
         "effective_low":effective_low,"effective_distance_pct":dist,
         "effective_sessions":sessions,"highest_since_split":hist.get("post_split_high"),
         "half_level":half,"half_reached":half_ok,"split_half_reached":half_ok,
-        "readiness_rule_version":7,"score_breakdown":{"available":ap,"rsi":rp,"distance":dp,"half":hp},
+        "readiness_rule_version":8,"score_breakdown":{"available":ap,"rsi":rp,"distance":dp,"half":hp},
         "market_day":str(q.get("market_timestamp") or "")[:10]}
 
 def refresh_analytics():
