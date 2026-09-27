@@ -50,12 +50,13 @@ TRAIL = {}
 HALTS = {}
 NEWS = {}
 HISTORY = {}
+BORROW_HISTORY = {}
 STATE_FILE = Path(os.environ.get("SNIPELAB_STATE_FILE","/tmp/snipelab_state.json"))
 _LAST_SAVE = 0.0
 
 def load_persistent_state():
     try:
-        d=storage.load(("universe","quotes","analytics","borrow","history","events","halts"))
+        d=storage.load(("universe","quotes","analytics","borrow","history","events","halts","borrow_history"))
         STATE["restored_from_sqlite"]=bool(d)
         STATE["restored_at"]=utcnow().isoformat() if d else None
         if not d and STATE_FILE.exists():d=json.loads(STATE_FILE.read_text("utf-8"))
@@ -66,6 +67,7 @@ def load_persistent_state():
         BORROW.update(d.get("borrow") or {})
         HISTORY.update(d.get("history") or {})
         EVENTS.extend((d.get("events") or [])[:100])
+        BORROW_HISTORY.update(d.get("borrow_history") or {})
     except Exception as exc:
         STATE["persistence_error"]=f"load {type(exc).__name__}: {str(exc)[:100]}"
 
@@ -74,7 +76,7 @@ def save_persistent_state(force=False):
     now=time.time()
     if not force and now-_LAST_SAVE<60:return
     try:
-        storage.save({"universe":UNIVERSE,"quotes":QUOTES,"analytics":ANALYTICS,"borrow":BORROW,"history":HISTORY,"events":EVENTS[:100],"halts":HALTS})
+        storage.save({"universe":UNIVERSE,"quotes":QUOTES,"analytics":ANALYTICS,"borrow":BORROW,"history":HISTORY,"events":EVENTS[:100],"halts":HALTS,"borrow_history":BORROW_HISTORY})
         _LAST_SAVE=now
         STATE["last_state_save"]=utcnow().isoformat(); STATE["persistence_error"]=None
     except Exception as exc:
@@ -445,6 +447,12 @@ async def borrow_loop():
                 for ev in borrow_events(sym,old,new):
                     changed+=1; add_event(*ev)
                 BORROW[sym]=new
+                history=BORROW_HISTORY.setdefault(sym,[])
+                sample={"at":now,"available":new["available"],"ctb":new["ctb"],"rebate":new["rebate"],"source":new["source"]}
+                if not history or any(history[-1].get(k)!=sample[k] for k in ("available","ctb","rebate")) or (datetime.fromisoformat(now)-datetime.fromisoformat(history[-1]["at"])).total_seconds()>=3600:
+                    history.append(sample)
+                cutoff=time.time()-3*86400
+                history[:]=[p for p in history if datetime.fromisoformat(p["at"]).timestamp()>=cutoff][-100:]
             STATE["borrow_scan_count"]+=1; STATE["last_borrow_scan"]=now; STATE["borrow_ok"]=sum(1 for s in UNIVERSE if s in rows)
             STATE["borrow_missing"]=max(0,len(UNIVERSE)-STATE["borrow_ok"]); STATE["last_borrow_error"]=None
         except Exception as exc: STATE["last_borrow_error"]=f"{type(exc).__name__}: {str(exc)[:120]}"
@@ -612,6 +620,11 @@ async def data_freshness_report():
             "last_market_error":STATE["last_market_error"],
             "last_borrow_error":STATE["last_borrow_error"],
             "quote_max_age_seconds":900,"borrow_max_age_seconds":1200}
+
+@app.get("/api/borrow-history/{symbol}")
+async def borrow_history(symbol: str):
+    symbol=re.sub(r"[^A-Z0-9.-]","",symbol.upper())[:12]
+    return {"symbol":symbol,"period_days":3,"source":"IBKR public FTP","snapshots":BORROW_HISTORY.get(symbol,[]),"note":"Recording starts after deployment; no invented historical values."}
 
 @app.get("/api/dashboard")
 async def dashboard_data():
