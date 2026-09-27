@@ -12,6 +12,63 @@
 /* Approved reference: one dark two-row header with full-width divider. */
 .head{display:block;min-height:0;padding:14px 15px 10px;border:1px solid #8a6b37;border-radius:13px;background:#141e20;margin-bottom:10px}.head-primary{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:69px;padding-bottom:12px}.head .brand{font-size:31px;line-height:1.2}.head .brand-mark{font-size:34px;margin-left:8px}.head .brand-sub{font-size:11px;margin-top:5px;text-align:right}.head .uptime{min-width:0;text-align:left;background:transparent;border:0;padding:0;border-radius:0}.head .uptime small{font-size:11px}.head .uptime b{font-size:12px;font-weight:normal;margin-top:5px;direction:ltr;text-align:left}.head-market{display:flex;justify-content:space-between;align-items:center;gap:10px;border-top:1px solid #395052;padding-top:13px;min-height:43px}.market-heading{font-size:14px;font-weight:bold;color:var(--gold)}.head-market .market-state{font-size:11px;line-height:1.4;color:#e6efee;background:#283135;border-radius:8px;padding:5px 10px;max-width:none;text-align:left}.head .uptime.offline small{color:var(--red)}
 @media(max-width:580px){.head{padding:10px 11px 8px}.head-primary{min-height:57px;padding-bottom:10px}.head .brand{font-size:24px}.head .brand-mark{font-size:27px}.head .brand-sub{font-size:9px}.head .uptime small{font-size:9px}.head .uptime b{font-size:11px}.head-market{padding-top:10px;min-height:35px}.market-heading{font-size:12px}.head-market .market-state{font-size:10px;padding:5px 7px}}
+
+/* Mobile comfort layout: unboxed masthead, denser cards, all data retained. */
+:root{--bg:#10181b;--panel:#182529;--edge:#35484a;--gold:#dbb77c;--teal:#85c6bc;--green:#79d6ac;--red:#eb8991;--muted:#a3b6b7}
+body{background:var(--bg);color:#e6efed}
+.head{border:0!important;border-radius:0!important;background:transparent!important;padding:10px 2px 8px!important;min-height:0!important;box-shadow:none!important}
+.head-primary{min-height:52px!important;padding-bottom:8px!important}
+.head .brand{font-size:28px!important;letter-spacing:.1px}.head .brand-mark{font-size:28px!important}
+.head .uptime{border:0!important;border-radius:0!important;background:transparent!important;padding:0!important;box-shadow:none!important;text-align:left!important}
+.head .uptime b{font-variant-numeric:tabular-nums;color:#dce8e5}
+.head-market{border-top:1px solid #314548!important;padding-top:9px!important;min-height:30px!important}
+.head-market .market-state{background:#202e31!important;border-radius:7px!important}
+.events{border-color:#63543b;background:#192326;padding:9px 11px;margin-bottom:9px}
+.summary button{background:#19272b;border-color:#34494a}.summary button.on,.summary button.active{background:#322b20;border-color:#a98955}
+.stock{background:#19262a;border-color:#3a5050;box-shadow:0 2px 8px #00000018}
+.number{background:#142024;border-color:#344a4b}.score{background:#413722;color:#e5c28b}
+@media(max-width:600px){
+ .shell{padding:5px 9px 30px!important}
+ .head{padding:8px 2px 6px!important;margin-bottom:7px!important}
+ .head-primary{min-height:44px!important;gap:6px!important}
+ .head .brand{font-size:23px!important}.head .brand-mark{font-size:24px!important;margin-left:4px!important}
+ .head .brand-sub{font-size:9px!important;margin-top:2px!important}
+ .head .uptime{min-width:0!important}
+ .head .uptime small{font-size:9px!important;white-space:nowrap}
+ .head .uptime b{font-size:11px!important;margin-top:3px!important}
+ .head-market{padding-top:7px!important;min-height:28px!important;gap:5px!important}
+ .market-heading{font-size:11px!important;white-space:nowrap}
+ .head-market .market-state{display:block!important;max-width:72%!important;font-size:9px!important;padding:4px 6px!important;line-height:1.35!important}
+ .events{padding:8px 9px!important;margin-bottom:8px!important;border-radius:10px}
+ .event-head{font-size:12px!important}.event-head button{font-size:10px!important;padding:5px 7px!important}
+ .event-line{font-size:10px!important;gap:6px!important;padding-top:5px!important;margin-top:5px!important}
+ .event-line small{font-size:9px!important}
+ .summary{gap:5px!important;margin-bottom:7px!important}
+ .summary button{padding:7px 2px!important;border-radius:9px!important;font-size:9px!important;line-height:1.35!important}
+ .summary b{font-size:18px!important;margin-bottom:2px!important}
+ .browse-tools{padding:5px 0 2px!important}
+ .search{padding:10px!important;font-size:12px!important;margin-bottom:5px!important}
+ .filters{gap:5px!important;padding-bottom:5px!important}
+ .filters button{padding:7px 9px!important;font-size:11px!important;border-radius:8px!important}
+ .status{font-size:10px!important;padding-bottom:6px!important}
+ .stocks{gap:8px!important}
+ .stock{padding:10px!important;border-radius:11px!important}
+ .stock-top{gap:5px!important;align-items:flex-start!important}
+ .sym{font-size:18px!important}.split-date{font-size:9px!important;margin-top:3px!important}
+ .price{font-size:18px!important}.price-change{font-size:11px!important}
+ .price-line{gap:5px!important;align-items:center!important}
+ .stability-pill{font-size:11px!important;padding:4px 5px!important;border-radius:6px!important}
+ .quote-age{font-size:9px!important;max-width:120px;overflow-wrap:anywhere}
+ .score{font-size:10px!important;padding:3px 5px!important;margin-top:3px!important}
+ .label{font-size:9px!important;padding:3px 5px!important;margin-top:3px!important}
+ .compact-numbers{grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:5px!important;margin-top:9px!important}
+ .number{padding:7px 3px!important;border-radius:7px!important}
+ .number small{font-size:9px!important;margin-bottom:4px!important}
+ .number strong{font-size:12px!important}
+ .stock details{margin-top:7px!important}.stock summary{font-size:11px!important;padding:8px 2px 3px!important}
+ .moregrid{gap:5px!important}.action button{padding:9px!important}
+}
+@media(max-width:350px){.head .brand{font-size:20px!important}.compact-numbers .number strong{font-size:11px!important}.stock{padding:8px!important}.price{font-size:16px!important}.summary button{font-size:8px!important}}
 </style></head><body><main class="shell"><header class="head"><div class="head-primary"><div class="brand-wrap"><div class="brand"><span class="brand-mark">◎</span>SnipeLab</div><div class="brand-sub">ماسح أسهم التقسيم العكسي</div></div><div class="uptime offline" id="uptime"><small><span class="dot"></span>جارٍ فحص السيرفر</small><b>—</b></div></div><div class="head-market"><span class="market-heading">♧ حالة السوق</span><span class="market-state" id="marketState">جارٍ التحقق</span></div></header><section class="events"><div class="event-head"><span>ϟ آخر التنبيهات <small id="eventCount" class="event-count"></small></span><button id="eventToggle" type="button">عرض الكل ⌄</button></div><div id="eventsList" aria-live="polite"><div class="event-line">جارٍ تحميل الأحداث...</div></div></section><div class="summary" aria-label="إحصائيات قابلة للضغط"><button data-filter="all" type="button"><b id="countAll">—</b>جميع الأسهم</button><button data-filter="borrow" type="button"><b id="countBorrow">—</b>Available &lt;15K</button><button data-filter="ready" type="button"><b id="countReady">—</b>الجاهز</button><button data-filter="near" type="button"><b id="countNear">—</b>تحت الجاهزية</button></div><div class="browse-tools"><input id="query" class="search" type="search" placeholder="ابحث باسم السهم أو الشركة..." aria-label="البحث عن سهم"><div class="filters" role="group" aria-label="فلترة الأسهم"><button class="on" data-filter="all">الكل</button><button data-filter="ready">الجاهز</button><button data-filter="near">تحت الجاهزية</button><button data-filter="borrow">Available &lt;15K</button><button data-filter="top">♛ توب</button></div></div><div id="status" class="status">جارٍ تحميل بيانات الأسهم...</div><section id="stocks" class="stocks" aria-live="polite"></section></main><script>
 'use strict';
 let payload={rows:{},events:[],news:{}},selected='all',limit=24,showAllEvents=false,loading=false,serverBoot=0,newsLoaded=new Set(),newsLoading=new Set();
