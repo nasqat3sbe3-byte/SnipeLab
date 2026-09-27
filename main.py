@@ -277,12 +277,22 @@ def readiness_state(meta,q,b,a):
     effective_low=min(float(prior_low),day_low) if prior_low is not None else None
     dist=((price/effective_low)-1)*100 if effective_low and effective_low>0 else None
     sessions=0 if new_low else int(hist.get("stability_sessions") or 0)
-    split_4h=hist.get("split_day_4h_high")
-    half=float(split_4h)/2 if split_4h is not None and float(split_4h)>0 else None
-    # Historical post-split low is sufficient: a single touch permanently
-    # satisfies the half-candle condition. No later-peak substitution.
-    half_ok=bool(verified and half is not None and effective_low is not None and effective_low<=half)
-    half_rule_current=hist.get("half_rule_version",0)>=2 and half is not None
+    # The reference is the highest high across ALL sessions since the
+    # reverse split, not just the split day. The touch must occur AFTER
+    # that peak: a low recorded before a later high is not proof.
+    post_high=hist.get("post_split_high")
+    high_date=str(hist.get("post_split_high_date") or "")
+    low_date=str(hist.get("post_split_low_date") or "")
+    half=float(post_high)/2 if post_high is not None and float(post_high)>0 else None
+    historical_touch=bool(verified and high_date and low_date and
+                          low_date>=high_date and prior_low is not None and
+                          half is not None and float(prior_low)<=half)
+    # A new low in today's quote can confirm a touch after a historical peak.
+    quote_day=str(q.get("market_timestamp") or "")[:10]
+    live_touch=bool(verified and high_date and quote_day>=high_date and
+                    half is not None and day_low<=half)
+    half_ok=historical_touch or live_touch
+    half_rule_current=verified and half is not None and bool(high_date)
     raw_av=b.get("available") if b else None
     try:
         av=float(str(raw_av).replace(",","")) if raw_av is not None else None
@@ -322,7 +332,7 @@ def readiness_state(meta,q,b,a):
         "effective_low":effective_low,"effective_distance_pct":dist,
         "effective_sessions":sessions,"highest_since_split":hist.get("post_split_high"),
         "half_level":half,"half_reached":half_ok,"split_half_reached":half_ok,
-        "readiness_rule_version":6,"score_breakdown":{"available":ap,"rsi":rp,"distance":dp,"half":hp},
+        "readiness_rule_version":7,"score_breakdown":{"available":ap,"rsi":rp,"distance":dp,"half":hp},
         "market_day":str(q.get("market_timestamp") or "")[:10]}
 
 def refresh_analytics():
