@@ -249,9 +249,11 @@ async def market_loop():
                         old_pct=(float(prior["price"])/float(prior["previous_close"])-1)*100
                         new_pct=(float(row["price"])/float(row["previous_close"])-1)*100
                         if market_day and market_day==prior_day and old_pct<25<=new_pct:
-                            add_event(s,"price_25",f"ارتفع +{new_pct:.1f}%",{"rise_pct":round(new_pct,2),"peak_30_ok":peak_30_ok,"peak_gain_pct":peak_gain_pct,
-        "half_gap_pct":half_gap_pct,"half_near":half_near,"low_near":low_near,
-        "market_day":market_day})
+                            add_event(s,"price_25",f"ارتفع +{new_pct:.1f}%",{"rise_pct":round(new_pct,2),"market_day":market_day})
+                    # Never replace a newer cached market quote with an older
+                    # daily fallback or delayed provider response.
+                    if prior and prior.get("market_timestamp") and row.get("market_timestamp") and row["market_timestamp"]<prior["market_timestamp"]:
+                        continue
                     QUOTES[s]=row; ok+=1
             STATE["market_scan_count"]+=1
             STATE["last_market_scan"]=utcnow().isoformat()
