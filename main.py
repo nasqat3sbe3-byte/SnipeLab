@@ -10,6 +10,7 @@ from datetime import datetime, timezone, date
 from zoneinfo import ZoneInfo
 
 import httpx
+import websockets
 from history import worker as historical_worker
 import storage
 from event_rules import borrow_events, ready_event, worker_health
@@ -876,6 +877,59 @@ async def history_audit():
         "quality_examples":[{"symbol":x["symbol"],"warnings":x["quality_warnings"]}
             for x in rows if x["quality_warnings"]][:20],
         "note":"Completed fields are not independent price validation."}
+
+FINNHUB_PROBE = {"status":"idle","started_at":None,"finished_at":None,"requested":0,"subscribed":0,"symbols_with_trades":0,"trade_messages":0,"trades":0,"errors":[],"seen_symbols":[],"last_trade_at":None}
+_FINNHUB_PROBE_TASK = None
+
+async def run_finnhub_probe(seconds=120):
+    global FINNHUB_PROBE
+    token=os.environ.get("FINNHUB_API_KEY") or os.environ.get("FINNHUB_TOKEN")
+    syms=sorted(UNIVERSE)
+    report={"status":"running","started_at":utcnow().isoformat(),"finished_at":None,"requested":len(syms),"subscribed":0,"symbols_with_trades":0,"trade_messages":0,"trades":0,"errors":[],"seen_symbols":[],"last_trade_at":None}
+    FINNHUB_PROBE=report
+    if not token:
+        report["status"]="error";report["errors"]=["Missing FINNHUB_API_KEY (or FINNHUB_TOKEN) environment variable"];report["finished_at"]=utcnow().isoformat();return
+    seen=set()
+    try:
+        async with websockets.connect("wss://ws.finnhub.io?token="+token,open_timeout=15,ping_interval=20,ping_timeout=20,max_size=2_000_000) as ws:
+            for sym in syms:
+                await ws.send(json.dumps({"type":"subscribe","symbol":sym}))
+                report["subscribed"]+=1
+                await asyncio.sleep(0.01)
+            deadline=time.monotonic()+max(30,min(int(seconds),600))
+            while time.monotonic()<deadline:
+                try: raw=await asyncio.wait_for(ws.recv(),timeout=min(10,max(0.1,deadline-time.monotonic())))
+                except asyncio.TimeoutError: continue
+                try: msg=json.loads(raw)
+                except Exception: continue
+                typ=msg.get("type")
+                if typ=="trade":
+                    report["trade_messages"]+=1
+                    trades=msg.get("data") or [];report["trades"]+=len(trades)
+                    for trade in trades:
+                        sym=str(trade.get("s") or "").upper()
+                        if sym in UNIVERSE: seen.add(sym)
+                    report["last_trade_at"]=utcnow().isoformat()
+                elif typ=="error":
+                    err=str(msg.get("msg") or msg)[:300]
+                    if err not in report["errors"]:report["errors"].append(err)
+                    if len(report["errors"])>30:report["errors"]=report["errors"][-30:]
+                report["symbols_with_trades"]=len(seen);report["seen_symbols"]=sorted(seen)
+    except Exception as exc:
+        report["errors"].append(type(exc).__name__+": "+str(exc)[:300])
+    report["symbols_with_trades"]=len(seen);report["seen_symbols"]=sorted(seen);report["finished_at"]=utcnow().isoformat();report["status"]="complete" if not report["errors"] else "complete_with_errors"
+
+@app.post("/api/finnhub-probe/start")
+async def start_finnhub_probe(seconds: int=120):
+    global _FINNHUB_PROBE_TASK
+    if _FINNHUB_PROBE_TASK and not _FINNHUB_PROBE_TASK.done():
+        return {"started":False,"reason":"probe already running","report":FINNHUB_PROBE}
+    _FINNHUB_PROBE_TASK=asyncio.create_task(run_finnhub_probe(seconds))
+    return {"started":True,"seconds":max(30,min(int(seconds),600)),"universe":len(UNIVERSE),"note":"Diagnostic only; does not replace Yahoo quotes."}
+
+@app.get("/api/finnhub-probe")
+async def finnhub_probe_status():
+    return {**FINNHUB_PROBE,"universe_now":len(UNIVERSE),"key_configured":bool(os.environ.get("FINNHUB_API_KEY") or os.environ.get("FINNHUB_TOKEN")),"note":"Symbols without trades may simply have had no executions during the probe window."}
 
 @app.get("/api/diagnostics/{symbol}")
 async def ticker_diagnostics(symbol: str):
