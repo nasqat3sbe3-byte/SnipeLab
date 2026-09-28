@@ -53,7 +53,6 @@ NEWS = {}
 HISTORY = {}
 BORROW_HISTORY = {}
 RADAR_MEMORY = {}
-SHORT_ANALYSIS = {}
 STATE_FILE = Path(os.environ.get("SNIPELAB_STATE_FILE","/tmp/snipelab_state.json"))
 _LAST_SAVE = 0.0
 
@@ -442,108 +441,6 @@ def refresh_analytics():
             "max_rise_pct":round(max_rise,2) if max_rise is not None else None,"rise_pct":round(max_rise,2) if max_rise is not None else None,
             "ignition":ignition,"last_market_day":st["market_day"]}
 
-async def fetch_short_analysis(client, symbol):
-    """Estimate post-split average short-sale price from FINRA flow + Yahoo daily OHLC.
-
-    This is deliberately separate from IBKR Available/CTB/Rebate. FINRA daily
-    short-sale volume is transaction flow, not open short interest, so the
-    result is labelled an estimate rather than an actual open-position cost basis.
-    """
-    meta=UNIVERSE.get(symbol) or {}
-    effective=meta.get("effective_date")
-    out={"symbol":symbol,"estimated_short_avg_price":None,
-         "short_target_drop_pct":None,"short_volume_used":None,
-         "short_days_used":0,"method":"FINRA short volume × Yahoo daily typical price",
-         "source":"FINRA Reg SHO + Yahoo 1d","effective_date":effective,
-         "updated_at":utcnow().isoformat(),"error":None}
-    if not effective:
-        out["error"]="missing_effective_date"; return out
-    try:
-        # Public FINRA Reg SHO daily flow. One symbol request returns all
-        # reporting facilities; aggregate facilities by trade date.
-        payload={"limit":5000,
-          "fields":["tradeReportDate","securitiesInformationProcessorSymbolIdentifier","shortParQuantity"],
-          "compareFilters":[{"compareType":"equal",
-            "fieldName":"securitiesInformationProcessorSymbolIdentifier","fieldValue":symbol}]}
-        fr=await client.post("https://api.finra.org/data/group/otcMarket/name/regShoDaily",
-            json=payload,headers={"Accept":"application/json"},timeout=15)
-        if fr.status_code==204:
-            out["error"]="finra_no_rows"; return out
-        fr.raise_for_status()
-        daily_short={}
-        for row in fr.json():
-            day=str(row.get("tradeReportDate") or "")[:10]
-            if day<effective:continue
-            try:v=float(row.get("shortParQuantity") or 0)
-            except (TypeError,ValueError):continue
-            if v>0:daily_short[day]=daily_short.get(day,0.0)+v
-        if not daily_short:
-            out["error"]="finra_no_post_split_short_volume"; return out
-
-        start=int(datetime.combine(date.fromisoformat(effective),datetime.min.time(),timezone.utc).timestamp())-86400
-        yr=await client.get(YAHOO.format(symbol=symbol),params={
-            "period1":start,"period2":int(time.time())+86400,"interval":"1d","events":"history"},timeout=15)
-        yr.raise_for_status()
-        data=(yr.json().get("chart",{}).get("result") or [None])[0]
-        if not data:
-            out["error"]="yahoo_no_daily_bars"; return out
-        tz=ZoneInfo((data.get("meta") or {}).get("exchangeTimezoneName") or "America/New_York")
-        q=((data.get("indicators") or {}).get("quote") or [{}])[0]
-        prices={}
-        for i,t in enumerate(data.get("timestamp") or []):
-            day=datetime.fromtimestamp(t,tz).date().isoformat()
-            if day<effective:continue
-            try:
-                high=float(q["high"][i]); low=float(q["low"][i]); close=float(q["close"][i])
-                if min(high,low,close)<=0:continue
-            except (IndexError,KeyError,TypeError,ValueError):continue
-            # Daily typical price is a transparent proxy because FINRA's daily
-            # aggregate contains volumes, not each short sale's execution price.
-            prices[day]=(high+low+close)/3.0
-
-        weighted=0.0; total=0.0; used=0
-        for day,sv in daily_short.items():
-            px=prices.get(day)
-            if px is None:continue
-            weighted+=px*sv; total+=sv; used+=1
-        if total<=0 or used==0:
-            out["error"]="no_overlapping_finra_yahoo_days"; return out
-        avg=weighted/total
-        current=QUOTES.get(symbol,{}).get("price")
-        try:current=float(current) if current is not None else None
-        except (TypeError,ValueError):current=None
-        out.update({"estimated_short_avg_price":round(avg,4),
-            "short_volume_used":round(total,2),"short_days_used":used,
-            "short_target_drop_pct":round((avg/current-1)*100,2) if current and current>0 else None,
-            "error":None})
-        return out
-    except Exception as exc:
-        out["error"]=type(exc).__name__+":"+str(exc)[:120]
-        return out
-
-async def short_analysis_loop():
-    # Cover the full universe in small batches, then refresh estimates.
-    # Core IBKR borrow collection is completely independent of this worker.
-    await asyncio.sleep(20)
-    cursor=0
-    headers={"User-Agent":"Mozilla/5.0 SnipeLab/2.0"}
-    async with httpx.AsyncClient(follow_redirects=True,headers=headers) as client:
-        while True:
-            syms=sorted(s for s,m in UNIVERSE.items() if m.get("effective_date"))
-            if not syms:
-                await asyncio.sleep(60); continue
-            if cursor>=len(syms):cursor=0
-            batch=syms[cursor:cursor+8]
-            for sym in batch:
-                SHORT_ANALYSIS[sym]=await fetch_short_analysis(client,sym)
-                await asyncio.sleep(0.35)
-            cursor+=len(batch)
-            if cursor>=len(syms):
-                cursor=0
-                await asyncio.sleep(900)
-            else:
-                await asyncio.sleep(3)
-
 async def analytics_loop():
     await asyncio.sleep(40)
     while True:
@@ -650,7 +547,7 @@ async def legacy_news_loop_disabled():
 @app.on_event("startup")
 async def startup():
     load_persistent_state()
-    asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(short_analysis_loop()); asyncio.create_task(finnhub_live_loop()); asyncio.create_task(halt_loop()); asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
+    asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(finnhub_live_loop()); asyncio.create_task(halt_loop()); asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
 
 @app.get("/")
 async def root():
@@ -822,8 +719,7 @@ async def dashboard_data():
             "top_calculator_version":h.get("top_calculator_version",0),
             "top_10_source":h.get("top_10_source"),
             "top_10_provisional":bool(h.get("top_10_provisional")),
-            "history_status":h.get("error") or ("verified" if h.get("verified") else "pending"),
-            "short_analysis":SHORT_ANALYSIS.get(sym,{})}
+            "history_status":h.get("error") or ("verified" if h.get("verified") else "pending")}
         # A same-day live rise is a separate, explicitly provisional measure:
         # never mix it silently with the completed-session low-to-high TOP.
         q=QUOTES.get(sym) or {}

@@ -443,106 +443,83 @@ def refresh_analytics():
             "ignition":ignition,"last_market_day":st["market_day"]}
 
 async def fetch_short_analysis(client, symbol):
-    """Estimate post-split average short-sale price from FINRA flow + Yahoo daily OHLC.
-
-    This is deliberately separate from IBKR Available/CTB/Rebate. FINRA daily
-    short-sale volume is transaction flow, not open short interest, so the
-    result is labelled an estimate rather than an actual open-position cost basis.
-    """
-    meta=UNIVERSE.get(symbol) or {}
-    effective=meta.get("effective_date")
-    out={"symbol":symbol,"estimated_short_avg_price":None,
-         "short_target_drop_pct":None,"short_volume_used":None,
-         "short_days_used":0,"method":"FINRA short volume × Yahoo daily typical price",
-         "source":"FINRA Reg SHO + Yahoo 1d","effective_date":effective,
-         "updated_at":utcnow().isoformat(),"error":None}
-    if not effective:
-        out["error"]="missing_effective_date"; return out
+    """Public analysis enrichment only; IBKR Available/CTB/Rebate remain untouched."""
+    out={"symbol":symbol,"short_pressure":None,"short_level":None,
+         "short_interest":None,"short_float_pct":None,"days_to_cover":None,
+         "borrow_momentum":None,"borrow_persistence":None,
+         "sources":[],"updated_at":utcnow().isoformat()}
+    def number(raw):
+        if raw is None:return None
+        raw=str(raw).strip().replace(",","")
+        mult=1
+        if raw[-1:].upper()=="K":mult=1_000;raw=raw[:-1]
+        elif raw[-1:].upper()=="M":mult=1_000_000;raw=raw[:-1]
+        elif raw[-1:].upper()=="B":mult=1_000_000_000;raw=raw[:-1]
+        try:return float(raw)*mult
+        except (TypeError,ValueError):return None
     try:
-        # Public FINRA Reg SHO daily flow. One symbol request returns all
-        # reporting facilities; aggregate facilities by trade date.
-        payload={"limit":5000,
-          "fields":["tradeReportDate","securitiesInformationProcessorSymbolIdentifier","shortParQuantity"],
-          "compareFilters":[{"compareType":"equal",
-            "fieldName":"securitiesInformationProcessorSymbolIdentifier","fieldValue":symbol}]}
-        fr=await client.post("https://api.finra.org/data/group/otcMarket/name/regShoDaily",
-            json=payload,headers={"Accept":"application/json"},timeout=15)
-        if fr.status_code==204:
-            out["error"]="finra_no_rows"; return out
-        fr.raise_for_status()
-        daily_short={}
-        for row in fr.json():
-            day=str(row.get("tradeReportDate") or "")[:10]
-            if day<effective:continue
-            try:v=float(row.get("shortParQuantity") or 0)
-            except (TypeError,ValueError):continue
-            if v>0:daily_short[day]=daily_short.get(day,0.0)+v
-        if not daily_short:
-            out["error"]="finra_no_post_split_short_volume"; return out
-
-        start=int(datetime.combine(date.fromisoformat(effective),datetime.min.time(),timezone.utc).timestamp())-86400
-        yr=await client.get(YAHOO.format(symbol=symbol),params={
-            "period1":start,"period2":int(time.time())+86400,"interval":"1d","events":"history"},timeout=15)
-        yr.raise_for_status()
-        data=(yr.json().get("chart",{}).get("result") or [None])[0]
-        if not data:
-            out["error"]="yahoo_no_daily_bars"; return out
-        tz=ZoneInfo((data.get("meta") or {}).get("exchangeTimezoneName") or "America/New_York")
-        q=((data.get("indicators") or {}).get("quote") or [{}])[0]
-        prices={}
-        for i,t in enumerate(data.get("timestamp") or []):
-            day=datetime.fromtimestamp(t,tz).date().isoformat()
-            if day<effective:continue
-            try:
-                high=float(q["high"][i]); low=float(q["low"][i]); close=float(q["close"][i])
-                if min(high,low,close)<=0:continue
-            except (IndexError,KeyError,TypeError,ValueError):continue
-            # Daily typical price is a transparent proxy because FINRA's daily
-            # aggregate contains volumes, not each short sale's execution price.
-            prices[day]=(high+low+close)/3.0
-
-        weighted=0.0; total=0.0; used=0
-        for day,sv in daily_short.items():
-            px=prices.get(day)
-            if px is None:continue
-            weighted+=px*sv; total+=sv; used+=1
-        if total<=0 or used==0:
-            out["error"]="no_overlapping_finra_yahoo_days"; return out
-        avg=weighted/total
-        current=QUOTES.get(symbol,{}).get("price")
-        try:current=float(current) if current is not None else None
-        except (TypeError,ValueError):current=None
-        out.update({"estimated_short_avg_price":round(avg,4),
-            "short_volume_used":round(total,2),"short_days_used":used,
-            "short_target_drop_pct":round((avg/current-1)*100,2) if current and current>0 else None,
-            "error":None})
-        return out
-    except Exception as exc:
-        out["error"]=type(exc).__name__+":"+str(exc)[:120]
-        return out
+        r=await client.get(f"https://finshort.com/{symbol}/short-interest",timeout=10)
+        if r.status_code==200:
+            text=BeautifulSoup(r.text,"html.parser").get_text(" ",strip=True)
+            # Public FINRA snapshot. Regexes intentionally anchor on the labels
+            # so unrelated percentages/numbers are never substituted.
+            m=re.search(r"% of Float\s*([0-9]+(?:\.[0-9]+)?)%",text,re.I)
+            if m:out["short_float_pct"]=float(m.group(1))
+            m=re.search(r"Short Interest\s*([0-9.,]+\s*[KMB]?)\s*(?:[+\-][0-9.]+%)?\s*Days to Cover\s*([0-9]+(?:\.[0-9]+)?)",text,re.I)
+            if m:
+                out["short_interest"]=number(m.group(1).replace(" ",""))
+                out["days_to_cover"]=float(m.group(2))
+            m=re.search(r"Days to Cover\s*([0-9]+(?:\.[0-9]+)?)\s*Short Pressure\s*([0-9]{1,3}(?:\.[0-9]+)?)",text,re.I)
+            if m:
+                out["days_to_cover"]=float(m.group(1))
+                v=float(m.group(2))
+                if 0<=v<=100:out["short_pressure"]=v
+            if any(out[k] is not None for k in ("short_interest","short_float_pct","days_to_cover","short_pressure")):
+                out["sources"].append("Finshort / FINRA")
+    except Exception:
+        pass
+    try:
+        r=await client.get(f"https://finshort.com/{symbol}/cost-to-borrow",timeout=10)
+        if r.status_code==200:
+            text=BeautifulSoup(r.text,"html.parser").get_text(" ",strip=True)
+            m=re.search(r"Momentum\s*([0-9]{1,3}(?:\.[0-9]+)?)\s*Persistence\s*([0-9]{1,3}(?:\.[0-9]+)?)",text,re.I)
+            if m:
+                mom,per=float(m.group(1)),float(m.group(2))
+                if 0<=mom<=100:out["borrow_momentum"]=mom
+                if 0<=per<=100:out["borrow_persistence"]=per
+                if "Finshort" not in out["sources"]:out["sources"].append("Finshort")
+    except Exception:
+        pass
+    try:
+        r=await client.get("https://www.buyins.net/tools/symbol_stats.php",params={"sym":symbol},timeout=10)
+        if r.status_code==200:
+            text=BeautifulSoup(r.text,"html.parser").get_text(" ",strip=True)
+            m=re.search(r"SqueezeTrigger(?:\s+Price)?\s*[:$ ]+\s*\$?([0-9]+(?:\.[0-9]+)?)",text,re.I)
+            if m:
+                v=float(m.group(1))
+                if v>0:out["short_level"]=v;out["sources"].append("BUYINS")
+    except Exception:
+        pass
+    return out
 
 async def short_analysis_loop():
-    # Cover the full universe in small batches, then refresh estimates.
-    # Core IBKR borrow collection is completely independent of this worker.
-    await asyncio.sleep(20)
+    # Slow rotating enrichment: two public analysis pages per symbol at most.
+    # Missing/blocked data stays None; never fabricate a score or price level.
+    await asyncio.sleep(90)
     cursor=0
     headers={"User-Agent":"Mozilla/5.0 SnipeLab/2.0"}
     async with httpx.AsyncClient(follow_redirects=True,headers=headers) as client:
         while True:
-            syms=sorted(s for s,m in UNIVERSE.items() if m.get("effective_date"))
+            syms=sorted(UNIVERSE)
             if not syms:
                 await asyncio.sleep(60); continue
-            if cursor>=len(syms):cursor=0
             batch=syms[cursor:cursor+8]
+            if not batch: cursor=0; continue
             for sym in batch:
                 SHORT_ANALYSIS[sym]=await fetch_short_analysis(client,sym)
-                await asyncio.sleep(0.35)
-            cursor+=len(batch)
-            if cursor>=len(syms):
-                cursor=0
-                await asyncio.sleep(900)
-            else:
-                await asyncio.sleep(3)
+                await asyncio.sleep(0.5)
+            cursor=(cursor+len(batch))%len(syms)
+            await asyncio.sleep(300)
 
 async def analytics_loop():
     await asyncio.sleep(40)

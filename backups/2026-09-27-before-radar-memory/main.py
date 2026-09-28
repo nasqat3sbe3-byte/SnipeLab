@@ -10,7 +10,6 @@ from datetime import datetime, timezone, date
 from zoneinfo import ZoneInfo
 
 import httpx
-import websockets
 from history import worker as historical_worker
 import storage
 from event_rules import borrow_events, ready_event, worker_health
@@ -51,15 +50,12 @@ TRAIL = {}
 HALTS = {}
 NEWS = {}
 HISTORY = {}
-BORROW_HISTORY = {}
-RADAR_MEMORY = {}
-SHORT_ANALYSIS = {}
 STATE_FILE = Path(os.environ.get("SNIPELAB_STATE_FILE","/tmp/snipelab_state.json"))
 _LAST_SAVE = 0.0
 
 def load_persistent_state():
     try:
-        d=storage.load(("universe","quotes","analytics","borrow","history","events","halts","borrow_history","radar_memory"))
+        d=storage.load(("universe","quotes","analytics","borrow","history","events","halts"))
         STATE["restored_from_sqlite"]=bool(d)
         STATE["restored_at"]=utcnow().isoformat() if d else None
         if not d and STATE_FILE.exists():d=json.loads(STATE_FILE.read_text("utf-8"))
@@ -70,8 +66,6 @@ def load_persistent_state():
         BORROW.update(d.get("borrow") or {})
         HISTORY.update(d.get("history") or {})
         EVENTS.extend((d.get("events") or [])[:100])
-        BORROW_HISTORY.update(d.get("borrow_history") or {})
-        RADAR_MEMORY.update(d.get("radar_memory") or {})
     except Exception as exc:
         STATE["persistence_error"]=f"load {type(exc).__name__}: {str(exc)[:100]}"
 
@@ -80,7 +74,7 @@ def save_persistent_state(force=False):
     now=time.time()
     if not force and now-_LAST_SAVE<60:return
     try:
-        storage.save({"universe":UNIVERSE,"quotes":QUOTES,"analytics":ANALYTICS,"borrow":BORROW,"history":HISTORY,"events":EVENTS[:100],"halts":HALTS,"borrow_history":BORROW_HISTORY,"radar_memory":RADAR_MEMORY})
+        storage.save({"universe":UNIVERSE,"quotes":QUOTES,"analytics":ANALYTICS,"borrow":BORROW,"history":HISTORY,"events":EVENTS[:100],"halts":HALTS})
         _LAST_SAVE=now
         STATE["last_state_save"]=utcnow().isoformat(); STATE["persistence_error"]=None
     except Exception as exc:
@@ -88,21 +82,8 @@ def save_persistent_state(force=False):
 
 def utcnow(): return datetime.now(timezone.utc)
 def add_event(symbol, kind, text, data=None):
-    data=data or {}
-    # Event Center dedupe: one logical alert per symbol/event/session. Repeated
-    # worker scans may update market data, but must not spam the same alert.
-    session=str(data.get("market_day") or data.get("halt_date") or data.get("at") or utcnow().date().isoformat())[:10]
-    if kind=="halt": dedupe=(symbol,kind,str(data.get("halt_date") or ""),str(data.get("halt_time") or ""),str(data.get("reason") or ""))
-    elif kind in {"price_25","available_10k","available_zero","ready","launched","ignition"}: dedupe=(symbol,kind,session)
-    else: dedupe=(symbol,kind,session,text)
-    for e in EVENTS:
-        if tuple(e.get("_dedupe") or ())==dedupe:return
-        # Backward-compatible protection for restored events created before _dedupe existed.
-        if e.get("symbol")==symbol and e.get("kind")==kind:
-            ed=e.get("data") or {};es=str(ed.get("market_day") or ed.get("halt_date") or e.get("at") or "")[:10]
-            if kind=="halt" and ed==data:return
-            if kind in {"price_25","available_10k","available_zero","ready","launched","ignition"} and es==session:return
-    EVENTS.insert(0,{"symbol":symbol,"kind":kind,"text":text,"at":utcnow().isoformat(),"data":data,"_dedupe":list(dedupe)})
+    if kind=="halt" and any(e.get("kind")=="halt" and e.get("symbol")==symbol and e.get("data")== (data or {}) for e in EVENTS):return
+    EVENTS.insert(0,{"symbol":symbol,"kind":kind,"text":text,"at":utcnow().isoformat(),"data":data or {}})
     del EVENTS[100:]
 
 async def heartbeat_loop():
@@ -376,30 +357,6 @@ def refresh_analytics():
             ANALYTICS[sym]={"symbol":sym,"active":False,"effective_date":eff,"price":price,"ignition":ignition}; continue
         st=readiness_state(meta,q,b,a)
         hist=HISTORY.get(sym,{})
-        if hist.get("verified") and b and b.get("available") is not None:
-            try:
-                av=float(b["available"]);rsi=float(hist["rsi_daily"])
-                dist=float(st["effective_distance_pct"]);sessions=int(st["effective_sessions"])
-                missing=[name for name,ok in (("الشورت",av<15000),("RSI",rsi<=35),
-                    ("نصف القمة",st["half_reached"] is True),("القاع",dist<=25),
-                    ("الثبات",sessions>=2)) if not ok]
-                stage="ready" if not missing else "radar" if len(missing)<=2 and av<=20000 and rsi<=40 and dist<=35 else "watch"
-                memory=RADAR_MEMORY.setdefault(sym,{"timeline":[],"first_radar":None,"first_ready":None})
-                prev=memory["timeline"][-1] if memory["timeline"] else None
-                if not prev or prev["stage"]!=stage or prev["missing"]!=missing:
-                    memory["timeline"].append({"at":utcnow().isoformat(),"stage":stage,"missing":missing,
-                        "price":price,"available":av,"rsi":rsi,"distance_pct":dist,"sessions":sessions})
-                    memory["timeline"]=memory["timeline"][-80:]
-                for name,active in (("radar",stage=="radar"),("ready",stage=="ready")):
-                    key="first_"+name
-                    if active and not memory[key]:
-                        memory[key]={"at":utcnow().isoformat(),"price":price,"high_observed":price,"low_observed":price,"last_observed":price}
-                    if memory[key]:
-                        rec=memory[key];rec["high_observed"]=max(rec["high_observed"],price)
-                        rec["low_observed"]=min(rec["low_observed"],price);rec["last_observed"]=price
-                        rec["last_at"]=utcnow().isoformat()
-            except (TypeError,ValueError,KeyError,OverflowError):
-                pass
         full=st["full"]; was_ready=bool(a.get("ready"))
         ready_at=a.get("ready_at"); ready_price=a.get("ready_price")
         if full and not was_ready:
@@ -442,108 +399,6 @@ def refresh_analytics():
             "max_rise_pct":round(max_rise,2) if max_rise is not None else None,"rise_pct":round(max_rise,2) if max_rise is not None else None,
             "ignition":ignition,"last_market_day":st["market_day"]}
 
-async def fetch_short_analysis(client, symbol):
-    """Estimate post-split average short-sale price from FINRA flow + Yahoo daily OHLC.
-
-    This is deliberately separate from IBKR Available/CTB/Rebate. FINRA daily
-    short-sale volume is transaction flow, not open short interest, so the
-    result is labelled an estimate rather than an actual open-position cost basis.
-    """
-    meta=UNIVERSE.get(symbol) or {}
-    effective=meta.get("effective_date")
-    out={"symbol":symbol,"estimated_short_avg_price":None,
-         "short_target_drop_pct":None,"short_volume_used":None,
-         "short_days_used":0,"method":"FINRA short volume × Yahoo daily typical price",
-         "source":"FINRA Reg SHO + Yahoo 1d","effective_date":effective,
-         "updated_at":utcnow().isoformat(),"error":None}
-    if not effective:
-        out["error"]="missing_effective_date"; return out
-    try:
-        # Public FINRA Reg SHO daily flow. One symbol request returns all
-        # reporting facilities; aggregate facilities by trade date.
-        payload={"limit":5000,
-          "fields":["tradeReportDate","securitiesInformationProcessorSymbolIdentifier","shortParQuantity"],
-          "compareFilters":[{"compareType":"equal",
-            "fieldName":"securitiesInformationProcessorSymbolIdentifier","fieldValue":symbol}]}
-        fr=await client.post("https://api.finra.org/data/group/otcMarket/name/regShoDaily",
-            json=payload,headers={"Accept":"application/json"},timeout=15)
-        if fr.status_code==204:
-            out["error"]="finra_no_rows"; return out
-        fr.raise_for_status()
-        daily_short={}
-        for row in fr.json():
-            day=str(row.get("tradeReportDate") or "")[:10]
-            if day<effective:continue
-            try:v=float(row.get("shortParQuantity") or 0)
-            except (TypeError,ValueError):continue
-            if v>0:daily_short[day]=daily_short.get(day,0.0)+v
-        if not daily_short:
-            out["error"]="finra_no_post_split_short_volume"; return out
-
-        start=int(datetime.combine(date.fromisoformat(effective),datetime.min.time(),timezone.utc).timestamp())-86400
-        yr=await client.get(YAHOO.format(symbol=symbol),params={
-            "period1":start,"period2":int(time.time())+86400,"interval":"1d","events":"history"},timeout=15)
-        yr.raise_for_status()
-        data=(yr.json().get("chart",{}).get("result") or [None])[0]
-        if not data:
-            out["error"]="yahoo_no_daily_bars"; return out
-        tz=ZoneInfo((data.get("meta") or {}).get("exchangeTimezoneName") or "America/New_York")
-        q=((data.get("indicators") or {}).get("quote") or [{}])[0]
-        prices={}
-        for i,t in enumerate(data.get("timestamp") or []):
-            day=datetime.fromtimestamp(t,tz).date().isoformat()
-            if day<effective:continue
-            try:
-                high=float(q["high"][i]); low=float(q["low"][i]); close=float(q["close"][i])
-                if min(high,low,close)<=0:continue
-            except (IndexError,KeyError,TypeError,ValueError):continue
-            # Daily typical price is a transparent proxy because FINRA's daily
-            # aggregate contains volumes, not each short sale's execution price.
-            prices[day]=(high+low+close)/3.0
-
-        weighted=0.0; total=0.0; used=0
-        for day,sv in daily_short.items():
-            px=prices.get(day)
-            if px is None:continue
-            weighted+=px*sv; total+=sv; used+=1
-        if total<=0 or used==0:
-            out["error"]="no_overlapping_finra_yahoo_days"; return out
-        avg=weighted/total
-        current=QUOTES.get(symbol,{}).get("price")
-        try:current=float(current) if current is not None else None
-        except (TypeError,ValueError):current=None
-        out.update({"estimated_short_avg_price":round(avg,4),
-            "short_volume_used":round(total,2),"short_days_used":used,
-            "short_target_drop_pct":round((avg/current-1)*100,2) if current and current>0 else None,
-            "error":None})
-        return out
-    except Exception as exc:
-        out["error"]=type(exc).__name__+":"+str(exc)[:120]
-        return out
-
-async def short_analysis_loop():
-    # Cover the full universe in small batches, then refresh estimates.
-    # Core IBKR borrow collection is completely independent of this worker.
-    await asyncio.sleep(20)
-    cursor=0
-    headers={"User-Agent":"Mozilla/5.0 SnipeLab/2.0"}
-    async with httpx.AsyncClient(follow_redirects=True,headers=headers) as client:
-        while True:
-            syms=sorted(s for s,m in UNIVERSE.items() if m.get("effective_date"))
-            if not syms:
-                await asyncio.sleep(60); continue
-            if cursor>=len(syms):cursor=0
-            batch=syms[cursor:cursor+8]
-            for sym in batch:
-                SHORT_ANALYSIS[sym]=await fetch_short_analysis(client,sym)
-                await asyncio.sleep(0.35)
-            cursor+=len(batch)
-            if cursor>=len(syms):
-                cursor=0
-                await asyncio.sleep(900)
-            else:
-                await asyncio.sleep(3)
-
 async def analytics_loop():
     await asyncio.sleep(40)
     while True:
@@ -583,20 +438,13 @@ async def borrow_loop():
         try:
             text=await asyncio.wait_for(asyncio.to_thread(download_ibkr),timeout=30)
             rows=parse_ibkr(text); now=utcnow().isoformat(); changed=0
-            if not rows:raise ValueError("IBKR returned zero valid USD rows; existing readings preserved")
             for sym in list(UNIVERSE):
                 new=rows.get(sym)
-                if new is None:continue
+                if not new:continue
                 new={**new,"received_at":now}; old=BORROW.get(sym)
                 for ev in borrow_events(sym,old,new):
                     changed+=1; add_event(*ev)
                 BORROW[sym]=new
-                history=BORROW_HISTORY.setdefault(sym,[])
-                sample={"at":now,"available":new["available"],"ctb":new["ctb"],"rebate":new["rebate"],"source":new["source"]}
-                if not history or any(history[-1].get(k)!=sample[k] for k in ("available","ctb","rebate")) or (datetime.fromisoformat(now)-datetime.fromisoformat(history[-1]["at"])).total_seconds()>=3600:
-                    history.append(sample)
-                cutoff=time.time()-3*86400
-                history[:]=[p for p in history if datetime.fromisoformat(p["at"]).timestamp()>=cutoff][-300:]
             STATE["borrow_scan_count"]+=1; STATE["last_borrow_scan"]=now; STATE["borrow_ok"]=sum(1 for s in UNIVERSE if s in rows)
             STATE["borrow_missing"]=max(0,len(UNIVERSE)-STATE["borrow_ok"]); STATE["last_borrow_error"]=None
         except Exception as exc: STATE["last_borrow_error"]=f"{type(exc).__name__}: {str(exc)[:120]}"
@@ -650,7 +498,7 @@ async def legacy_news_loop_disabled():
 @app.on_event("startup")
 async def startup():
     load_persistent_state()
-    asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(short_analysis_loop()); asyncio.create_task(finnhub_live_loop()); asyncio.create_task(halt_loop()); asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
+    asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(halt_loop()); asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
 
 @app.get("/")
 async def root():
@@ -765,30 +613,6 @@ async def data_freshness_report():
             "last_borrow_error":STATE["last_borrow_error"],
             "quote_max_age_seconds":900,"borrow_max_age_seconds":1200}
 
-@app.get("/api/radar-memory/{symbol}")
-async def radar_memory(symbol: str):
-    symbol=re.sub(r"[^A-Z0-9.-]","",symbol.upper())[:12]
-    return {"symbol":symbol,"memory":RADAR_MEMORY.get(symbol,{}),"note":"Only observed quotes since feature deployment; not intraday high/low."}
-
-@app.get("/api/lab")
-async def signal_lab():
-    signals=[]
-    for sym,m in RADAR_MEMORY.items():
-        for stage in ("radar","ready"):
-            rec=m.get("first_"+stage)
-            if rec and rec.get("price"):
-                base=rec["price"]
-                signals.append({"symbol":sym,"stage":stage,**rec,
-                    "max_observed_pct":round((rec["high_observed"]/base-1)*100,2),
-                    "min_observed_pct":round((rec["low_observed"]/base-1)*100,2)})
-    return {"count":len(signals),"signals":sorted(signals,key=lambda x:x["at"],reverse=True)[:200],
-        "note":"Observed quote snapshots only, not historical backtest or trades."}
-
-@app.get("/api/borrow-history/{symbol}")
-async def borrow_history(symbol: str):
-    symbol=re.sub(r"[^A-Z0-9.-]","",symbol.upper())[:12]
-    return {"symbol":symbol,"period_days":3,"source":"IBKR public FTP","last_scan":STATE.get("last_borrow_scan"),"scan_error":STATE.get("last_borrow_error"),"last_reading":BORROW.get(symbol),"snapshots":BORROW_HISTORY.get(symbol,[]),"note":"Recording starts after deployment; no invented historical values."}
-
 @app.get("/api/dashboard")
 async def dashboard_data():
     # Dashboard must be read-only. Recomputing the entire universe inside
@@ -822,8 +646,7 @@ async def dashboard_data():
             "top_calculator_version":h.get("top_calculator_version",0),
             "top_10_source":h.get("top_10_source"),
             "top_10_provisional":bool(h.get("top_10_provisional")),
-            "history_status":h.get("error") or ("verified" if h.get("verified") else "pending"),
-            "short_analysis":SHORT_ANALYSIS.get(sym,{})}
+            "history_status":h.get("error") or ("verified" if h.get("verified") else "pending")}
         # A same-day live rise is a separate, explicitly provisional measure:
         # never mix it silently with the completed-session low-to-high TOP.
         q=QUOTES.get(sym) or {}
@@ -994,244 +817,6 @@ async def history_audit():
         "quality_examples":[{"symbol":x["symbol"],"warnings":x["quality_warnings"]}
             for x in rows if x["quality_warnings"]][:20],
         "note":"Completed fields are not independent price validation."}
-
-FINNHUB_PROBE = {"status":"idle","mode":None,"started_at":None,"finished_at":None,"requested":0,"subscribed":0,"symbols_with_trades":0,"trade_messages":0,"trades":0,"errors":[],"seen_symbols":[],"last_trade_at":None,"limit_results":[],"max_without_limit_error":None}
-_FINNHUB_PROBE_TASK = None
-
-def _finnhub_token():
-    return os.environ.get("FINNHUB_API_KEY") or os.environ.get("FINNHUB_TOKEN")
-
-async def _finnhub_limit_trial(token, syms, count, settle=2.0):
-    errors=[];seen=set();trade_messages=trades=0
-    async with websockets.connect("wss://ws.finnhub.io?token="+token,open_timeout=15,ping_interval=20,ping_timeout=20,max_size=2_000_000) as ws:
-        for sym in syms[:count]:
-            await ws.send(json.dumps({"type":"subscribe","symbol":sym}))
-            await asyncio.sleep(0.015)
-        deadline=time.monotonic()+settle
-        while time.monotonic()<deadline:
-            try: raw=await asyncio.wait_for(ws.recv(),timeout=min(.5,max(.05,deadline-time.monotonic())))
-            except asyncio.TimeoutError: continue
-            try: msg=json.loads(raw)
-            except Exception: continue
-            if msg.get("type")=="error":
-                err=str(msg.get("msg") or msg)[:300]
-                if err not in errors:errors.append(err)
-            elif msg.get("type")=="trade":
-                trade_messages+=1;data=msg.get("data") or [];trades+=len(data)
-                seen.update(str(x.get("s") or "").upper() for x in data if x.get("s"))
-    too_many=any("too many symbols" in e.lower() for e in errors)
-    return {"count":count,"accepted":not too_many,"too_many_symbols":too_many,"errors":errors,"symbols_with_trades":len(seen),"trade_messages":trade_messages,"trades":trades}
-
-FINNHUB_LIVE={"status":"idle","connected":False,"selected":[],"ready_slots":[],"hot_slots":[],"reserve_slots":2,"updates":0,"last_update":None,"error":None}
-
-def _live_rise_pct(sym):
-    q=QUOTES.get(sym) or {}
-    try:
-        p=float(q.get("price"));ref=float(q.get("previous_close"));return (p/ref-1)*100 if ref>0 else None
-    except (TypeError,ValueError,ZeroDivisionError):return None
-
-def select_finnhub_live_symbols():
-    # 53 proven account slots: 36 readiness + 15 movers >=30% + 2 reserve.
-    ranked=[]
-    for sym,a in ANALYTICS.items():
-        if sym not in UNIVERSE or not a.get("active"):continue
-        ranked.append((-(float(a.get("readiness_pct") or a.get("score") or 0)),int(a.get("missing_count") or 99),sym))
-    ready=[x[2] for x in sorted(ranked)[:36]]
-    hot=[]
-    for sym in UNIVERSE:
-        pct=_live_rise_pct(sym)
-        if pct is not None and pct>=30 and sym not in ready:hot.append((pct,sym))
-    hot=[sym for pct,sym in sorted(hot,reverse=True)[:15]]
-    return ready,hot,ready+hot
-
-async def finnhub_live_loop():
-    await asyncio.sleep(55)
-    token=_finnhub_token()
-    if not token:FINNHUB_LIVE.update(status="disabled",error="Finnhub key missing");return
-    while True:
-        try:
-            FINNHUB_LIVE.update(status="connecting",connected=False,error=None)
-            async with websockets.connect("wss://ws.finnhub.io?token="+token,open_timeout=15,ping_interval=20,ping_timeout=20,max_size=2_000_000) as ws:
-                active=set();FINNHUB_LIVE.update(status="running",connected=True)
-                while True:
-                    ready,hot,wanted=select_finnhub_live_symbols();wanted=set(wanted)
-                    for sym in sorted(active-wanted):await ws.send(json.dumps({"type":"unsubscribe","symbol":sym}));active.discard(sym)
-                    for sym in sorted(wanted-active):await ws.send(json.dumps({"type":"subscribe","symbol":sym}));active.add(sym);await asyncio.sleep(.015)
-                    FINNHUB_LIVE["selected"]=sorted(active);FINNHUB_LIVE["ready_slots"]=ready;FINNHUB_LIVE["hot_slots"]=hot
-                    try:raw=await asyncio.wait_for(ws.recv(),timeout=2)
-                    except asyncio.TimeoutError:continue
-                    try:msg=json.loads(raw)
-                    except Exception:continue
-                    if msg.get("type")=="error":FINNHUB_LIVE["error"]=str(msg.get("msg") or msg)[:300];continue
-                    if msg.get("type")!="trade":continue
-                    for trade in msg.get("data") or []:
-                        sym=str(trade.get("s") or "").upper()
-                        if sym not in active or sym not in UNIVERSE:continue
-                        try:p=float(trade.get("p"));ts=int(trade.get("t") or 0)
-                        except (TypeError,ValueError):continue
-                        if p<=0:continue
-                        q=QUOTES.get(sym) or {};old_ts=q.get("market_timestamp")
-                        market_ts=datetime.fromtimestamp(ts/1000,tz=timezone.utc).isoformat() if ts else utcnow().isoformat()
-                        # Preserve Yahoo session fields used by analytics; Finnhub supplies the tick price/time.
-                        QUOTES[sym]={**q,"symbol":sym,"price":p,"market_timestamp":market_ts,"received_at":utcnow().isoformat(),"source":"finnhub_live","previous_source":q.get("source")}
-                        FINNHUB_LIVE["updates"]+=1;FINNHUB_LIVE["last_update"]=utcnow().isoformat()
-        except Exception as exc:
-            FINNHUB_LIVE.update(status="reconnecting",connected=False,error=type(exc).__name__+": "+str(exc)[:250]);await asyncio.sleep(10)
-
-FINNHUB_TICKER_PROBE={"status":"idle","started_at":None,"finished_at":None,"symbol":"FFAI","messages":0,"trade_messages":0,"trades":0,"last_price":None,"last_trade_at":None,"message_types":[],"raw_samples":[],"errors":[]}
-_FINNHUB_TICKER_TASK=None
-
-async def run_finnhub_ticker_probe(seconds=30):
-    global FINNHUB_TICKER_PROBE
-    token=_finnhub_token();seconds=max(10,min(int(seconds),90))
-    report={"status":"running","started_at":utcnow().isoformat(),"finished_at":None,"symbol":"FFAI","seconds":seconds,"messages":0,"trade_messages":0,"trades":0,"last_price":None,"last_trade_at":None,"message_types":[],"raw_samples":[],"errors":[]}
-    FINNHUB_TICKER_PROBE=report
-    if not token:report.update(status="error",finished_at=utcnow().isoformat(),errors=["Finnhub key missing"]);return
-    # Finnhub permits one WebSocket per key. Temporarily close the production
-    # live socket so this isolated FFAI diagnostic can own that connection.
-    FINNHUB_LIVE["probe_pause"]=True
-    deadline=time.monotonic()+seconds
-    try:
-        await asyncio.sleep(3)
-        async with websockets.connect("wss://ws.finnhub.io?token="+token,open_timeout=15,ping_interval=20,ping_timeout=20,max_size=2_000_000) as ws:
-            await ws.send(json.dumps({"type":"subscribe","symbol":"FFAI"}))
-            while time.monotonic()<deadline:
-                try:raw=await asyncio.wait_for(ws.recv(),timeout=min(2,max(.1,deadline-time.monotonic())))
-                except asyncio.TimeoutError:continue
-                report["messages"]+=1
-                if len(report["raw_samples"])<8:report["raw_samples"].append(str(raw)[:1000])
-                try:msg=json.loads(raw)
-                except Exception:continue
-                typ=str(msg.get("type") or "unknown");
-                if typ not in report["message_types"]:report["message_types"].append(typ)
-                if typ=="error":
-                    err=str(msg.get("msg") or msg)[:300]
-                    if err not in report["errors"]:report["errors"].append(err)
-                elif typ=="trade":
-                    data=msg.get("data") or [];report["trade_messages"]+=1;report["trades"]+=len(data)
-                    for t in data:
-                        if str(t.get("s") or "").upper()=="FFAI":
-                            report["last_price"]=t.get("p");report["last_trade_at"]=t.get("t")
-        report["status"]="complete"
-    except Exception as exc:
-        report["status"]="error";report["errors"].append(type(exc).__name__+": "+str(exc)[:300])
-    finally:
-        report["finished_at"]=utcnow().isoformat();FINNHUB_LIVE["probe_pause"]=False
-
-async def run_finnhub_limit_probe():
-    global FINNHUB_PROBE
-    token=_finnhub_token();syms=sorted(UNIVERSE);started=utcnow().isoformat()
-    report={"status":"running","mode":"limit_single_socket","started_at":started,"finished_at":None,"requested":len(syms),"subscribed":0,"symbols_with_trades":0,"trade_messages":0,"trades":0,"errors":[],"seen_symbols":[],"last_trade_at":None,"limit_results":[],"max_without_limit_error":None,"first_rejected_at":None}
-    FINNHUB_PROBE=report
-    if not token:
-        report["status"]="error";report["errors"]=["Missing FINNHUB_API_KEY (or FINNHUB_TOKEN) environment variable"];report["finished_at"]=utcnow().isoformat();return
-    seen=set();accepted=0
-    try:
-        # Deliberately keep ONE WebSocket open for the whole test. This avoids
-        # confusing Finnhub's connection/rate limit (HTTP 429) with its symbol cap.
-        async with websockets.connect("wss://ws.finnhub.io?token="+token,open_timeout=15,ping_interval=20,ping_timeout=20,max_size=2_000_000) as ws:
-            for idx,sym in enumerate(syms,1):
-                await ws.send(json.dumps({"type":"subscribe","symbol":sym}))
-                report["subscribed"]=idx
-                rejected=False;other_errors=[]
-                # Give the server a short chance to reject this exact addition.
-                deadline=time.monotonic()+0.12
-                while time.monotonic()<deadline:
-                    try:raw=await asyncio.wait_for(ws.recv(),timeout=max(.01,deadline-time.monotonic()))
-                    except asyncio.TimeoutError:break
-                    try:msg=json.loads(raw)
-                    except Exception:continue
-                    if msg.get("type")=="error":
-                        err=str(msg.get("msg") or msg)[:300]
-                        if "too many symbols" in err.lower():rejected=True
-                        elif err not in other_errors:other_errors.append(err)
-                    elif msg.get("type")=="trade":
-                        report["trade_messages"]+=1;data=msg.get("data") or [];report["trades"]+=len(data)
-                        seen.update(str(x.get("s") or "").upper() for x in data if x.get("s"));report["last_trade_at"]=utcnow().isoformat()
-                if other_errors:
-                    for err in other_errors:
-                        if err not in report["errors"]:report["errors"].append(err)
-                if rejected:
-                    report["first_rejected_at"]=idx;report["limit_results"].append({"count":idx,"symbol":sym,"accepted":False,"too_many_symbols":True});break
-                accepted=idx
-                if idx in (10,20,30,40,50,75,100,150,200,len(syms)):
-                    report["limit_results"].append({"count":idx,"symbol":sym,"accepted":True,"too_many_symbols":False})
-                report["max_without_limit_error"]=accepted;report["symbols_with_trades"]=len(seen);report["seen_symbols"]=sorted(seen)
-                await asyncio.sleep(.02)
-            # Drain briefly so a delayed rejection is not missed.
-            drain_deadline=time.monotonic()+2
-            while time.monotonic()<drain_deadline and report["first_rejected_at"] is None:
-                try:raw=await asyncio.wait_for(ws.recv(),timeout=.25)
-                except asyncio.TimeoutError:continue
-                try:msg=json.loads(raw)
-                except Exception:continue
-                if msg.get("type")=="error" and "too many symbols" in str(msg.get("msg") or msg).lower():
-                    report["first_rejected_at"]=report["subscribed"];report["max_without_limit_error"]=max(0,report["subscribed"]-1);report["limit_results"].append({"count":report["subscribed"],"accepted":False,"too_many_symbols":True,"delayed":True});break
-                if msg.get("type")=="trade":
-                    report["trade_messages"]+=1;data=msg.get("data") or [];report["trades"]+=len(data);seen.update(str(x.get("s") or "").upper() for x in data if x.get("s"))
-    except Exception as exc:
-        report["errors"].append(type(exc).__name__+": "+str(exc)[:300])
-    report["symbols_with_trades"]=len(seen);report["seen_symbols"]=sorted(seen);report["finished_at"]=utcnow().isoformat();report["status"]="complete" if not report["errors"] else "complete_with_errors"
-
-async def run_finnhub_probe(seconds=120):
-    global FINNHUB_PROBE
-    token=_finnhub_token();syms=sorted(UNIVERSE)
-    report={"status":"running","mode":"coverage","started_at":utcnow().isoformat(),"finished_at":None,"requested":len(syms),"subscribed":0,"symbols_with_trades":0,"trade_messages":0,"trades":0,"errors":[],"seen_symbols":[],"last_trade_at":None,"limit_results":[],"max_without_limit_error":None};FINNHUB_PROBE=report
-    if not token:
-        report["status"]="error";report["errors"]=["Missing FINNHUB_API_KEY (or FINNHUB_TOKEN) environment variable"];report["finished_at"]=utcnow().isoformat();return
-    seen=set()
-    try:
-        async with websockets.connect("wss://ws.finnhub.io?token="+token,open_timeout=15,ping_interval=20,ping_timeout=20,max_size=2_000_000) as ws:
-            for sym in syms:
-                await ws.send(json.dumps({"type":"subscribe","symbol":sym}));report["subscribed"]+=1;await asyncio.sleep(.01)
-            deadline=time.monotonic()+max(30,min(int(seconds),600))
-            while time.monotonic()<deadline:
-                try:raw=await asyncio.wait_for(ws.recv(),timeout=min(10,max(.1,deadline-time.monotonic())))
-                except asyncio.TimeoutError:continue
-                try:msg=json.loads(raw)
-                except Exception:continue
-                if msg.get("type")=="trade":
-                    report["trade_messages"]+=1;data=msg.get("data") or [];report["trades"]+=len(data)
-                    for trade in data:
-                        sym=str(trade.get("s") or "").upper()
-                        if sym in UNIVERSE:seen.add(sym)
-                    report["last_trade_at"]=utcnow().isoformat()
-                elif msg.get("type")=="error":
-                    err=str(msg.get("msg") or msg)[:300]
-                    if err not in report["errors"]:report["errors"].append(err)
-                report["symbols_with_trades"]=len(seen);report["seen_symbols"]=sorted(seen)
-    except Exception as exc:report["errors"].append(type(exc).__name__+": "+str(exc)[:300])
-    report["symbols_with_trades"]=len(seen);report["seen_symbols"]=sorted(seen);report["finished_at"]=utcnow().isoformat();report["status"]="complete" if not report["errors"] else "complete_with_errors"
-
-@app.post("/api/finnhub-probe/start")
-async def start_finnhub_probe(seconds: int=120):
-    global _FINNHUB_PROBE_TASK
-    if _FINNHUB_PROBE_TASK and not _FINNHUB_PROBE_TASK.done():return {"started":False,"reason":"probe already running","report":FINNHUB_PROBE}
-    _FINNHUB_PROBE_TASK=asyncio.create_task(run_finnhub_probe(seconds));return {"started":True,"mode":"coverage","seconds":max(30,min(int(seconds),600)),"universe":len(UNIVERSE)}
-
-@app.post("/api/finnhub-probe/ffai")
-async def start_finnhub_ffai_probe(seconds: int=30):
-    global _FINNHUB_TICKER_TASK
-    if _FINNHUB_TICKER_TASK and not _FINNHUB_TICKER_TASK.done():return {"started":False,"reason":"FFAI probe already running","report":FINNHUB_TICKER_PROBE}
-    _FINNHUB_TICKER_TASK=asyncio.create_task(run_finnhub_ticker_probe(seconds));return {"started":True,"symbol":"FFAI","seconds":max(10,min(int(seconds),90))}
-
-@app.get("/api/finnhub-probe/ffai")
-async def finnhub_ffai_probe_status():
-    return {**FINNHUB_TICKER_PROBE,"key_configured":bool(_finnhub_token())}
-
-@app.post("/api/finnhub-probe/limit")
-async def start_finnhub_limit_probe():
-    global _FINNHUB_PROBE_TASK
-    if _FINNHUB_PROBE_TASK and not _FINNHUB_PROBE_TASK.done():return {"started":False,"reason":"probe already running","report":FINNHUB_PROBE}
-    _FINNHUB_PROBE_TASK=asyncio.create_task(run_finnhub_limit_probe());return {"started":True,"mode":"limit","universe":len(UNIVERSE),"note":"Tests progressively, then binary-searches the exact symbol boundary."}
-
-@app.get("/api/finnhub-probe")
-async def finnhub_probe_status():
-    return {**FINNHUB_PROBE,"universe_now":len(UNIVERSE),"key_configured":bool(_finnhub_token()),"note":"Limit mode measures subscription rejection; trade activity is not required to identify the cap."}
-
-@app.get("/api/finnhub-live")
-async def finnhub_live_status():
-    return {**FINNHUB_LIVE,"selected_count":len(FINNHUB_LIVE.get("selected") or []),"ready_count":len(FINNHUB_LIVE.get("ready_slots") or []),"hot_count":len(FINNHUB_LIVE.get("hot_slots") or []),"capacity":53,"allocation":{"ready":36,"hot_30pct":15,"reserve":2}}
 
 @app.get("/api/diagnostics/{symbol}")
 async def ticker_diagnostics(symbol: str):
