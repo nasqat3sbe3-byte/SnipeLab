@@ -463,9 +463,9 @@ async def fetch_short_analysis(client, symbol):
             text=BeautifulSoup(r.text,"html.parser").get_text(" ",strip=True)
             # Public FINRA snapshot. Regexes intentionally anchor on the labels
             # so unrelated percentages/numbers are never substituted.
-            m=re.search(r"% of Float\s*([0-9]+(?:\.[0-9]+)?)%",text,re.I)
+            m=re.search(r"([0-9]+(?:\.[0-9]+)?)%\s*of Float",text,re.I)
             if m:out["short_float_pct"]=float(m.group(1))
-            m=re.search(r"Short Interest\s*([0-9.,]+\s*[KMB]?)\s*(?:[+\-][0-9.]+%)?\s*Days to Cover\s*([0-9]+(?:\.[0-9]+)?)",text,re.I)
+            m=re.search(r"([0-9.,]+\s*[KMB]?)\s*(?:[+\-][0-9.]+%)?\s*Short Interest\s*([0-9]+(?:\.[0-9]+)?)\s*Days to Cover",text,re.I)
             if m:
                 out["short_interest"]=number(m.group(1).replace(" ",""))
                 out["days_to_cover"]=float(m.group(2))
@@ -482,7 +482,7 @@ async def fetch_short_analysis(client, symbol):
         r=await client.get(f"https://finshort.com/{symbol}/cost-to-borrow",timeout=10)
         if r.status_code==200:
             text=BeautifulSoup(r.text,"html.parser").get_text(" ",strip=True)
-            m=re.search(r"Momentum\s*([0-9]{1,3}(?:\.[0-9]+)?)\s*Persistence\s*([0-9]{1,3}(?:\.[0-9]+)?)",text,re.I)
+            m=re.search(r"([0-9]{1,3}(?:\.[0-9]+)?)\s*Momentum\s*([0-9]{1,3}(?:\.[0-9]+)?)\s*Persistence",text,re.I)
             if m:
                 mom,per=float(m.group(1)),float(m.group(2))
                 if 0<=mom<=100:out["borrow_momentum"]=mom
