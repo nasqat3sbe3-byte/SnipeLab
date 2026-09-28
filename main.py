@@ -53,6 +53,7 @@ NEWS = {}
 HISTORY = {}
 BORROW_HISTORY = {}
 RADAR_MEMORY = {}
+SHORT_ANALYSIS = {}
 STATE_FILE = Path(os.environ.get("SNIPELAB_STATE_FILE","/tmp/snipelab_state.json"))
 _LAST_SAVE = 0.0
 
@@ -441,6 +442,50 @@ def refresh_analytics():
             "max_rise_pct":round(max_rise,2) if max_rise is not None else None,"rise_pct":round(max_rise,2) if max_rise is not None else None,
             "ignition":ignition,"last_market_day":st["market_day"]}
 
+async def fetch_short_analysis(client, symbol):
+    """Optional analysis layer only. Never replaces IBKR Available/CTB/Rebate."""
+    out={"symbol":symbol,"short_pressure":None,"short_level":None,"sources":[],"updated_at":utcnow().isoformat()}
+    try:
+        r=await client.get(f"https://finshort.com/{symbol}/short-interest",timeout=10)
+        if r.status_code==200:
+            text=BeautifulSoup(r.text,"html.parser").get_text(" ",strip=True)
+            m=re.search(r"Short Pressure\s*([0-9]{1,3}(?:\.[0-9]+)?)",text,re.I)
+            if m:
+                v=float(m.group(1))
+                if 0<=v<=100: out["short_pressure"]=v; out["sources"].append("Finshort")
+    except Exception:
+        pass
+    try:
+        r=await client.get("https://www.buyins.net/tools/symbol_stats.php",params={"sym":symbol},timeout=10)
+        if r.status_code==200:
+            text=BeautifulSoup(r.text,"html.parser").get_text(" ",strip=True)
+            m=re.search(r"SqueezeTrigger(?:\s+Price)?\s*[:$ ]+\s*\$?([0-9]+(?:\.[0-9]+)?)",text,re.I)
+            if m:
+                v=float(m.group(1))
+                if v>0: out["short_level"]=v; out["sources"].append("BUYINS")
+    except Exception:
+        pass
+    return out
+
+async def short_analysis_loop():
+    # Slow rotating enrichment: two public analysis pages per symbol at most.
+    # Missing/blocked data stays None; never fabricate a score or price level.
+    await asyncio.sleep(90)
+    cursor=0
+    headers={"User-Agent":"Mozilla/5.0 SnipeLab/2.0"}
+    async with httpx.AsyncClient(follow_redirects=True,headers=headers) as client:
+        while True:
+            syms=sorted(UNIVERSE)
+            if not syms:
+                await asyncio.sleep(60); continue
+            batch=syms[cursor:cursor+8]
+            if not batch: cursor=0; continue
+            for sym in batch:
+                SHORT_ANALYSIS[sym]=await fetch_short_analysis(client,sym)
+                await asyncio.sleep(0.5)
+            cursor=(cursor+len(batch))%len(syms)
+            await asyncio.sleep(300)
+
 async def analytics_loop():
     await asyncio.sleep(40)
     while True:
@@ -547,7 +592,7 @@ async def legacy_news_loop_disabled():
 @app.on_event("startup")
 async def startup():
     load_persistent_state()
-    asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(finnhub_live_loop()); asyncio.create_task(halt_loop()); asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
+    asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(short_analysis_loop()); asyncio.create_task(finnhub_live_loop()); asyncio.create_task(halt_loop()); asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
 
 @app.get("/")
 async def root():
@@ -719,7 +764,8 @@ async def dashboard_data():
             "top_calculator_version":h.get("top_calculator_version",0),
             "top_10_source":h.get("top_10_source"),
             "top_10_provisional":bool(h.get("top_10_provisional")),
-            "history_status":h.get("error") or ("verified" if h.get("verified") else "pending")}
+            "history_status":h.get("error") or ("verified" if h.get("verified") else "pending"),
+            "short_analysis":SHORT_ANALYSIS.get(sym,{})}
         # A same-day live rise is a separate, explicitly provisional measure:
         # never mix it silently with the completed-session low-to-high TOP.
         q=QUOTES.get(sym) or {}
