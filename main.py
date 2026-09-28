@@ -505,7 +505,7 @@ async def fetch_short_analysis(client, symbol):
 async def short_analysis_loop():
     # Slow rotating enrichment: two public analysis pages per symbol at most.
     # Missing/blocked data stays None; never fabricate a score or price level.
-    await asyncio.sleep(90)
+    await asyncio.sleep(12)
     cursor=0
     headers={"User-Agent":"Mozilla/5.0 SnipeLab/2.0"}
     async with httpx.AsyncClient(follow_redirects=True,headers=headers) as client:
@@ -513,13 +513,13 @@ async def short_analysis_loop():
             syms=sorted(UNIVERSE)
             if not syms:
                 await asyncio.sleep(60); continue
-            batch=syms[cursor:cursor+8]
+            batch=syms[cursor:cursor+24]
             if not batch: cursor=0; continue
             for sym in batch:
                 SHORT_ANALYSIS[sym]=await fetch_short_analysis(client,sym)
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.15)
             cursor=(cursor+len(batch))%len(syms)
-            await asyncio.sleep(300)
+            await asyncio.sleep(8)
 
 async def analytics_loop():
     await asyncio.sleep(40)
