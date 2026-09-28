@@ -908,33 +908,57 @@ async def _finnhub_limit_trial(token, syms, count, settle=2.0):
 async def run_finnhub_limit_probe():
     global FINNHUB_PROBE
     token=_finnhub_token();syms=sorted(UNIVERSE);started=utcnow().isoformat()
-    report={"status":"running","mode":"limit","started_at":started,"finished_at":None,"requested":len(syms),"subscribed":0,"symbols_with_trades":0,"trade_messages":0,"trades":0,"errors":[],"seen_symbols":[],"last_trade_at":None,"limit_results":[],"max_without_limit_error":None}
+    report={"status":"running","mode":"limit_single_socket","started_at":started,"finished_at":None,"requested":len(syms),"subscribed":0,"symbols_with_trades":0,"trade_messages":0,"trades":0,"errors":[],"seen_symbols":[],"last_trade_at":None,"limit_results":[],"max_without_limit_error":None,"first_rejected_at":None}
     FINNHUB_PROBE=report
     if not token:
         report["status"]="error";report["errors"]=["Missing FINNHUB_API_KEY (or FINNHUB_TOKEN) environment variable"];report["finished_at"]=utcnow().isoformat();return
-    # One socket at a time: Finnhub documents one WebSocket connection per API key.
-    # Coarse steps find the first rejection; binary search then finds the exact boundary.
-    last_ok=0;first_bad=None
+    seen=set();accepted=0
     try:
-        for count in [10,20,30,40,50,75,100,150,200,len(syms)]:
-            if count>len(syms) or count<=last_ok:continue
-            trial=await _finnhub_limit_trial(token,syms,count);report["limit_results"].append(trial);report["subscribed"]=count
-            if trial["too_many_symbols"]:first_bad=count;break
-            last_ok=count
-            await asyncio.sleep(.5)
-        if first_bad is not None:
-            lo=last_ok+1;hi=first_bad-1
-            while lo<=hi:
-                mid=(lo+hi)//2
-                trial=await _finnhub_limit_trial(token,syms,mid);report["limit_results"].append(trial);report["subscribed"]=mid
-                if trial["too_many_symbols"]:hi=mid-1
-                else:last_ok=mid;lo=mid+1
-                await asyncio.sleep(.5)
-        report["max_without_limit_error"]=last_ok
-        report["limit_results"]=sorted(report["limit_results"],key=lambda x:x["count"])
+        # Deliberately keep ONE WebSocket open for the whole test. This avoids
+        # confusing Finnhub's connection/rate limit (HTTP 429) with its symbol cap.
+        async with websockets.connect("wss://ws.finnhub.io?token="+token,open_timeout=15,ping_interval=20,ping_timeout=20,max_size=2_000_000) as ws:
+            for idx,sym in enumerate(syms,1):
+                await ws.send(json.dumps({"type":"subscribe","symbol":sym}))
+                report["subscribed"]=idx
+                rejected=False;other_errors=[]
+                # Give the server a short chance to reject this exact addition.
+                deadline=time.monotonic()+0.12
+                while time.monotonic()<deadline:
+                    try:raw=await asyncio.wait_for(ws.recv(),timeout=max(.01,deadline-time.monotonic()))
+                    except asyncio.TimeoutError:break
+                    try:msg=json.loads(raw)
+                    except Exception:continue
+                    if msg.get("type")=="error":
+                        err=str(msg.get("msg") or msg)[:300]
+                        if "too many symbols" in err.lower():rejected=True
+                        elif err not in other_errors:other_errors.append(err)
+                    elif msg.get("type")=="trade":
+                        report["trade_messages"]+=1;data=msg.get("data") or [];report["trades"]+=len(data)
+                        seen.update(str(x.get("s") or "").upper() for x in data if x.get("s"));report["last_trade_at"]=utcnow().isoformat()
+                if other_errors:
+                    for err in other_errors:
+                        if err not in report["errors"]:report["errors"].append(err)
+                if rejected:
+                    report["first_rejected_at"]=idx;report["limit_results"].append({"count":idx,"symbol":sym,"accepted":False,"too_many_symbols":True});break
+                accepted=idx
+                if idx in (10,20,30,40,50,75,100,150,200,len(syms)):
+                    report["limit_results"].append({"count":idx,"symbol":sym,"accepted":True,"too_many_symbols":False})
+                report["max_without_limit_error"]=accepted;report["symbols_with_trades"]=len(seen);report["seen_symbols"]=sorted(seen)
+                await asyncio.sleep(.02)
+            # Drain briefly so a delayed rejection is not missed.
+            drain_deadline=time.monotonic()+2
+            while time.monotonic()<drain_deadline and report["first_rejected_at"] is None:
+                try:raw=await asyncio.wait_for(ws.recv(),timeout=.25)
+                except asyncio.TimeoutError:continue
+                try:msg=json.loads(raw)
+                except Exception:continue
+                if msg.get("type")=="error" and "too many symbols" in str(msg.get("msg") or msg).lower():
+                    report["first_rejected_at"]=report["subscribed"];report["max_without_limit_error"]=max(0,report["subscribed"]-1);report["limit_results"].append({"count":report["subscribed"],"accepted":False,"too_many_symbols":True,"delayed":True});break
+                if msg.get("type")=="trade":
+                    report["trade_messages"]+=1;data=msg.get("data") or [];report["trades"]+=len(data);seen.update(str(x.get("s") or "").upper() for x in data if x.get("s"))
     except Exception as exc:
         report["errors"].append(type(exc).__name__+": "+str(exc)[:300])
-    report["finished_at"]=utcnow().isoformat();report["status"]="complete" if not report["errors"] else "complete_with_errors"
+    report["symbols_with_trades"]=len(seen);report["seen_symbols"]=sorted(seen);report["finished_at"]=utcnow().isoformat();report["status"]="complete" if not report["errors"] else "complete_with_errors"
 
 async def run_finnhub_probe(seconds=120):
     global FINNHUB_PROBE
