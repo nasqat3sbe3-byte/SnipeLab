@@ -878,58 +878,109 @@ async def history_audit():
             for x in rows if x["quality_warnings"]][:20],
         "note":"Completed fields are not independent price validation."}
 
-FINNHUB_PROBE = {"status":"idle","started_at":None,"finished_at":None,"requested":0,"subscribed":0,"symbols_with_trades":0,"trade_messages":0,"trades":0,"errors":[],"seen_symbols":[],"last_trade_at":None}
+FINNHUB_PROBE = {"status":"idle","mode":None,"started_at":None,"finished_at":None,"requested":0,"subscribed":0,"symbols_with_trades":0,"trade_messages":0,"trades":0,"errors":[],"seen_symbols":[],"last_trade_at":None,"limit_results":[],"max_without_limit_error":None}
 _FINNHUB_PROBE_TASK = None
+
+def _finnhub_token():
+    return os.environ.get("FINNHUB_API_KEY") or os.environ.get("FINNHUB_TOKEN")
+
+async def _finnhub_limit_trial(token, syms, count, settle=2.0):
+    errors=[];seen=set();trade_messages=trades=0
+    async with websockets.connect("wss://ws.finnhub.io?token="+token,open_timeout=15,ping_interval=20,ping_timeout=20,max_size=2_000_000) as ws:
+        for sym in syms[:count]:
+            await ws.send(json.dumps({"type":"subscribe","symbol":sym}))
+            await asyncio.sleep(0.015)
+        deadline=time.monotonic()+settle
+        while time.monotonic()<deadline:
+            try: raw=await asyncio.wait_for(ws.recv(),timeout=min(.5,max(.05,deadline-time.monotonic())))
+            except asyncio.TimeoutError: continue
+            try: msg=json.loads(raw)
+            except Exception: continue
+            if msg.get("type")=="error":
+                err=str(msg.get("msg") or msg)[:300]
+                if err not in errors:errors.append(err)
+            elif msg.get("type")=="trade":
+                trade_messages+=1;data=msg.get("data") or [];trades+=len(data)
+                seen.update(str(x.get("s") or "").upper() for x in data if x.get("s"))
+    too_many=any("too many symbols" in e.lower() for e in errors)
+    return {"count":count,"accepted":not too_many,"too_many_symbols":too_many,"errors":errors,"symbols_with_trades":len(seen),"trade_messages":trade_messages,"trades":trades}
+
+async def run_finnhub_limit_probe():
+    global FINNHUB_PROBE
+    token=_finnhub_token();syms=sorted(UNIVERSE);started=utcnow().isoformat()
+    report={"status":"running","mode":"limit","started_at":started,"finished_at":None,"requested":len(syms),"subscribed":0,"symbols_with_trades":0,"trade_messages":0,"trades":0,"errors":[],"seen_symbols":[],"last_trade_at":None,"limit_results":[],"max_without_limit_error":None}
+    FINNHUB_PROBE=report
+    if not token:
+        report["status"]="error";report["errors"]=["Missing FINNHUB_API_KEY (or FINNHUB_TOKEN) environment variable"];report["finished_at"]=utcnow().isoformat();return
+    # One socket at a time: Finnhub documents one WebSocket connection per API key.
+    # Coarse steps find the first rejection; binary search then finds the exact boundary.
+    last_ok=0;first_bad=None
+    try:
+        for count in [10,20,30,40,50,75,100,150,200,len(syms)]:
+            if count>len(syms) or count<=last_ok:continue
+            trial=await _finnhub_limit_trial(token,syms,count);report["limit_results"].append(trial);report["subscribed"]=count
+            if trial["too_many_symbols"]:first_bad=count;break
+            last_ok=count
+            await asyncio.sleep(.5)
+        if first_bad is not None:
+            lo=last_ok+1;hi=first_bad-1
+            while lo<=hi:
+                mid=(lo+hi)//2
+                trial=await _finnhub_limit_trial(token,syms,mid);report["limit_results"].append(trial);report["subscribed"]=mid
+                if trial["too_many_symbols"]:hi=mid-1
+                else:last_ok=mid;lo=mid+1
+                await asyncio.sleep(.5)
+        report["max_without_limit_error"]=last_ok
+        report["limit_results"]=sorted(report["limit_results"],key=lambda x:x["count"])
+    except Exception as exc:
+        report["errors"].append(type(exc).__name__+": "+str(exc)[:300])
+    report["finished_at"]=utcnow().isoformat();report["status"]="complete" if not report["errors"] else "complete_with_errors"
 
 async def run_finnhub_probe(seconds=120):
     global FINNHUB_PROBE
-    token=os.environ.get("FINNHUB_API_KEY") or os.environ.get("FINNHUB_TOKEN")
-    syms=sorted(UNIVERSE)
-    report={"status":"running","started_at":utcnow().isoformat(),"finished_at":None,"requested":len(syms),"subscribed":0,"symbols_with_trades":0,"trade_messages":0,"trades":0,"errors":[],"seen_symbols":[],"last_trade_at":None}
-    FINNHUB_PROBE=report
+    token=_finnhub_token();syms=sorted(UNIVERSE)
+    report={"status":"running","mode":"coverage","started_at":utcnow().isoformat(),"finished_at":None,"requested":len(syms),"subscribed":0,"symbols_with_trades":0,"trade_messages":0,"trades":0,"errors":[],"seen_symbols":[],"last_trade_at":None,"limit_results":[],"max_without_limit_error":None};FINNHUB_PROBE=report
     if not token:
         report["status"]="error";report["errors"]=["Missing FINNHUB_API_KEY (or FINNHUB_TOKEN) environment variable"];report["finished_at"]=utcnow().isoformat();return
     seen=set()
     try:
         async with websockets.connect("wss://ws.finnhub.io?token="+token,open_timeout=15,ping_interval=20,ping_timeout=20,max_size=2_000_000) as ws:
             for sym in syms:
-                await ws.send(json.dumps({"type":"subscribe","symbol":sym}))
-                report["subscribed"]+=1
-                await asyncio.sleep(0.01)
+                await ws.send(json.dumps({"type":"subscribe","symbol":sym}));report["subscribed"]+=1;await asyncio.sleep(.01)
             deadline=time.monotonic()+max(30,min(int(seconds),600))
             while time.monotonic()<deadline:
-                try: raw=await asyncio.wait_for(ws.recv(),timeout=min(10,max(0.1,deadline-time.monotonic())))
-                except asyncio.TimeoutError: continue
-                try: msg=json.loads(raw)
-                except Exception: continue
-                typ=msg.get("type")
-                if typ=="trade":
-                    report["trade_messages"]+=1
-                    trades=msg.get("data") or [];report["trades"]+=len(trades)
-                    for trade in trades:
+                try:raw=await asyncio.wait_for(ws.recv(),timeout=min(10,max(.1,deadline-time.monotonic())))
+                except asyncio.TimeoutError:continue
+                try:msg=json.loads(raw)
+                except Exception:continue
+                if msg.get("type")=="trade":
+                    report["trade_messages"]+=1;data=msg.get("data") or [];report["trades"]+=len(data)
+                    for trade in data:
                         sym=str(trade.get("s") or "").upper()
-                        if sym in UNIVERSE: seen.add(sym)
+                        if sym in UNIVERSE:seen.add(sym)
                     report["last_trade_at"]=utcnow().isoformat()
-                elif typ=="error":
+                elif msg.get("type")=="error":
                     err=str(msg.get("msg") or msg)[:300]
                     if err not in report["errors"]:report["errors"].append(err)
-                    if len(report["errors"])>30:report["errors"]=report["errors"][-30:]
                 report["symbols_with_trades"]=len(seen);report["seen_symbols"]=sorted(seen)
-    except Exception as exc:
-        report["errors"].append(type(exc).__name__+": "+str(exc)[:300])
+    except Exception as exc:report["errors"].append(type(exc).__name__+": "+str(exc)[:300])
     report["symbols_with_trades"]=len(seen);report["seen_symbols"]=sorted(seen);report["finished_at"]=utcnow().isoformat();report["status"]="complete" if not report["errors"] else "complete_with_errors"
 
 @app.post("/api/finnhub-probe/start")
 async def start_finnhub_probe(seconds: int=120):
     global _FINNHUB_PROBE_TASK
-    if _FINNHUB_PROBE_TASK and not _FINNHUB_PROBE_TASK.done():
-        return {"started":False,"reason":"probe already running","report":FINNHUB_PROBE}
-    _FINNHUB_PROBE_TASK=asyncio.create_task(run_finnhub_probe(seconds))
-    return {"started":True,"seconds":max(30,min(int(seconds),600)),"universe":len(UNIVERSE),"note":"Diagnostic only; does not replace Yahoo quotes."}
+    if _FINNHUB_PROBE_TASK and not _FINNHUB_PROBE_TASK.done():return {"started":False,"reason":"probe already running","report":FINNHUB_PROBE}
+    _FINNHUB_PROBE_TASK=asyncio.create_task(run_finnhub_probe(seconds));return {"started":True,"mode":"coverage","seconds":max(30,min(int(seconds),600)),"universe":len(UNIVERSE)}
+
+@app.post("/api/finnhub-probe/limit")
+async def start_finnhub_limit_probe():
+    global _FINNHUB_PROBE_TASK
+    if _FINNHUB_PROBE_TASK and not _FINNHUB_PROBE_TASK.done():return {"started":False,"reason":"probe already running","report":FINNHUB_PROBE}
+    _FINNHUB_PROBE_TASK=asyncio.create_task(run_finnhub_limit_probe());return {"started":True,"mode":"limit","universe":len(UNIVERSE),"note":"Tests progressively, then binary-searches the exact symbol boundary."}
 
 @app.get("/api/finnhub-probe")
 async def finnhub_probe_status():
-    return {**FINNHUB_PROBE,"universe_now":len(UNIVERSE),"key_configured":bool(os.environ.get("FINNHUB_API_KEY") or os.environ.get("FINNHUB_TOKEN")),"note":"Symbols without trades may simply have had no executions during the probe window."}
+    return {**FINNHUB_PROBE,"universe_now":len(UNIVERSE),"key_configured":bool(_finnhub_token()),"note":"Limit mode measures subscription rejection; trade activity is not required to identify the cap."}
 
 @app.get("/api/diagnostics/{symbol}")
 async def ticker_diagnostics(symbol: str):
