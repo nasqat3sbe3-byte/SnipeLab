@@ -443,16 +443,51 @@ def refresh_analytics():
             "ignition":ignition,"last_market_day":st["market_day"]}
 
 async def fetch_short_analysis(client, symbol):
-    """Optional analysis layer only. Never replaces IBKR Available/CTB/Rebate."""
-    out={"symbol":symbol,"short_pressure":None,"short_level":None,"sources":[],"updated_at":utcnow().isoformat()}
+    """Public analysis enrichment only; IBKR Available/CTB/Rebate remain untouched."""
+    out={"symbol":symbol,"short_pressure":None,"short_level":None,
+         "short_interest":None,"short_float_pct":None,"days_to_cover":None,
+         "borrow_momentum":None,"borrow_persistence":None,
+         "sources":[],"updated_at":utcnow().isoformat()}
+    def number(raw):
+        if raw is None:return None
+        raw=str(raw).strip().replace(",","")
+        mult=1
+        if raw[-1:].upper()=="K":mult=1_000;raw=raw[:-1]
+        elif raw[-1:].upper()=="M":mult=1_000_000;raw=raw[:-1]
+        elif raw[-1:].upper()=="B":mult=1_000_000_000;raw=raw[:-1]
+        try:return float(raw)*mult
+        except (TypeError,ValueError):return None
     try:
         r=await client.get(f"https://finshort.com/{symbol}/short-interest",timeout=10)
         if r.status_code==200:
             text=BeautifulSoup(r.text,"html.parser").get_text(" ",strip=True)
-            m=re.search(r"Short Pressure\s*([0-9]{1,3}(?:\.[0-9]+)?)",text,re.I)
+            # Public FINRA snapshot. Regexes intentionally anchor on the labels
+            # so unrelated percentages/numbers are never substituted.
+            m=re.search(r"% of Float\s*([0-9]+(?:\.[0-9]+)?)%",text,re.I)
+            if m:out["short_float_pct"]=float(m.group(1))
+            m=re.search(r"Short Interest\s*([0-9.,]+\s*[KMB]?)\s*(?:[+\-][0-9.]+%)?\s*Days to Cover\s*([0-9]+(?:\.[0-9]+)?)",text,re.I)
             if m:
-                v=float(m.group(1))
-                if 0<=v<=100: out["short_pressure"]=v; out["sources"].append("Finshort")
+                out["short_interest"]=number(m.group(1).replace(" ",""))
+                out["days_to_cover"]=float(m.group(2))
+            m=re.search(r"Days to Cover\s*([0-9]+(?:\.[0-9]+)?)\s*Short Pressure\s*([0-9]{1,3}(?:\.[0-9]+)?)",text,re.I)
+            if m:
+                out["days_to_cover"]=float(m.group(1))
+                v=float(m.group(2))
+                if 0<=v<=100:out["short_pressure"]=v
+            if any(out[k] is not None for k in ("short_interest","short_float_pct","days_to_cover","short_pressure")):
+                out["sources"].append("Finshort / FINRA")
+    except Exception:
+        pass
+    try:
+        r=await client.get(f"https://finshort.com/{symbol}/cost-to-borrow",timeout=10)
+        if r.status_code==200:
+            text=BeautifulSoup(r.text,"html.parser").get_text(" ",strip=True)
+            m=re.search(r"Momentum\s*([0-9]{1,3}(?:\.[0-9]+)?)\s*Persistence\s*([0-9]{1,3}(?:\.[0-9]+)?)",text,re.I)
+            if m:
+                mom,per=float(m.group(1)),float(m.group(2))
+                if 0<=mom<=100:out["borrow_momentum"]=mom
+                if 0<=per<=100:out["borrow_persistence"]=per
+                if "Finshort" not in out["sources"]:out["sources"].append("Finshort")
     except Exception:
         pass
     try:
@@ -462,7 +497,7 @@ async def fetch_short_analysis(client, symbol):
             m=re.search(r"SqueezeTrigger(?:\s+Price)?\s*[:$ ]+\s*\$?([0-9]+(?:\.[0-9]+)?)",text,re.I)
             if m:
                 v=float(m.group(1))
-                if v>0: out["short_level"]=v; out["sources"].append("BUYINS")
+                if v>0:out["short_level"]=v;out["sources"].append("BUYINS")
     except Exception:
         pass
     return out
