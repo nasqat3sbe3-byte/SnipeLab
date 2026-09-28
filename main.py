@@ -451,7 +451,7 @@ async def fetch_short_analysis(client, symbol):
     """
     meta=UNIVERSE.get(symbol) or {}
     effective=meta.get("effective_date")
-    out={"symbol":symbol,"short_level":None,"estimated_short_avg":None,
+    out={"symbol":symbol,"estimated_short_avg_price":None,
          "short_target_drop_pct":None,"short_volume_used":None,
          "short_days_used":0,"method":"FINRA short volume × Yahoo daily typical price",
          "source":"FINRA Reg SHO + Yahoo 1d","effective_date":effective,
@@ -512,7 +512,7 @@ async def fetch_short_analysis(client, symbol):
         current=QUOTES.get(symbol,{}).get("price")
         try:current=float(current) if current is not None else None
         except (TypeError,ValueError):current=None
-        out.update({"short_level":round(avg,4),"estimated_short_avg":round(avg,4),
+        out.update({"estimated_short_avg_price":round(avg,4),
             "short_volume_used":round(total,2),"short_days_used":used,
             "short_target_drop_pct":round((avg/current-1)*100,2) if current and current>0 else None,
             "error":None})
