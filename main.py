@@ -974,23 +974,23 @@ async def finnhub_live_loop():
         except Exception as exc:
             FINNHUB_LIVE.update(status="reconnecting",connected=False,error=type(exc).__name__+": "+str(exc)[:250]);await asyncio.sleep(10)
 
-FINNHUB_AAPL_PROBE={"status":"idle","started_at":None,"finished_at":None,"symbol":"AAPL","messages":0,"trade_messages":0,"trades":0,"last_price":None,"last_trade_at":None,"message_types":[],"raw_samples":[],"errors":[]}
-_FINNHUB_AAPL_TASK=None
+FINNHUB_TICKER_PROBE={"status":"idle","started_at":None,"finished_at":None,"symbol":"FFAI","messages":0,"trade_messages":0,"trades":0,"last_price":None,"last_trade_at":None,"message_types":[],"raw_samples":[],"errors":[]}
+_FINNHUB_TICKER_TASK=None
 
-async def run_finnhub_aapl_probe(seconds=30):
-    global FINNHUB_AAPL_PROBE
+async def run_finnhub_ticker_probe(seconds=30):
+    global FINNHUB_TICKER_PROBE
     token=_finnhub_token();seconds=max(10,min(int(seconds),90))
-    report={"status":"running","started_at":utcnow().isoformat(),"finished_at":None,"symbol":"AAPL","seconds":seconds,"messages":0,"trade_messages":0,"trades":0,"last_price":None,"last_trade_at":None,"message_types":[],"raw_samples":[],"errors":[]}
-    FINNHUB_AAPL_PROBE=report
+    report={"status":"running","started_at":utcnow().isoformat(),"finished_at":None,"symbol":"FFAI","seconds":seconds,"messages":0,"trade_messages":0,"trades":0,"last_price":None,"last_trade_at":None,"message_types":[],"raw_samples":[],"errors":[]}
+    FINNHUB_TICKER_PROBE=report
     if not token:report.update(status="error",finished_at=utcnow().isoformat(),errors=["Finnhub key missing"]);return
     # Finnhub permits one WebSocket per key. Temporarily close the production
-    # live socket so this isolated AAPL diagnostic can own that connection.
+    # live socket so this isolated FFAI diagnostic can own that connection.
     FINNHUB_LIVE["probe_pause"]=True
     deadline=time.monotonic()+seconds
     try:
         await asyncio.sleep(3)
         async with websockets.connect("wss://ws.finnhub.io?token="+token,open_timeout=15,ping_interval=20,ping_timeout=20,max_size=2_000_000) as ws:
-            await ws.send(json.dumps({"type":"subscribe","symbol":"AAPL"}))
+            await ws.send(json.dumps({"type":"subscribe","symbol":"FFAI"}))
             while time.monotonic()<deadline:
                 try:raw=await asyncio.wait_for(ws.recv(),timeout=min(2,max(.1,deadline-time.monotonic())))
                 except asyncio.TimeoutError:continue
@@ -1006,7 +1006,7 @@ async def run_finnhub_aapl_probe(seconds=30):
                 elif typ=="trade":
                     data=msg.get("data") or [];report["trade_messages"]+=1;report["trades"]+=len(data)
                     for t in data:
-                        if str(t.get("s") or "").upper()=="AAPL":
+                        if str(t.get("s") or "").upper()=="FFAI":
                             report["last_price"]=t.get("p");report["last_trade_at"]=t.get("t")
         report["status"]="complete"
     except Exception as exc:
@@ -1105,15 +1105,15 @@ async def start_finnhub_probe(seconds: int=120):
     if _FINNHUB_PROBE_TASK and not _FINNHUB_PROBE_TASK.done():return {"started":False,"reason":"probe already running","report":FINNHUB_PROBE}
     _FINNHUB_PROBE_TASK=asyncio.create_task(run_finnhub_probe(seconds));return {"started":True,"mode":"coverage","seconds":max(30,min(int(seconds),600)),"universe":len(UNIVERSE)}
 
-@app.post("/api/finnhub-probe/aapl")
-async def start_finnhub_aapl_probe(seconds: int=30):
-    global _FINNHUB_AAPL_TASK
-    if _FINNHUB_AAPL_TASK and not _FINNHUB_AAPL_TASK.done():return {"started":False,"reason":"AAPL probe already running","report":FINNHUB_AAPL_PROBE}
-    _FINNHUB_AAPL_TASK=asyncio.create_task(run_finnhub_aapl_probe(seconds));return {"started":True,"symbol":"AAPL","seconds":max(10,min(int(seconds),90))}
+@app.post("/api/finnhub-probe/ffai")
+async def start_finnhub_ffai_probe(seconds: int=30):
+    global _FINNHUB_TICKER_TASK
+    if _FINNHUB_TICKER_TASK and not _FINNHUB_TICKER_TASK.done():return {"started":False,"reason":"FFAI probe already running","report":FINNHUB_TICKER_PROBE}
+    _FINNHUB_TICKER_TASK=asyncio.create_task(run_finnhub_ticker_probe(seconds));return {"started":True,"symbol":"FFAI","seconds":max(10,min(int(seconds),90))}
 
-@app.get("/api/finnhub-probe/aapl")
-async def finnhub_aapl_probe_status():
-    return {**FINNHUB_AAPL_PROBE,"key_configured":bool(_finnhub_token())}
+@app.get("/api/finnhub-probe/ffai")
+async def finnhub_ffai_probe_status():
+    return {**FINNHUB_TICKER_PROBE,"key_configured":bool(_finnhub_token())}
 
 @app.post("/api/finnhub-probe/limit")
 async def start_finnhub_limit_probe():
