@@ -26,7 +26,7 @@ def extract_symbols(payload):
     elif isinstance(payload, dict):
         rows = next((payload[k] for k in ("stocks", "rows", "items", "universe", "data") if isinstance(payload.get(k), (list, dict))), [])
         if isinstance(rows, dict):
-            rows = list(rows.values())
+            rows = [dict({"symbol": symbol}, **(row if isinstance(row, dict) else {})) for symbol, row in rows.items()]
     else:
         rows = []
     out = []
