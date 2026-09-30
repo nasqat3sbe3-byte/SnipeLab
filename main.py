@@ -1116,7 +1116,7 @@ async def stock_archive(symbol: str):
     if cached and time.time()-cached["at"]<_ARCHIVE_TTL:return cached["result"]
     headers={"User-Agent":os.environ.get("SEC_USER_AGENT","SnipeLab research admin@snipelab.local")}
     result={"symbol":symbol,"generated_at":utcnow().isoformat(),"sources":[],"splits":[],"reverse_split_count":0,
-            "last_100_before_split":None,"first_100_after_split":None,"offerings":[],"ownership":[],"warnings":[]}
+            "last_100_before_split":None,"first_100_after_split":None,"post_split_max_gain":None,"offerings":[],"ownership":[],"warnings":[]}
     async with httpx.AsyncClient(timeout=14,follow_redirects=True,headers=headers) as client:
         # Yahoo supplies long daily history + corporate split events. Prices are adjusted,
         # so wave percentages are comparable across split boundaries.
@@ -1153,6 +1153,17 @@ async def stock_archive(symbol: str):
                             if low>0 and high/low>=2:
                                 post.append({"low_date":bars[lo_i]["date"],"low":round(low,6),"high_date":bars[hi_i]["date"],"high":round(high,6),"gain_pct":round((high/low-1)*100,2),"sessions":hi_i-lo_i})
                     result["first_100_after_split"]=min(post,key=lambda x:x["high_date"]) if post else None
+                    # Always show the strongest observed post-split rise, even when it is below 100%.
+                    gains=[]
+                    for lo_i in range(cut,len(bars)):
+                        low=bars[lo_i]["low"]
+                        for hi_i in range(lo_i+1,len(bars)):
+                            high=bars[hi_i]["high"]
+                            if low>0 and high>low:
+                                gains.append({"low_date":bars[lo_i]["date"],"low":round(low,6),
+                                    "high_date":bars[hi_i]["date"],"high":round(high,6),
+                                    "gain_pct":round((high/low-1)*100,2),"sessions":hi_i-lo_i})
+                    result["post_split_max_gain"]=max(gains,key=lambda x:x["gain_pct"]) if gains else None
                 result["sources"].append({"name":"Yahoo Finance chart","purpose":"daily price history and split events"})
         except Exception as exc:result["warnings"].append("تعذر تحميل تاريخ السعر/التقسيم: "+type(exc).__name__)
         # SEC EDGAR: filings are authoritative for registration/pricing/closing language.
@@ -1163,7 +1174,7 @@ async def stock_archive(symbol: str):
                 result["company_name"]=sub.get("name")
                 rows=_sec_rows(sub)
                 offer_forms={"S-1","S-1/A","F-1","F-1/A","424B3","424B4","424B5","8-K","6-K","EFFECT"}
-                own_forms={"SC 13D","SC 13D/A","SC 13G","SC 13G/A"}
+                own_forms={"SC 13D","SC 13D/A","SC 13G","SC 13G/A","3","3/A","4","4/A","5","5/A"}
                 offer_candidates=[x for x in rows if x.get("form") in offer_forms][:18]
                 own_candidates=[x for x in rows if x.get("form") in own_forms][:18]
                 sem=asyncio.Semaphore(4)
@@ -1179,14 +1190,24 @@ async def stock_archive(symbol: str):
                             base["kind"]="ATM" if ("at-the-market" in low or "at the market offering" in low) else ("Registered Direct" if "registered direct" in low else "Offering / Registration")
                         else:
                             base["holder"]=_reporting_person(text)
-                            base["change"]="ملف ملكية كبير؛ راجع الإفصاح لتحديد زيادة/خفض/خروج"
+                            if row.get("form") in ("4","4/A"):
+                                sold=re.findall(r"<transactionacquireddisposedcode>\s*<value>\s*D\s*</value>",text,re.I)
+                                # HTML text may lose XML tags; also detect transaction code S (sale).
+                                is_sale=bool(sold or re.search(r"\bTransaction Code\b.{0,180}\bS\b",text,re.I))
+                                amounts=[float(x.replace(",","")) for x in re.findall(r"(?:Securities Beneficially Owned Following Reported Transaction\(s\)|Amount of Securities Beneficially Owned).*?([0-9][0-9,]*)",text,re.I|re.S)[:3]]
+                                base["change"]="بيع / خفض ملكية" if is_sale else "تغير ملكية مُبلغ عنه"
+                                if amounts:base["remaining_shares"]=amounts[-1]
+                            elif row.get("form") in ("3","3/A"):
+                                base["change"]="إفصاح ملكية أولي"
+                            else:
+                                base["change"]="ملف ملكية كبيرة 13D/13G؛ لا نعتبره خروجًا بدون إفصاح لاحق"
                         return base
                 offered=await asyncio.gather(*(enrich(x,"offering") for x in offer_candidates[:10]))
                 owned=await asyncio.gather(*(enrich(x,"ownership") for x in own_candidates[:10]))
                 result["offerings"]=[x for x in offered if x][:8]
                 result["ownership"]=[x for x in owned if x][:8]
-                result["sources"].append({"name":"SEC EDGAR","purpose":"offerings, ATM and Schedule 13D/13G ownership filings"})
-                if not result["ownership"]:result["warnings"].append("لا توجد ملفات 13D/13G حديثة في سجل SEC المتاح؛ هذا لا يعني عدم وجود مؤسسات.")
+                result["sources"].append({"name":"SEC EDGAR","purpose":"offerings, ATM, Schedule 13D/13G and Forms 3/4/5 ownership filings"})
+                if not result["ownership"]:result["warnings"].append("لا توجد ملفات ملكية 13D/13G/3/4/5 حديثة في سجل SEC المتاح؛ هذا لا يعني عدم وجود مؤسسات.")
             else:result["warnings"].append("تعذر ربط الرمز بـ CIK في SEC.")
         except Exception as exc:result["warnings"].append("تعذر تحميل إفصاحات SEC: "+type(exc).__name__)
     result["method_note"]="حركة +100% = قاع جلسة إلى قمة جلسة لاحقة خلال 10 جلسات تداول؛ لا نستخدم قاع وقمة اليوم نفسه لأن ترتيب الحركة غير معروف من شمعة يومية."
