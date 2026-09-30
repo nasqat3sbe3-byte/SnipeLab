@@ -49,6 +49,17 @@ def calculate(effective, candles):
     rsi_live=wilder_rsi(live_closes,14)
     rsi_closed=wilder_rsi(closed_closes,14)
     rsi=round(rsi_live,2) if rsi_live is not None else None
+    # Persist the Wilder state at the latest COMPLETED close so main.py can
+    # apply today's freshest quote without re-fetching the whole daily series.
+    rsi_wilder_avg_gain=rsi_wilder_avg_loss=rsi_wilder_last_closed_close=None
+    if len(closed_closes)>=15:
+        changes=[closed_closes[i]-closed_closes[i-1] for i in range(1,len(closed_closes))]
+        gains=[max(x,0.0) for x in changes];losses=[max(-x,0.0) for x in changes]
+        rsi_wilder_avg_gain=sum(gains[:14])/14.0;rsi_wilder_avg_loss=sum(losses[:14])/14.0
+        for i in range(14,len(changes)):
+            rsi_wilder_avg_gain=((rsi_wilder_avg_gain*13.0)+gains[i])/14.0
+            rsi_wilder_avg_loss=((rsi_wilder_avg_loss*13.0)+losses[i])/14.0
+        rsi_wilder_last_closed_close=closed_closes[-1]
     return {"verified":verified,"source":"Yahoo 1d; split adjustment requires validation",
         "effective_date":effective,
         "post_split_low":min(b["low"] for b in bars) if verified else None,
@@ -72,6 +83,8 @@ def calculate(effective, candles):
         "half_rule_version":2,
         "rsi_daily":rsi,"rsi_daily_live":rsi,"rsi_daily_closed":round(rsi_closed,2) if rsi_closed is not None else None,
         "rsi_method":"Wilder 14","rsi_includes_current_daily_candle":True,
+        "rsi_wilder_avg_gain":rsi_wilder_avg_gain,"rsi_wilder_avg_loss":rsi_wilder_avg_loss,
+        "rsi_wilder_last_closed_close":rsi_wilder_last_closed_close,
         "first_bar":first["date"],"bar_count":len(bars),
         "top_10_verified":bool(top and verified and top["top_10_gain_pct"]>=40),
         "top_calculated_at":datetime.now(timezone.utc).isoformat(),
