@@ -44,8 +44,11 @@ def calculate(effective, candles):
         return 100.0 if avg_loss==0 else 100.0-(100.0/(1.0+avg_gain/avg_loss))
     # Live daily RSI includes today's in-progress daily candle, matching chart RSI during the session.
     # Closed RSI is retained separately for audit/comparison.
-    live_closes=[b["close"] for b in bars]
-    closed_closes=[b["close"] for b in completed]
+    # RSI must use the full pre-split daily history too. Split-filtered bars are valid
+    # for post-split extrema, but starting RSI on the split date resets Wilder and is wrong.
+    all_daily=sorted((b for b in candles if b["low"]>0 and b["high"]>=b["low"]),key=lambda b:b["date"])
+    live_closes=[b["close"] for b in all_daily]
+    closed_closes=[b["close"] for b in all_daily if b["date"]<ny_today]
     rsi_live=wilder_rsi(live_closes,14)
     rsi_closed=wilder_rsi(closed_closes,14)
     rsi=round(rsi_live,2) if rsi_live is not None else None
