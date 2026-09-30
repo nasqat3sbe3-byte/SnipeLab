@@ -882,6 +882,101 @@ async def borrow_history(symbol: str):
     symbol=re.sub(r"[^A-Z0-9.-]","",symbol.upper())[:12]
     return {"symbol":symbol,"period_days":3,"source":"IBKR public FTP","last_scan":STATE.get("last_borrow_scan"),"scan_error":STATE.get("last_borrow_error"),"last_reading":BORROW.get(symbol),"snapshots":BORROW_HISTORY.get(symbol,[]),"note":"Recording starts after deployment; no invented historical values."}
 
+def _median(values):
+    vals=sorted(float(x) for x in values if x is not None)
+    if not vals:return None
+    n=len(vals);m=n//2
+    return vals[m] if n%2 else (vals[m-1]+vals[m])/2
+
+def _historical_hundred_patterns():
+    """Real SnipeLab historical winners: a recorded radar/ready state that later observed >=100%."""
+    samples=[]
+    for sym,memory in RADAR_MEMORY.items():
+        timeline=memory.get("timeline") or []
+        if not timeline:continue
+        first=None
+        for row in timeline:
+            if row.get("stage") in ("radar","ready"):
+                try:
+                    p=float(row.get("price"))
+                    if p>0:
+                        first=row;break
+                except (TypeError,ValueError):
+                    pass
+        if not first:continue
+        rec=memory.get("first_radar") or memory.get("first_ready")
+        if not rec:continue
+        try:
+            start=float(rec.get("price")); high=float(rec.get("high_observed"))
+        except (TypeError,ValueError):
+            continue
+        if start<=0 or high/start<2:continue
+        try:
+            samples.append({"symbol":sym,"gain_pct":round((high/start-1)*100,2),
+                "available":float(first.get("available")) if first.get("available") is not None else None,
+                "rsi":float(first.get("rsi")) if first.get("rsi") is not None else None,
+                "distance_pct":float(first.get("distance_pct")) if first.get("distance_pct") is not None else None,
+                "sessions":float(first.get("sessions")) if first.get("sessions") is not None else None,
+                "stage":first.get("stage"),"at":first.get("at")})
+        except (TypeError,ValueError):
+            continue
+    return samples
+
+@app.get("/api/ai-patterns")
+async def ai_patterns():
+    """Rank current stocks by similarity to real SnipeLab states that later observed >=100%."""
+    winners=_historical_hundred_patterns()
+    profile={
+        "available":_median([x.get("available") for x in winners]),
+        "rsi":_median([x.get("rsi") for x in winners]),
+        "distance_pct":_median([x.get("distance_pct") for x in winners]),
+        "sessions":_median([x.get("sessions") for x in winners])}
+    picks=[]
+    for sym,a in ANALYTICS.items():
+        if not a.get("active") or not a.get("history_verified") or a.get("top_10_verified"):continue
+        vals={"available":a.get("available"),"rsi":a.get("rsi_daily"),
+              "distance_pct":a.get("effective_distance_pct"),"sessions":a.get("effective_sessions")}
+        try:
+            av=float(vals["available"]);rsi=float(vals["rsi"]);dist=float(vals["distance_pct"]);sessions=float(vals["sessions"])
+        except (TypeError,ValueError):
+            continue
+        score=0.0;reasons=[];diffs=[]
+        # If enough real winners exist, similarity is against their median pre-move state.
+        if len(winners)>=2 and all(profile[k] is not None for k in profile):
+            scales={"available":max(5000.0,profile["available"] or 1),
+                    "rsi":20.0,"distance_pct":20.0,"sessions":4.0}
+            weights={"available":40,"rsi":25,"distance_pct":25,"sessions":10}
+            for k,w in weights.items():
+                sim=max(0.0,1.0-abs(vals[k]-profile[k])/scales[k])
+                score+=w*sim
+            diffs=[f"Available {int(av):,} مقابل وسيط {int(profile['available']):,}",
+                   f"RSI {rsi:.1f} مقابل {profile['rsi']:.1f}",
+                   f"عن القاع {dist:.1f}% مقابل {profile['distance_pct']:.1f}%",
+                   f"الثبات {int(sessions)} مقابل {profile['sessions']:.1f}"]
+            method="historical_similarity"
+        else:
+            # Honest fallback while SnipeLab accumulates winner snapshots.
+            score=(40 if av<15000 else max(0,40*(1-(av-15000)/30000))) + \
+                  (25 if rsi<=35 else max(0,25*(1-(rsi-35)/25))) + \
+                  (25 if dist<=25 else max(0,25*(1-(dist-25)/35))) + \
+                  min(10,max(0,sessions/4*10))
+            method="provisional_rules"
+            diffs=["الذاكرة التاريخية +100% ما زالت قليلة؛ الترتيب مؤقت حسب نفس متغيرات القنص الحالية."]
+        if av<15000:reasons.append("Available منخفض")
+        if rsi<=35:reasons.append("RSI منخفض")
+        if dist<=25:reasons.append("قريب من القاع")
+        if sessions>=2:reasons.append("ثبات فوق القاع")
+        picks.append({"symbol":sym,"score":round(min(100,max(0,score)),1),
+            "price":(QUOTES.get(sym) or {}).get("price"),"available":av,"rsi":rsi,
+            "distance_pct":round(dist,2),"sessions":int(sessions),"ready":bool(a.get("ready")),
+            "reasons":reasons,"comparison":diffs,"method":method})
+    picks.sort(key=lambda x:(-x["score"],x["available"],x["rsi"]))
+    return {"generated_at":utcnow().isoformat(),"winner_samples":len(winners),
+        "winner_examples":sorted(winners,key=lambda x:x["gain_pct"],reverse=True)[:8],
+        "profile":profile,"method":"historical_similarity" if len(winners)>=2 else "provisional_rules",
+        "picks":picks[:5],
+        "note":"المقارنة التاريخية تستخدم فقط حالات SnipeLab التي سُجلت في الرادار/الجاهزية ثم رُصد لها ارتفاع 100% أو أكثر. إذا لم تتوفر عينتان تاريخيتان على الأقل، يظهر ترتيب مؤقت بالقواعد الحالية ولا يُسمى تطابقًا تاريخيًا."}
+
 @app.get("/api/dashboard")
 async def dashboard_data():
     # Dashboard must be read-only. Recomputing the entire universe inside
