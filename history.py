@@ -47,8 +47,8 @@ def calculate(effective, candles):
     # RSI must use the full pre-split daily history too. Split-filtered bars are valid
     # for post-split extrema, but starting RSI on the split date resets Wilder and is wrong.
     all_daily=sorted((b for b in candles if b["low"]>0 and b["high"]>=b["low"]),key=lambda b:b["date"])
-    live_closes=[b["close"] for b in all_daily]
-    closed_closes=[b["close"] for b in all_daily if b["date"]<ny_today]
+    live_closes=[b.get("rsi_close",b["close"]) for b in all_daily]
+    closed_closes=[b.get("rsi_close",b["close"]) for b in all_daily if b["date"]<ny_today]
     rsi_live=wilder_rsi(live_closes,14)
     rsi_closed=wilder_rsi(closed_closes,14)
     rsi=round(rsi_live,2) if rsi_live is not None else None
@@ -85,7 +85,7 @@ def calculate(effective, candles):
             if verified else None),
         "half_rule_version":2,
         "rsi_daily":rsi,"rsi_daily_live":rsi,"rsi_daily_closed":round(rsi_closed,2) if rsi_closed is not None else None,
-        "rsi_method":"Wilder 14","rsi_rule_version":2,"rsi_includes_current_daily_candle":True,
+        "rsi_method":"Wilder 14 / split-adjusted close","rsi_rule_version":3,"rsi_includes_current_daily_candle":True,
         "rsi_wilder_avg_gain":rsi_wilder_avg_gain,"rsi_wilder_avg_loss":rsi_wilder_avg_loss,
         "rsi_wilder_last_closed_close":rsi_wilder_last_closed_close,
         "first_bar":first["date"],"bar_count":len(bars),
@@ -339,7 +339,7 @@ async def worker(universe,history,yahoo,save):
                 age=(datetime.now(timezone.utc).date()-
                      date.fromisoformat(meta["effective_date"])).days
                 return (h.get("effective_date")==meta["effective_date"]
-                        and (h.get("stability_sessions") is None or h.get("top_calculator_version",0)<3 or h.get("half_rule_version",0)<2 or h.get("rsi_rule_version",0)<2)
+                        and (h.get("stability_sessions") is None or h.get("top_calculator_version",0)<3 or h.get("half_rule_version",0)<2 or h.get("rsi_rule_version",0)<3)
                         and (bool(h.get("top_10_verified"))
                              or (h.get("top_10_gain_pct") or 0)>=40
                              or age<=90))
@@ -395,14 +395,21 @@ async def worker(universe,history,yahoo,save):
                     r.raise_for_status()
                     result=(r.json().get("chart",{}).get("result") or [None])[0]
                     if not result:raise ValueError("Yahoo returned no chart result")
-                    q=((result.get("indicators") or {}).get("quote") or [{}])[0]
+                    indicators=result.get("indicators") or {}
+                    q=(indicators.get("quote") or [{}])[0]
+                    adj=(indicators.get("adjclose") or [{}])[0].get("adjclose") or []
                     bars=[]
                     tz=ZoneInfo((result.get("meta") or {}).get("exchangeTimezoneName") or "America/New_York")
                     for i,t in enumerate(result.get("timestamp") or []):
                         try:
                             v={k:float(q[k][i]) for k in ("open","high","low","close")}
                             if min(v.values())<=0:continue
-                            bars.append({"date":datetime.fromtimestamp(t,tz).date().isoformat(),**v})
+                            # RSI uses split-adjusted close so a reverse split is not treated
+                            # as a giant one-day gain/loss. Raw OHLC remains untouched for
+                            # split highs/lows and all existing price analytics.
+                            try:rsi_close=float(adj[i]) if adj[i] is not None and float(adj[i])>0 else v["close"]
+                            except (IndexError,TypeError,ValueError):rsi_close=v["close"]
+                            bars.append({"date":datetime.fromtimestamp(t,tz).date().isoformat(),**v,"rsi_close":rsi_close})
                         except (IndexError,TypeError,ValueError,KeyError):continue
                     result_data=calculate(eff,bars)
                     result_data.setdefault("effective_date",eff)
