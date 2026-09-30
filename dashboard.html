@@ -415,7 +415,19 @@ function archiveCard(sym){
 }
 async function runArchive(){
  const sym=$('archiveQuery').value.trim().toUpperCase().replace(/[^A-Z0-9.-]/g,'');if(!sym)return;
- $('archiveResult').innerHTML=archiveCard(sym);
+ const box=$('archiveResult'),btn=$('archiveSearch');
+ box.innerHTML=archiveCard(sym);
+ btn.disabled=true;
+ try{
+  const r=await fetch('/api/archive-splits/'+encodeURIComponent(sym),{cache:'no-store',signal:AbortSignal.timeout(7000)});
+  if(!r.ok)throw Error('HTTP '+r.status);
+  const j=await r.json(), rev=(j.splits||[]).filter(x=>x.reverse).slice().reverse();
+  const existing=box.innerHTML;
+  const history=rev.length?'<div class="archive-timeline"><h3>تاريخ التقسيمات العكسية</h3>'+rev.map(x=>'<div class="timeline-row"><i class="timeline-dot"></i><div><b>Reverse Split · '+esc(x.ratio||'—')+'</b><p>'+(x.fallback?'من قاعدة SnipeLab الحالية':'حدث تقسيم تاريخي من سجل المصدر')+'</p></div><time>'+esc(x.date||'—')+'</time></div>').join('')+'</div>':'<div class="archive-timeline"><h3>تاريخ التقسيمات العكسية</h3><div class="research-empty">لم نجد تقسيمات تاريخية إضافية.</div></div>';
+  box.innerHTML=existing+'<div class="ai-overview"><strong>عدد التقسيمات العكسية المرصودة: '+esc(j.reverse_split_count||0)+'</strong><p>هذه الخطوة خفيفة وتعمل فقط عند البحث، بدون Worker بالخلفية.</p></div>'+history;
+ }catch(e){
+  box.insertAdjacentHTML('beforeend','<div class="status">تعذر جلب تاريخ التقسيمات الآن، وبقيت بيانات SnipeLab الأساسية ظاهرة.</div>');
+ }finally{btn.disabled=false}
 }
 async function runAi(){
  const sym=$('aiQuery').value.trim().toUpperCase().replace(/[^A-Z0-9.-]/g,'');if(!sym)return;
