@@ -252,8 +252,17 @@ async def live_daily_rsi_loop():
                         r.raise_for_status()
                         result=(r.json().get("chart",{}).get("result") or [None])[0]
                         if not result:return
-                        q=((result.get("indicators") or {}).get("quote") or [{}])[0]
-                        closes=[float(x) for x in (q.get("close") or []) if x is not None and float(x)>0]
+                        indicators=result.get("indicators") or {}
+                        q=(indicators.get("quote") or [{}])[0]
+                        adjusted=(indicators.get("adjclose") or [{}])[0].get("adjclose") or []
+                        raw=q.get("close") or []
+                        closes=[]
+                        for i,x in enumerate(raw):
+                            try:
+                                a=adjusted[i] if i<len(adjusted) else None
+                                v=float(a) if a is not None and float(a)>0 else float(x)
+                                if v>0:closes.append(v)
+                            except (TypeError,ValueError):continue
                         if len(closes)<15:return
                         changes=[closes[i]-closes[i-1] for i in range(1,len(closes))]
                         gains=[max(x,0.0) for x in changes];losses=[max(-x,0.0) for x in changes]
@@ -263,7 +272,7 @@ async def live_daily_rsi_loop():
                         value=100.0 if l==0 else 100.0-(100.0/(1.0+g/l))
                         h=HISTORY.setdefault(sym,{})
                         h["rsi_daily"]=round(value,2);h["rsi_daily_live"]=round(value,2)
-                        h["rsi_method"]="Wilder 14 / Yahoo 1d current candle"
+                        h["rsi_method"]="Wilder 14 / Yahoo split-adjusted 1d current candle"
                         h["rsi_live_updated_at"]=utcnow().isoformat()
                     except Exception:
                         return
