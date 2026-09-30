@@ -421,10 +421,11 @@ async function runArchive(){
  try{
   const r=await fetch('/api/archive-splits/'+encodeURIComponent(sym),{cache:'no-store',signal:AbortSignal.timeout(7000)});
   if(!r.ok)throw Error('HTTP '+r.status);
-  const j=await r.json(), rev=(j.splits||[]).filter(x=>x.reverse).slice().reverse();
+  const j=await r.json(), rev=(j.splits||[]).filter(x=>x.reverse).slice().reverse(), strong=j.last_strong_move;
   const existing=box.innerHTML;
-  const history=rev.length?'<div class="archive-timeline"><h3>تاريخ التقسيمات العكسية</h3>'+rev.map(x=>'<div class="timeline-row"><i class="timeline-dot"></i><div><b>Reverse Split · '+esc(x.ratio||'—')+'</b><p>'+(x.fallback?'من قاعدة SnipeLab الحالية':'حدث تقسيم تاريخي من سجل المصدر')+'</p></div><time>'+esc(x.date||'—')+'</time></div>').join('')+'</div>':'<div class="archive-timeline"><h3>تاريخ التقسيمات العكسية</h3><div class="research-empty">لم نجد تقسيمات تاريخية إضافية.</div></div>';
-  box.innerHTML=existing+'<div class="ai-overview"><strong>عدد التقسيمات العكسية المرصودة: '+esc(j.reverse_split_count||0)+'</strong><p>هذه الخطوة خفيفة وتعمل فقط عند البحث، بدون Worker بالخلفية.</p></div>'+history;
+  const strongBox='<div class="ai-overview"><strong>آخر حركة قوية</strong><p>'+(strong?('آخر +100% أو أكثر: +'+esc(fmt(strong.gain_pct))+'% · '+esc(money(strong.low))+' → '+esc(money(strong.high))+' · '+esc(strong.low_date)+' → '+esc(strong.high_date)+' · '+esc(strong.sessions)+' جلسات'):'لم تُرصد حركة +100% وفق قاعدة 10 جلسات ضمن التاريخ المتاح')+'</p></div>';
+  const history=rev.length?'<div class="archive-timeline"><h3>ماذا فعل بعد كل تقسيم؟</h3>'+rev.map(x=>{const m=x.best_10_session_move;return '<div class="timeline-row"><i class="timeline-dot"></i><div><b>Reverse Split · '+esc(x.ratio||'—')+'</b><p>يوم التقسيم: '+(x.split_day_range_pct==null?'—':('مدى +'+esc(fmt(x.split_day_range_pct))+'% · '+esc(money(x.split_day_low))+' → '+esc(money(x.split_day_high))))+'</p><p>'+(m?('أقوى حركة خلال أول 10 جلسات: +'+esc(fmt(m.gain_pct))+'% · '+esc(money(m.low))+' → '+esc(money(m.high))+' · '+esc(m.low_date)+' → '+esc(m.high_date)):'لا توجد حركة مكتملة ضمن البيانات المتاحة')+'</p></div><time>'+esc(x.date||'—')+'</time></div>'}).join('')+'</div>':'<div class="archive-timeline"><h3>ماذا فعل بعد كل تقسيم؟</h3><div class="research-empty">لم نجد تقسيمات تاريخية إضافية.</div></div>';
+  box.innerHTML=existing+'<div class="ai-overview"><strong>عدد التقسيمات العكسية المرصودة: '+esc(j.reverse_split_count||0)+'</strong><p>الحسبة تعمل فقط عند البحث ومخزنة 24 ساعة، بدون Worker بالخلفية.</p></div>'+strongBox+history;
  }catch(e){
   box.insertAdjacentHTML('beforeend','<div class="status">تعذر جلب تاريخ التقسيمات الآن، وبقيت بيانات SnipeLab الأساسية ظاهرة.</div>');
  }finally{btn.disabled=false}
