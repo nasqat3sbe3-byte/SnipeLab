@@ -244,6 +244,29 @@ body{background:radial-gradient(ellipse 100% 520px at 50% -160px,#183536 0%,#0a1
  .compact-footer{margin-top:5px}.compact-footer-status{font-size:9px;color:#9aa3a7}.compact-star{font-size:10px!important;background:transparent!important;border:0!important;color:#c9a65d!important}
  .compact-details summary{font-size:10px;padding:7px 2px!important}
 }
+
+/* Approved luxury palette refinement — preserve existing mobile geometry */
+:root{--bg:#080b0c;--panel:#0f1314;--edge:#2b3031;--gold:#d2aa68;--teal:#91aaa5;--green:#55d69a;--red:#ef6670;--muted:#929a9c}
+body{background:
+ radial-gradient(circle at 15% -10%,rgba(210,170,104,.055),transparent 28%),
+ linear-gradient(180deg,#080b0c 0%,#0a0e0f 48%,#070a0b 100%);color:#eeeae2}
+.head{border-bottom-color:#252a2b}.brand{color:#eee9df}.brand-mark{color:var(--gold)}
+.uptime{background:#0c1111;border-color:#51452f}.events{background:linear-gradient(120deg,#121616,#0d1112);border-color:#5e4d30}
+.summary button{background:linear-gradient(145deg,#111617,#0c1011);border-color:#303536}.summary button:first-child{border-color:#765f38;background:linear-gradient(145deg,#211a10,#101112)}
+.search,.number{background:#0c1112;border-color:#292f30}.stock{background:linear-gradient(145deg,#111617,#0b0f10);border-color:#292f30;box-shadow:0 9px 28px rgba(0,0,0,.18)}
+.stock.ready{border-color:#665333}.stock.top{border-color:#80683e;background:linear-gradient(135deg,#17150f,#0d1212)}
+.compact-progress{background:#282d2e}.compact-progress span{background:linear-gradient(90deg,#80663a,#d8b46f)}
+.label{color:#c5d2cf;border-color:#40504d}.label.ready{color:#77d9ad;border-color:#315f4d}
+.good{color:#62dca5}.bad{color:#ef7078}.sym{color:#f0ece4}.score{color:#e3bf78;background:#2a2216}
+@media(max-width:640px){
+ html,body{width:100%;max-width:100%;overflow-x:hidden}
+ .shell{width:100%;max-width:100%;padding-left:10px;padding-right:10px}
+ .stock,.compact-stock,.browse-tools,.events,.summary{max-width:100%}
+ .compact-numbers.compact-metrics{width:100%;grid-template-columns:repeat(6,minmax(0,1fr))}
+ .compact-numbers.compact-metrics .number{min-width:0}
+ .compact-numbers.compact-metrics small{font-size:7.5px}
+ .compact-numbers.compact-metrics strong{font-size:11.5px}
+}
 </style></head><body><main class="shell"><header class="head"><div class="head-primary"><div class="brand-wrap"><div class="brand"><span class="brand-mark">◎</span>SnipeLab</div><div class="brand-sub">ماسح أسهم التقسيم العكسي</div></div><div class="uptime offline" id="uptime"><small><span class="dot"></span>جارٍ فحص السيرفر</small><b>—</b></div></div><div class="head-market"><span class="market-heading">♧ حالة السوق</span><span class="market-state" id="marketState">جارٍ التحقق</span></div></header><section class="events"><div class="event-head"><span>ϟ آخر التنبيهات <small id="eventCount" class="event-count"></small></span><button id="eventToggle" type="button">عرض الكل ⌄</button></div><div id="eventsList" aria-live="polite"><div class="event-line">جارٍ تحميل الأحداث...</div></div></section><div class="summary" aria-label="إحصائيات قابلة للضغط"><button data-filter="all" type="button"><b id="countAll">—</b>جميع الأسهم</button><button data-filter="borrow" type="button"><b id="countBorrow">—</b>Available &lt;15K</button><button data-filter="ready" type="button"><b id="countReady">—</b>الجاهز</button><button data-filter="near" type="button"><b id="countNear">—</b>تحت الجاهزية</button></div><div class="browse-tools"><input id="query" class="search" type="search" placeholder="ابحث باسم السهم أو الشركة..." aria-label="البحث عن سهم"><div class="filters" role="group" aria-label="فلترة الأسهم"><button class="on" data-filter="all">الكل</button><button data-filter="ready">الجاهز</button><button data-filter="radar">الرادار <span id="radarCount"></span></button><button data-filter="favorites">☆ قنصي</button><details class="filter-more"><summary aria-label="عرض فلاتر إضافية" title="المزيد من الفلاتر"><span class="mobile-more-icon" aria-hidden="true">☷</span><span class="desktop-more-label">المزيد <span class="more-arrow">⌄</span></span></summary><div class="filter-more-menu"><button data-filter="near">تحت الجاهزية</button><button data-filter="borrow">Available &lt;15K</button><button data-filter="top">♛ توب</button><button type="button" id="labOpen">⚗ المختبر</button></div></details></div></div><div id="status" class="status">جارٍ تحميل بيانات الأسهم...</div><section id="stocks" class="stocks" aria-live="polite"></section></main><dialog id="labDialog" class="chart-dialog"><div class="chart-head"><strong>مختبر نتائج الرادار</strong><button type="button" id="labClose">✕</button></div><div id="labBody" class="history-body">جارٍ التحميل...</div></dialog><dialog id="historyDialog" class="chart-dialog"><div class="chart-head"><strong id="historyTitle">تاريخ الشورت</strong><button id="historyClose" type="button">✕</button></div><div id="historyBody" class="history-body">جارٍ التحميل...</div></dialog><dialog id="chartDialog" class="chart-dialog" aria-label="شارت TradingView"><div class="chart-head"><strong id="chartTitle">الشارت</strong><div><a id="chartExternal" href="https://www.tradingview.com/chart/" target="_blank" rel="noopener noreferrer">فتح TradingView ↗</a><button type="button" id="chartClose" aria-label="إغلاق الشارت">✕</button></div></div><div id="tvChart" class="tradingview-widget-container"><div class="chart-loading">جارٍ تحميل شارت TradingView…</div></div><div class="chart-note">الشارت من TradingView؛ بعض بيانات السوق قد تكون متأخرة حسب المزود.</div></dialog><script>
 'use strict';
 let favorites=new Set(JSON.parse(localStorage.getItem('snipelab-favorites')||'[]'));let payload={rows:{},events:[],news:{}},selected='all',limit=24,showAllEvents=false,loading=false,serverBoot=0,newsLoaded=new Set(),newsLoading=new Set();
