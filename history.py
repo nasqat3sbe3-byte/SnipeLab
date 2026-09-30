@@ -1,4 +1,4 @@
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, timedelta
 from zoneinfo import ZoneInfo
 import asyncio
 import time
@@ -387,7 +387,9 @@ async def worker(universe,history,yahoo,save):
                     eff=meta["effective_date"]
                     # Pull enough PRE-split daily history for a true Wilder RSI.
                     # Post-split extrema are still filtered by effective date inside calculate().
-                    rsi_start=date.fromisoformat(eff)-__import__("datetime").timedelta(days=180)
+                    # RSI(14) needs prior closes for Wilder initialization; this history is
+                    # calculation input only. The displayed value is today's Daily RSI.
+                    rsi_start=datetime.now(timezone.utc).date()-timedelta(days=120)
                     start=int(datetime.combine(rsi_start,datetime.min.time(),timezone.utc).timestamp())
                     r=await client.get(yahoo.format(symbol=sym),params={"period1":start,"period2":int(time.time())+86400,"interval":"1d","events":"history"})
                     r.raise_for_status()
