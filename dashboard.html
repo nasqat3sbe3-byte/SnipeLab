@@ -413,6 +413,19 @@ function archiveCard(sym){
  '</div>'+
  '<div class="archive-timeline"><h3>الخط الزمني · المرحلة الخفيفة</h3><div class="timeline-row"><i class="timeline-dot"></i><div><b>Reverse Split</b><p>نعرض الآن فقط البيانات الموجودة أصلًا في SnipeLab حتى نختبر سرعة السيرفر قبل إضافة أي بحث تاريخي خارجي.</p></div><time>'+esc(split)+'</time></div></div>';
 }
+function deepArchiveView(j){
+ const summary=(j.summary||[]).map(x=>esc(x)).join('<br>');
+ const offers=(j.offerings||[]).map(x=>'<div class="timeline-row"><i class="timeline-dot"></i><div><b>'+esc(x.kind||'Offering')+' · '+esc(x.status||'')+'</b><p>'+esc(x.form||'')+(x.description?' · '+esc(x.description):'')+'</p></div><time>'+esc(x.date||'—')+'</time></div>').join('');
+ const owners=(j.ownership||[]).map(x=>'<div class="timeline-row"><i class="timeline-dot"></i><div><b>'+esc(x.holder||'مالك/صندوق مُبلغ')+'</b><p>'+esc(x.form||'')+' · '+esc(x.change||'')+'</p></div><time>'+esc(x.date||'—')+'</time></div>').join('');
+ const filings=(j.filings||[]).filter(x=>x.topics?.length).slice(0,18).map(x=>'<div class="timeline-row"><i class="timeline-dot"></i><div><b>'+esc(x.form||'SEC')+' · '+esc((x.topics||[]).join(' / '))+'</b><p>'+esc((x.evidence||[])[0]||x.description||'إفصاح تمت مراجعته.')+'</p></div><time>'+esc(x.date||'—')+'</time></div>').join('');
+ const ext=j.extended_hours;
+ return '<div class="ai-overview"><strong>البرنت الكامل</strong><p>'+(summary||'لم يكتمل الملخص بعد.')+'</p></div>'+
+ (ext?'<div class="archive-grid"><div class="archive-stat"><small>الساعات الممتدة</small><b>+'+esc(fmt(ext.gain_pct))+'%</b><span>'+esc(money(ext.low))+' → '+esc(money(ext.high))+'</span></div><div class="archive-stat"><small>الفترة</small><b>'+esc((ext.low_at||'').slice(0,16))+'</b><span>إلى '+esc((ext.high_at||'').slice(0,16))+'</span></div></div>':'')+
+ '<div class="archive-timeline"><h3>الطرح والتخفيف · SEC</h3>'+(offers||'<div class="research-empty">لم نرصد طرحًا حديثًا ضمن الملفات المفحوصة.</div>')+'</div>'+
+ '<div class="archive-timeline"><h3>الصناديق والملكية · SEC</h3>'+(owners||'<div class="research-empty">لم نرصد ملفات ملكية حديثة ضمن النطاق المفحوص.</div>')+'</div>'+
+ '<div class="archive-timeline"><h3>نبش الإفصاحات المهمة</h3>'+(filings||'<div class="research-empty">لم نستخرج أحداثًا رئيسية إضافية من أحدث الإفصاحات المهمة.</div>')+'</div>'+
+ '<div class="status">'+esc(j.coverage_note||'')+(j.warnings?.length?' · '+j.warnings.map(esc).join(' · '):'')+'</div>';
+}
 async function runArchive(){
  const sym=$('archiveQuery').value.trim().toUpperCase().replace(/[^A-Z0-9.-]/g,'');if(!sym)return;
  const box=$('archiveResult'),btn=$('archiveSearch');
@@ -420,14 +433,24 @@ async function runArchive(){
  btn.disabled=true;
  try{
   const r=await fetch('/api/archive-splits/'+encodeURIComponent(sym),{cache:'no-store',signal:AbortSignal.timeout(7000)});
+  if(r.ok){
+   const j=await r.json(), rev=(j.splits||[]).filter(x=>x.reverse).slice().reverse(), strong=j.last_strong_move;
+   const existing=box.innerHTML;
+   const strongBox='<div class="ai-overview"><strong>آخر حركة قوية</strong><p>'+(strong?('آخر +100% أو أكثر: +'+esc(fmt(strong.gain_pct))+'% · '+esc(money(strong.low))+' → '+esc(money(strong.high))+' · '+esc(strong.low_date)+' → '+esc(strong.high_date)+' · '+esc(strong.sessions)+' جلسات'):'لم تُرصد حركة +100% وفق قاعدة 10 جلسات ضمن التاريخ المتاح')+'</p></div>';
+   const history=rev.length?'<div class="archive-timeline"><h3>ماذا فعل بعد كل تقسيم؟</h3>'+rev.map(x=>{const m=x.best_10_session_move;return '<div class="timeline-row"><i class="timeline-dot"></i><div><b>Reverse Split · '+esc(x.ratio||'—')+'</b><p>يوم التقسيم: '+(x.split_day_range_pct==null?'—':('مدى +'+esc(fmt(x.split_day_range_pct))+'% · '+esc(money(x.split_day_low))+' → '+esc(money(x.split_day_high))))+'</p><p>'+(m?('أقوى حركة خلال أول 10 جلسات: +'+esc(fmt(m.gain_pct))+'% · '+esc(money(m.low))+' → '+esc(money(m.high))+' · '+esc(m.low_date)+' → '+esc(m.high_date)):'لا توجد حركة مكتملة ضمن البيانات المتاحة')+'</p></div><time>'+esc(x.date||'—')+'</time></div>'}).join('')+'</div>':'';
+   box.innerHTML=existing+'<div class="ai-overview"><strong>عدد التقسيمات العكسية المرصودة: '+esc(j.reverse_split_count||0)+'</strong><p>المرحلة السريعة من الأرشيف.</p></div>'+strongBox+history;
+  }
+ }catch(e){}
+ box.insertAdjacentHTML('beforeend','<div id="deepArchiveLoading" class="research-empty">جارٍ نبش SEC والساعات الممتدة والملكية في محرك منفصل… بيانات القنص تظل شغالة.</div>');
+ try{
+  const r=await fetch('/api/archive-deep/'+encodeURIComponent(sym),{cache:'no-store',signal:AbortSignal.timeout(38000)});
   if(!r.ok)throw Error('HTTP '+r.status);
-  const j=await r.json(), rev=(j.splits||[]).filter(x=>x.reverse).slice().reverse(), strong=j.last_strong_move;
-  const existing=box.innerHTML;
-  const strongBox='<div class="ai-overview"><strong>آخر حركة قوية</strong><p>'+(strong?('آخر +100% أو أكثر: +'+esc(fmt(strong.gain_pct))+'% · '+esc(money(strong.low))+' → '+esc(money(strong.high))+' · '+esc(strong.low_date)+' → '+esc(strong.high_date)+' · '+esc(strong.sessions)+' جلسات'):'لم تُرصد حركة +100% وفق قاعدة 10 جلسات ضمن التاريخ المتاح')+'</p></div>';
-  const history=rev.length?'<div class="archive-timeline"><h3>ماذا فعل بعد كل تقسيم؟</h3>'+rev.map(x=>{const m=x.best_10_session_move;return '<div class="timeline-row"><i class="timeline-dot"></i><div><b>Reverse Split · '+esc(x.ratio||'—')+'</b><p>يوم التقسيم: '+(x.split_day_range_pct==null?'—':('مدى +'+esc(fmt(x.split_day_range_pct))+'% · '+esc(money(x.split_day_low))+' → '+esc(money(x.split_day_high))))+'</p><p>'+(m?('أقوى حركة خلال أول 10 جلسات: +'+esc(fmt(m.gain_pct))+'% · '+esc(money(m.low))+' → '+esc(money(m.high))+' · '+esc(m.low_date)+' → '+esc(m.high_date)):'لا توجد حركة مكتملة ضمن البيانات المتاحة')+'</p></div><time>'+esc(x.date||'—')+'</time></div>'}).join('')+'</div>':'<div class="archive-timeline"><h3>ماذا فعل بعد كل تقسيم؟</h3><div class="research-empty">لم نجد تقسيمات تاريخية إضافية.</div></div>';
-  box.innerHTML=existing+'<div class="ai-overview"><strong>عدد التقسيمات العكسية المرصودة: '+esc(j.reverse_split_count||0)+'</strong><p>الحسبة تعمل فقط عند البحث ومخزنة 24 ساعة، بدون Worker بالخلفية.</p></div>'+strongBox+history;
+  const j=await r.json(),loading=$('deepArchiveLoading');
+  if(j.error)throw Error(j.message||j.error);
+  if(loading)loading.remove();
+  box.insertAdjacentHTML('beforeend',deepArchiveView(j));
  }catch(e){
-  box.insertAdjacentHTML('beforeend','<div class="status">تعذر جلب تاريخ التقسيمات الآن، وبقيت بيانات SnipeLab الأساسية ظاهرة.</div>');
+  const loading=$('deepArchiveLoading');if(loading)loading.textContent='تعذر إكمال النبش العميق الآن: '+e.message+' · بيانات الأرشيف السريعة بقيت ظاهرة.';
  }finally{btn.disabled=false}
 }
 async function runAi(){
