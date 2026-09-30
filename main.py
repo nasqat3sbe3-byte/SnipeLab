@@ -238,76 +238,52 @@ async def fetch_quote(client, sem, symbol):
         return symbol,None
 
 async def live_daily_rsi_loop():
-    """Refresh today's Daily RSI(14) for every ticker, independent of split history."""
-    await asyncio.sleep(12)
-    headers={"User-Agent":"Mozilla/5.0 SnipeLab/0.7"}
-    limits=httpx.Limits(max_connections=5,max_keepalive_connections=4)
-    async with httpx.AsyncClient(timeout=10,follow_redirects=True,headers=headers,limits=limits) as client:
+    """Refresh Daily RSI(14) directly from Alpha Vantage technical indicator API."""
+    await asyncio.sleep(8)
+    api_key=os.environ.get("ALPHAVANTAGE_API_KEY","").strip()
+    headers={"User-Agent":"SnipeLab/0.7"}
+    async with httpx.AsyncClient(timeout=15,follow_redirects=True,headers=headers) as client:
         while True:
             syms=sorted(UNIVERSE)
-            sem=asyncio.Semaphore(4)
             rsi_errors=[]
-            async def one(sym):
-                async with sem:
-                    try:
-                        r=await client.get(YAHOO.format(symbol=sym),params={"range":"2y","interval":"1d","includePrePost":"false","events":"history"})
-                        r.raise_for_status()
-                        result=(r.json().get("chart",{}).get("result") or [None])[0]
-                        if not result:return
-                        indicators=result.get("indicators") or {}
-                        q=(indicators.get("quote") or [{}])[0]
-                        raw=q.get("close") or []
-                        timestamps=result.get("timestamp") or []
-                        tz=ZoneInfo((result.get("meta") or {}).get("exchangeTimezoneName") or "America/New_York")
-                        today=datetime.now(tz).date()
-                        closes=[]
-                        today_index=None
-                        for i,x in enumerate(raw):
-                            try:
-                                if x is None or float(x)<=0:continue
-                                day=datetime.fromtimestamp(timestamps[i],tz).date()
-                                closes.append(float(x))
-                                if day==today:today_index=len(closes)-1
-                            except (IndexError,TypeError,ValueError):continue
-                        # Yahoo's 1d endpoint may keep today's close stale/cached intraday.
-                        # Replace ONLY today's in-progress daily close with our freshest quote,
-                        # while keeping the full historical series on the same raw Yahoo scale.
-                        live_q=QUOTES.get(sym) or {}
-                        try:
-                            live_price=float(live_q.get("price"))
-                            live_ts=datetime.fromisoformat(str(live_q.get("market_timestamp")).replace("Z","+00:00")).astimezone(tz).date()
-                            if live_price>0 and live_ts==today:
-                                if today_index is not None:closes[today_index]=live_price
-                                elif closes:closes.append(live_price)
-                        except (TypeError,ValueError):pass
-                        if len(closes)<15:return
-                        changes=[closes[i]-closes[i-1] for i in range(1,len(closes))]
-                        gains=[max(x,0.0) for x in changes];losses=[max(-x,0.0) for x in changes]
-                        g=sum(gains[:14])/14.0;l=sum(losses[:14])/14.0
-                        for i in range(14,len(changes)):
-                            g=((g*13.0)+gains[i])/14.0;l=((l*13.0)+losses[i])/14.0
-                        value=100.0 if l==0 else 100.0-(100.0/(1.0+g/l))
-                        value=round(value,2)
-                        # Keep live RSI outside HISTORY. historical_worker replaces history
-                        # records during refreshes and used to erase/roll back the live value.
-                        LIVE_RSI[sym]={"value":value,"updated_at":utcnow().isoformat(),
-                            "method":"Wilder 14 / Yahoo 1d history + freshest live quote / 2y seed"}
-                        h=HISTORY.setdefault(sym,{})
-                        h["rsi_daily"]=value;h["rsi_daily_live"]=value
-                        h["rsi_method"]="Wilder 14 / Yahoo 1d history + freshest live quote / 2y seed"
-                        h["rsi_live_updated_at"]=LIVE_RSI[sym]["updated_at"]
-                    except Exception as exc:
-                        rsi_errors.append(f"{sym}: {type(exc).__name__}: {str(exc)[:80]}")
-                        return
-            for pos in range(0,len(syms),20):
-                await asyncio.gather(*(one(s) for s in syms[pos:pos+20]))
-                await asyncio.sleep(1)
+            if not api_key:
+                STATE["last_rsi_scan"]=utcnow().isoformat()
+                STATE["rsi_ok"]=0;STATE["rsi_failed"]=len(syms)
+                STATE["last_rsi_error"]="ALPHAVANTAGE_API_KEY is missing"
+                await asyncio.sleep(120);continue
+            # Alpha Vantage limits depend on the account. Process serially so we do not
+            # burst the provider; successful values stay cached until their next refresh.
+            for sym in syms:
+                try:
+                    r=await client.get("https://www.alphavantage.co/query",params={
+                        "function":"RSI","symbol":sym,"interval":"daily",
+                        "time_period":"14","series_type":"close","apikey":api_key})
+                    r.raise_for_status()
+                    data=r.json()
+                    series=data.get("Technical Analysis: RSI") or {}
+                    if not series:
+                        msg=data.get("Information") or data.get("Note") or data.get("Error Message") or "no RSI series"
+                        raise ValueError(str(msg)[:120])
+                    latest_day=max(series)
+                    value=round(float(series[latest_day]["RSI"]),2)
+                    stamp=utcnow().isoformat()
+                    LIVE_RSI[sym]={"value":value,"updated_at":stamp,
+                        "market_day":latest_day,
+                        "method":"Alpha Vantage RSI(14) / daily / close"}
+                    h=HISTORY.setdefault(sym,{})
+                    h["rsi_daily"]=value;h["rsi_daily_live"]=value
+                    h["rsi_method"]="Alpha Vantage RSI(14) / daily / close"
+                    h["rsi_live_updated_at"]=stamp
+                except Exception as exc:
+                    rsi_errors.append(f"{sym}: {type(exc).__name__}: {str(exc)[:100]}")
+                await asyncio.sleep(0.8)
             STATE["last_rsi_scan"]=utcnow().isoformat()
             STATE["rsi_ok"]=len(LIVE_RSI)
             STATE["rsi_failed"]=len(rsi_errors)
             STATE["last_rsi_error"]=rsi_errors[0] if rsi_errors else None
             save_persistent_state()
             await asyncio.sleep(120)
+
 
 async def delayed_market_start():
     await asyncio.sleep(5)
