@@ -4,6 +4,7 @@ import io
 import os
 import re
 import json
+import sys
 from pathlib import Path
 import time
 from datetime import datetime, timezone, date
@@ -1123,6 +1124,38 @@ async def archive_splits(symbol: str):
             result["source"]="SnipeLab current split fallback"
     _ARCHIVE_SPLIT_CACHE[symbol]={"at":time.time(),"result":result}
     return result
+
+_ARCHIVE_DEEP_CACHE={}
+_ARCHIVE_DEEP_LOCK=asyncio.Semaphore(1)
+
+@app.get("/api/archive-deep/{symbol}")
+async def archive_deep(symbol: str):
+    """Run heavy archive research in a separate subprocess so live market workers stay responsive."""
+    symbol=re.sub(r"[^A-Z0-9.-]","",symbol.upper())[:12]
+    if not symbol:return {"symbol":symbol,"error":"invalid symbol"}
+    cached=_ARCHIVE_DEEP_CACHE.get(symbol)
+    if cached and time.time()-cached["at"]<86400:return cached["result"]
+    worker=Path(__file__).parent/"archive_worker.py"
+    if not worker.exists():return {"symbol":symbol,"error":"archive worker missing"}
+    async with _ARCHIVE_DEEP_LOCK:
+        cached=_ARCHIVE_DEEP_CACHE.get(symbol)
+        if cached and time.time()-cached["at"]<86400:return cached["result"]
+        try:
+            proc=await asyncio.create_subprocess_exec(
+                sys.executable,str(worker),symbol,
+                stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
+            out,err=await asyncio.wait_for(proc.communicate(),timeout=35)
+            if proc.returncode!=0:
+                return {"symbol":symbol,"error":"archive worker failed","detail":err.decode("utf-8","replace")[-500:]}
+            result=json.loads(out.decode("utf-8","replace"))
+            _ARCHIVE_DEEP_CACHE[symbol]={"at":time.time(),"result":result}
+            return result
+        except asyncio.TimeoutError:
+            try: proc.kill()
+            except Exception: pass
+            return {"symbol":symbol,"error":"archive timeout","message":"الأرشيف العميق أخذ وقتًا أطول من الحد؛ بيانات القنص الأساسية لم تتأثر."}
+        except Exception as exc:
+            return {"symbol":symbol,"error":type(exc).__name__,"message":"تعذر تشغيل الأرشيف العميق."}
 
 @app.get("/api/history-coverage")
 async def history_coverage():
