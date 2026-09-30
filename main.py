@@ -1033,6 +1033,166 @@ async def ticker_news(symbol: str):
     try:return await task
     finally:_NEWS_INFLIGHT.pop(symbol,None)
 
+
+_ARCHIVE_CACHE={}
+_ARCHIVE_TTL=21600
+_SEC_TICKERS_CACHE={"at":0,"map":{}}
+
+def _archive_wave100(bars,start_i,end_i,window=10):
+    """Latest >=100% daily low -> later daily high wave; same-day ordering is excluded."""
+    hits=[]
+    for lo_i in range(max(0,start_i),min(end_i,len(bars))):
+        low=bars[lo_i].get("low")
+        if not low or low<=0:continue
+        for hi_i in range(lo_i+1,min(end_i,lo_i+window+1,len(bars))):
+            high=bars[hi_i].get("high")
+            if high and high/low>=2:
+                hits.append({"low_date":bars[lo_i]["date"],"low":round(low,6),
+                    "high_date":bars[hi_i]["date"],"high":round(high,6),
+                    "gain_pct":round((high/low-1)*100,2),"sessions":hi_i-lo_i})
+    return max(hits,key=lambda x:(x["high_date"],x["gain_pct"])) if hits else None
+
+def _split_ratio_parts(raw):
+    if not raw:return None
+    m=re.search(r"([0-9.]+)\s*[:/]\s*([0-9.]+)",str(raw))
+    if not m:return None
+    a,b=float(m.group(1)),float(m.group(2))
+    return (a,b) if a>0 and b>0 else None
+
+async def _sec_cik(client,symbol):
+    now=time.time()
+    if now-_SEC_TICKERS_CACHE["at"]>86400 or not _SEC_TICKERS_CACHE["map"]:
+        r=await client.get("https://www.sec.gov/files/company_tickers.json")
+        r.raise_for_status()
+        _SEC_TICKERS_CACHE["map"]={str(v.get("ticker","")).upper():int(v["cik_str"]) for v in r.json().values() if v.get("ticker")}
+        _SEC_TICKERS_CACHE["at"]=now
+    return _SEC_TICKERS_CACHE["map"].get(symbol)
+
+def _sec_rows(sub):
+    recent=((sub.get("filings") or {}).get("recent") or {})
+    keys=("accessionNumber","filingDate","reportDate","form","primaryDocument","primaryDocDescription")
+    n=max([len(recent.get(k) or []) for k in keys] or [0]);out=[]
+    for i in range(n):
+        row={k:(recent.get(k) or [None]*n)[i] if i<len(recent.get(k) or []) else None for k in keys}
+        if row.get("accessionNumber"):out.append(row)
+    return out
+
+async def _sec_doc_text(client,cik,row):
+    acc=str(row.get("accessionNumber") or "").replace("-","");doc=row.get("primaryDocument")
+    if not acc or not doc:return ""
+    try:
+        r=await client.get(f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{doc}",timeout=8)
+        r.raise_for_status()
+        return BeautifulSoup(r.text,"html.parser").get_text(" ",strip=True)[:500000]
+    except Exception:return ""
+
+def _offering_status(form,text):
+    t=re.sub(r"\s+"," ",text).lower()
+    completed=any(x in t for x in ("offering has closed","offering closed","completed its previously announced","closing of its previously announced","completed the offering"))
+    priced=any(x in t for x in ("pricing of its","priced public offering","purchase price of","offering price of"))
+    atm=("at-the-market" in t or "at the market offering" in t or "sales agreement" in t)
+    if completed:return "مكتمل"
+    if priced:return "تم التسعير / لم نجد تأكيد إغلاق"
+    if atm:return "برنامج ATM / الحالة تعتمد على الإفصاحات اللاحقة"
+    if form in ("S-1","S-1/A","F-1","F-1/A"):return "تسجيل / ليس دليلاً على تنفيذ الطرح"
+    return "إفصاح طرح / التنفيذ غير مؤكد"
+
+def _reporting_person(text):
+    pats=(r"Name of Reporting Person\s*[:\-]?\s*([A-Z][A-Za-z0-9 &.,'()/-]{2,100})",
+          r"NAME OF REPORTING PERSON\s*([A-Z][A-Z0-9 &.,'()/-]{2,100})")
+    for p in pats:
+        m=re.search(p,text,re.I)
+        if m:
+            name=re.split(r"\s{2,}|Item\s+\d|I\.R\.S",m.group(1).strip())[0].strip(" .:-")
+            if 2<len(name)<110:return name
+    return None
+
+@app.get("/api/archive/{symbol}")
+async def stock_archive(symbol: str):
+    """Source-backed stock fingerprint: splits, 100% waves, SEC offerings and 13D/G ownership filings."""
+    symbol=re.sub(r"[^A-Z0-9.-]","",symbol.upper())[:12]
+    if not symbol:return {"symbol":symbol,"error":"invalid symbol"}
+    cached=_ARCHIVE_CACHE.get(symbol)
+    if cached and time.time()-cached["at"]<_ARCHIVE_TTL:return cached["result"]
+    headers={"User-Agent":os.environ.get("SEC_USER_AGENT","SnipeLab research admin@snipelab.local")}
+    result={"symbol":symbol,"generated_at":utcnow().isoformat(),"sources":[],"splits":[],"reverse_split_count":0,
+            "last_100_before_split":None,"first_100_after_split":None,"offerings":[],"ownership":[],"warnings":[]}
+    async with httpx.AsyncClient(timeout=14,follow_redirects=True,headers=headers) as client:
+        # Yahoo supplies long daily history + corporate split events. Prices are adjusted,
+        # so wave percentages are comparable across split boundaries.
+        try:
+            r=await client.get(YAHOO.format(symbol=symbol),params={"range":"max","interval":"1d","events":"history,splits","includePrePost":"false"})
+            r.raise_for_status();chart=(r.json().get("chart",{}).get("result") or [None])[0]
+            if chart:
+                ts=chart.get("timestamp") or [];q=((chart.get("indicators") or {}).get("quote") or [{}])[0]
+                bars=[]
+                for i,t in enumerate(ts):
+                    try:
+                        lo=float(q["low"][i]);hi=float(q["high"][i])
+                        if lo>0 and hi>=lo:bars.append({"date":datetime.fromtimestamp(int(t),timezone.utc).date().isoformat(),"low":lo,"high":hi})
+                    except (TypeError,ValueError,IndexError):continue
+                events=((chart.get("events") or {}).get("splits") or {})
+                splits=[]
+                for ev in events.values():
+                    raw=ev.get("splitRatio") or (f'{ev.get("numerator")}:{ev.get("denominator")}' if ev.get("numerator") and ev.get("denominator") else None)
+                    parts=_split_ratio_parts(raw)
+                    d=datetime.fromtimestamp(int(ev.get("date")),timezone.utc).date().isoformat() if ev.get("date") else None
+                    reverse=bool(parts and parts[0]<parts[1])
+                    splits.append({"date":d,"ratio":raw,"reverse":reverse,"source":"Yahoo chart split event"})
+                splits.sort(key=lambda x:x["date"] or "")
+                result["splits"]=splits;result["reverse_split_count"]=sum(1 for x in splits if x["reverse"])
+                latest=next((x for x in reversed(splits) if x["reverse"]),None)
+                if latest and bars:
+                    cut=next((i for i,b in enumerate(bars) if b["date"]>=latest["date"]),len(bars))
+                    result["last_100_before_split"]=_archive_wave100(bars,max(0,cut-260),cut)
+                    post=[]
+                    for lo_i in range(cut,len(bars)):
+                        low=bars[lo_i]["low"]
+                        for hi_i in range(lo_i+1,min(len(bars),lo_i+11)):
+                            high=bars[hi_i]["high"]
+                            if low>0 and high/low>=2:
+                                post.append({"low_date":bars[lo_i]["date"],"low":round(low,6),"high_date":bars[hi_i]["date"],"high":round(high,6),"gain_pct":round((high/low-1)*100,2),"sessions":hi_i-lo_i})
+                    result["first_100_after_split"]=min(post,key=lambda x:x["high_date"]) if post else None
+                result["sources"].append({"name":"Yahoo Finance chart","purpose":"daily price history and split events"})
+        except Exception as exc:result["warnings"].append("تعذر تحميل تاريخ السعر/التقسيم: "+type(exc).__name__)
+        # SEC EDGAR: filings are authoritative for registration/pricing/closing language.
+        try:
+            cik=await _sec_cik(client,symbol);result["cik"]=cik
+            if cik:
+                sr=await client.get(f"https://data.sec.gov/submissions/CIK{cik:010d}.json");sr.raise_for_status();sub=sr.json()
+                result["company_name"]=sub.get("name")
+                rows=_sec_rows(sub)
+                offer_forms={"S-1","S-1/A","F-1","F-1/A","424B3","424B4","424B5","8-K","6-K","EFFECT"}
+                own_forms={"SC 13D","SC 13D/A","SC 13G","SC 13G/A"}
+                offer_candidates=[x for x in rows if x.get("form") in offer_forms][:18]
+                own_candidates=[x for x in rows if x.get("form") in own_forms][:18]
+                sem=asyncio.Semaphore(4)
+                async def enrich(row,kind):
+                    async with sem:
+                        text=await _sec_doc_text(client,cik,row)
+                        base={"date":row.get("filingDate"),"form":row.get("form"),"accession":row.get("accessionNumber"),
+                              "description":row.get("primaryDocDescription"),"source":"SEC EDGAR"}
+                        if kind=="offering":
+                            low=text.lower()
+                            if not any(k in low for k in ("offering","at-the-market","sales agreement","registered direct","public offering","securities purchase")) and row.get("form") in ("8-K","6-K"):return None
+                            base["status"]=_offering_status(row.get("form"),text)
+                            base["kind"]="ATM" if ("at-the-market" in low or "at the market offering" in low) else ("Registered Direct" if "registered direct" in low else "Offering / Registration")
+                        else:
+                            base["holder"]=_reporting_person(text)
+                            base["change"]="ملف ملكية كبير؛ راجع الإفصاح لتحديد زيادة/خفض/خروج"
+                        return base
+                offered=await asyncio.gather(*(enrich(x,"offering") for x in offer_candidates[:10]))
+                owned=await asyncio.gather(*(enrich(x,"ownership") for x in own_candidates[:10]))
+                result["offerings"]=[x for x in offered if x][:8]
+                result["ownership"]=[x for x in owned if x][:8]
+                result["sources"].append({"name":"SEC EDGAR","purpose":"offerings, ATM and Schedule 13D/13G ownership filings"})
+                if not result["ownership"]:result["warnings"].append("لا توجد ملفات 13D/13G حديثة في سجل SEC المتاح؛ هذا لا يعني عدم وجود مؤسسات.")
+            else:result["warnings"].append("تعذر ربط الرمز بـ CIK في SEC.")
+        except Exception as exc:result["warnings"].append("تعذر تحميل إفصاحات SEC: "+type(exc).__name__)
+    result["method_note"]="حركة +100% = قاع جلسة إلى قمة جلسة لاحقة خلال 10 جلسات تداول؛ لا نستخدم قاع وقمة اليوم نفسه لأن ترتيب الحركة غير معروف من شمعة يومية."
+    _ARCHIVE_CACHE[symbol]={"at":time.time(),"result":result}
+    return result
+
 @app.get("/api/history-coverage")
 async def history_coverage():
     """Every discovered split and the four requested metrics, with provenance."""
