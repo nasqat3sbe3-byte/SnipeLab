@@ -1033,6 +1033,49 @@ async def ticker_news(symbol: str):
     try:return await task
     finally:_NEWS_INFLIGHT.pop(symbol,None)
 
+_ARCHIVE_SPLIT_CACHE = {}
+
+@app.get("/api/archive-splits/{symbol}")
+async def archive_splits(symbol: str):
+    """Small on-demand split-history lookup. No background worker and no impact on market feeds."""
+    symbol=re.sub(r"[^A-Z0-9.-]","",symbol.upper())[:12]
+    if not symbol:return {"symbol":symbol,"splits":[],"reverse_split_count":0,"error":"invalid symbol"}
+    cached=_ARCHIVE_SPLIT_CACHE.get(symbol)
+    if cached and time.time()-cached["at"]<86400:return cached["result"]
+    result={"symbol":symbol,"splits":[],"reverse_split_count":0,"source":"Yahoo chart split events"}
+    try:
+        async with httpx.AsyncClient(timeout=6,follow_redirects=True,
+            limits=httpx.Limits(max_connections=2,max_keepalive_connections=1),
+            headers={"User-Agent":"Mozilla/5.0 SnipeLab archive"}) as client:
+            r=await client.get(YAHOO.format(symbol=symbol),
+                params={"range":"max","interval":"1mo","events":"splits","includePrePost":"false"})
+            r.raise_for_status()
+            chart=(r.json().get("chart",{}).get("result") or [None])[0]
+            events=((chart or {}).get("events") or {}).get("splits") or {}
+            rows=[]
+            for ev in events.values():
+                raw=ev.get("splitRatio")
+                if not raw and ev.get("numerator") and ev.get("denominator"):
+                    raw=f'{ev.get("numerator")}:{ev.get("denominator")}'
+                try:
+                    a,b=[float(x) for x in re.split(r"[:/]",str(raw))[:2]]
+                except Exception:
+                    a=b=None
+                d=datetime.fromtimestamp(int(ev.get("date")),timezone.utc).date().isoformat() if ev.get("date") else None
+                rows.append({"date":d,"ratio":raw,"reverse":bool(a and b and a<b)})
+            rows.sort(key=lambda x:x.get("date") or "")
+            result["splits"]=rows
+            result["reverse_split_count"]=sum(1 for x in rows if x.get("reverse"))
+    except Exception as exc:
+        result["error"]=type(exc).__name__
+        meta=UNIVERSE.get(symbol) or {}
+        if meta.get("effective_date"):
+            result["splits"]=[{"date":meta.get("effective_date"),"ratio":meta.get("ratio"),"reverse":True,"fallback":True}]
+            result["reverse_split_count"]=1
+            result["source"]="SnipeLab current split fallback"
+    _ARCHIVE_SPLIT_CACHE[symbol]={"at":time.time(),"result":result}
+    return result
+
 @app.get("/api/history-coverage")
 async def history_coverage():
     """Every discovered split and the four requested metrics, with provenance."""
