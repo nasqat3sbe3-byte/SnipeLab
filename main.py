@@ -550,6 +550,29 @@ async def analytics_loop():
         refresh_analytics(); STATE["analytics_count"]=len(ANALYTICS); STATE["last_analytics"]=utcnow().isoformat(); save_persistent_state()
         await asyncio.sleep(10)
 
+def available_zero_estimate(symbol):
+    """Estimate price where observed IBKR Available trend reaches ~0 without altering the borrow feed."""
+    hist=BORROW_HISTORY.get(symbol) or []
+    pts=[]
+    for x in hist:
+        try:
+            old=float(x["old_available"]); new=float(x["available"]); price=float(x["price"])
+        except (KeyError,TypeError,ValueError):
+            continue
+        if old>new and new>=0 and price>0:pts.append((new,price))
+    if len(pts)<3 or len({a for a,_ in pts})<3:
+        return {"status":"insufficient_data","zero_price_est":None,"fit_r2":None,"observations":len(pts),"message":"بيانات غير كافية لتقدير سعر Available≈0"}
+    ma=sum(a for a,_ in pts)/len(pts);mp=sum(p for _,p in pts)/len(pts)
+    den=sum((a-ma)**2 for a,_ in pts)
+    if den<=0:return {"status":"insufficient_data","zero_price_est":None,"fit_r2":None,"observations":len(pts),"message":"بيانات غير كافية لتقدير سعر Available≈0"}
+    beta=sum((a-ma)*(p-mp) for a,p in pts)/den;alpha=mp-beta*ma
+    pred=[alpha+beta*a for a,_ in pts];ss_res=sum((p-y)**2 for (_,p),y in zip(pts,pred));ss_tot=sum((p-mp)**2 for _,p in pts)
+    r2=1-(ss_res/ss_tot) if ss_tot>0 else 0.0;prices=[p for _,p in pts]
+    valid=alpha>0 and min(prices)*0.5<=alpha<=max(prices)*1.5 and r2>=0.35
+    return {"status":"ok" if valid else "collecting","zero_price_est":round(alpha,4) if valid else None,
+        "fit_r2":round(r2,3),"observations":len(pts),"message":None if valid else "بيانات غير كافية لتقدير سعر Available≈0",
+        "method":"guarded linear fit: price vs observed IBKR Available decreases"}
+
 def download_ibkr():
     ftp=ftplib.FTP(timeout=20)
     try:
@@ -593,6 +616,11 @@ async def borrow_loop():
                 BORROW[sym]=new
                 history=BORROW_HISTORY.setdefault(sym,[])
                 sample={"at":now,"available":new["available"],"ctb":new["ctb"],"rebate":new["rebate"],"source":new["source"]}
+                if old and old.get("available") is not None and float(old["available"])>float(new["available"]):
+                    q=QUOTES.get(sym) or {}
+                    try:px=float(q.get("price"))
+                    except (TypeError,ValueError):px=None
+                    if px and px>0:sample.update({"old_available":old["available"],"price":px})
                 if not history or any(history[-1].get(k)!=sample[k] for k in ("available","ctb","rebate")) or (datetime.fromisoformat(now)-datetime.fromisoformat(history[-1]["at"])).total_seconds()>=3600:
                     history.append(sample)
                 cutoff=time.time()-3*86400
@@ -823,7 +851,8 @@ async def dashboard_data():
             "top_10_source":h.get("top_10_source"),
             "top_10_provisional":bool(h.get("top_10_provisional")),
             "history_status":h.get("error") or ("verified" if h.get("verified") else "pending"),
-            "short_analysis":SHORT_ANALYSIS.get(sym,{})}
+            "short_analysis":SHORT_ANALYSIS.get(sym,{}),
+            "available_zero_estimate":available_zero_estimate(sym)}
         # A same-day live rise is a separate, explicitly provisional measure:
         # never mix it silently with the completed-session low-to-high TOP.
         q=QUOTES.get(sym) or {}
