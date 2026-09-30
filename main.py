@@ -1117,7 +1117,7 @@ async def stock_archive(symbol: str):
     headers={"User-Agent":os.environ.get("SEC_USER_AGENT","SnipeLab research admin@snipelab.local")}
     result={"symbol":symbol,"generated_at":utcnow().isoformat(),"sources":[],"splits":[],"reverse_split_count":0,
             "last_100_before_split":None,"first_100_after_split":None,"post_split_max_gain":None,"offerings":[],"ownership":[],"filings":[],"warnings":[]}
-    async with httpx.AsyncClient(timeout=14,follow_redirects=True,headers=headers) as client:
+    async with httpx.AsyncClient(timeout=10,follow_redirects=True,headers=headers,limits=httpx.Limits(max_connections=4,max_keepalive_connections=2)) as client:
         # Yahoo supplies long daily history + corporate split events. Prices are adjusted,
         # so wave percentages are comparable across split boundaries.
         try:
@@ -1229,8 +1229,8 @@ async def stock_archive(symbol: str):
                 # Deep filing print: read the newest company filings, not just offering/ownership forms.
                 # Each entry carries a concise evidence extract and accession so the UI can expose what was found.
                 deep_forms={"8-K","8-K/A","6-K","10-Q","10-K","20-F","F-1","F-1/A","S-1","S-1/A","424B3","424B4","424B5","EFFECT","DEF 14A","PRE 14A","SC 13D","SC 13D/A","SC 13G","SC 13G/A","3","4","5"}
-                deep_candidates=[x for x in rows if x.get("form") in deep_forms][:35]
-                semdeep=asyncio.Semaphore(3)
+                deep_candidates=[x for x in rows if x.get("form") in deep_forms][:12]
+                semdeep=asyncio.Semaphore(2)
                 async def deep_one(row):
                     async with semdeep:
                         txt=await _sec_doc_text(client,cik,row)
@@ -1274,8 +1274,8 @@ async def stock_archive(symbol: str):
                             else:
                                 base["change"]="ملف ملكية كبيرة 13D/13G؛ لا نعتبره خروجًا بدون إفصاح لاحق"
                         return base
-                offered=await asyncio.gather(*(enrich(x,"offering") for x in offer_candidates[:10]))
-                owned=await asyncio.gather(*(enrich(x,"ownership") for x in own_candidates[:10]))
+                offered=await asyncio.gather(*(enrich(x,"offering") for x in offer_candidates[:6]))
+                owned=await asyncio.gather(*(enrich(x,"ownership") for x in own_candidates[:6]))
                 result["offerings"]=[x for x in offered if x][:8]
                 result["ownership"]=[x for x in owned if x][:8]
                 result["sources"].append({"name":"SEC EDGAR","purpose":"offerings, ATM, Schedule 13D/13G and Forms 3/4/5 ownership filings"})
