@@ -325,6 +325,15 @@ body{
  .compact-numbers.compact-metrics .number strong{font-size:clamp(10px,3.15vw,13px)!important;letter-spacing:-.25px!important;overflow:visible!important;text-overflow:clip!important}
  .compact-numbers.compact-metrics .number small{font-size:7.5px!important}
 }
+
+.price-stability{display:flex;align-items:center;gap:7px}.stability-pill{display:inline-flex;align-items:center;justify-content:center;padding:4px 7px;border:1px solid #514630;border-radius:7px;background:#15120d;color:#d7b675;font-size:9px;font-weight:700;white-space:nowrap}
+@media(max-width:640px){
+ .compact-numbers.compact-metrics{grid-template-columns:repeat(5,minmax(0,1fr))!important;gap:3px!important}
+ .compact-numbers.compact-metrics .number{padding:6px 1px!important}
+ .compact-numbers.compact-metrics .number strong{font-size:clamp(8.5px,2.55vw,11px)!important;letter-spacing:-.35px!important}
+ .compact-numbers.compact-metrics .number small{font-size:6.8px!important}
+ .price-stability{gap:5px}.stability-pill{font-size:8px;padding:3px 5px}
+}
 </style></head><body><main class="shell"><header class="head"><div class="head-primary"><div class="brand-wrap"><div class="brand"><span class="brand-mark">◎</span>SnipeLab</div><div class="brand-sub">ماسح أسهم التقسيم العكسي</div></div><div class="uptime offline" id="uptime"><small><span class="dot"></span>جارٍ فحص السيرفر</small><b>—</b></div></div><div class="head-market"><span class="market-heading">♧ حالة السوق</span><span class="market-state" id="marketState">جارٍ التحقق</span></div></header><section class="events"><div class="event-head"><span>ϟ آخر التنبيهات <small id="eventCount" class="event-count"></small></span><button id="eventToggle" type="button">عرض الكل ⌄</button></div><div id="eventsList" aria-live="polite"><div class="event-line">جارٍ تحميل الأحداث...</div></div></section><div class="summary" aria-label="إحصائيات قابلة للضغط"><button data-filter="all" type="button"><b id="countAll">—</b>جميع الأسهم</button><button data-filter="borrow" type="button"><b id="countBorrow">—</b>Available &lt;15K</button><button data-filter="ready" type="button"><b id="countReady">—</b>الجاهز</button><button data-filter="near" type="button"><b id="countNear">—</b>تحت الجاهزية</button></div><div class="browse-tools"><div class="quick-filter-row">
 <select id="premiumSort"><option value="readiness">الجاهزية</option><option value="available">Available الأقل</option><option value="rsi">RSI الأقل</option><option value="distance">الأقرب للقاع</option></select>
 <label><input type="checkbox" id="useRsi"> RSI</label><select id="premiumRsi"><option value="30">Under 30</option><option value="35">Under 35</option><option value="40">Under 40</option></select>
@@ -512,12 +521,11 @@ function card(x){
  const borrowTime=x.b.received_at?new Date(x.b.received_at).toLocaleString('ar-SA'):'غير متوفر';
  return '<article class="stock compact-stock '+(x.ready?'ready':'')+'" data-symbol="'+esc(x.symbol)+'">'+
  '<div class="stock-top compact-head"><div class="compact-identity"><div class="compact-symbol-line"><span class="sym">'+esc(x.symbol)+'</span><span class="label '+(x.ready?'ready':'')+'">'+esc(rank)+'</span></div><div class="split-date">التقسيم: '+esc(x.effective_date||'غير متوفر')+'</div></div>'+
- '<div class="price-box">'+quoteDisplay(x.q,x.quote_freshness)+'</div></div>'+
+ '<div class="price-box"><div class="price-stability"><span class="stability-pill">ثبات '+esc(stability)+'</span>'+quoteDisplay(x.q,x.quote_freshness)+'</div></div></div>'+
  '<div class="numbers compact-numbers compact-metrics"><button type="button" class="number borrow-metric" data-action="borrow-history" data-symbol="'+esc(x.symbol)+'" title="وقت قراءة الشورت: '+esc(borrowTime)+'"><small>Available</small><strong class="'+(av!=null&&av<15000?'good':'')+'">'+esc(fmt(av))+'</strong>'+(availableTrend(x)&&availableTrend(x).pct>0?'<em class="av-trend">↓ '+esc(fmt(availableTrend(x).pct))+'%</em>':'')+'</button>'+
  metric('Rebate',pct(x.b.rebate),x.b.rebate<0?'bad':'good')+
  metric('القاع',money(low))+
  metric('عن القاع',x.history_verified?pct(x.effective_distance_pct??x.distance_from_low_pct):'—',x.effective_distance_pct!=null&&x.effective_distance_pct<=25?'good':'')+
- metric('الثبات',stability,sessions>=4?'good':'')+
  metric('RSI',fmt(x.rsi_daily),x.rsi_daily!=null&&x.rsi_daily<=35?'good':'')+'</div>'+
  '<div class="compact-readiness"><div class="compact-score-head"><span>الجاهزية <b>'+pct(score)+'</b></span><span class="compact-stability">الثبات '+esc(stability)+'</span></div><div class="compact-progress" role="progressbar" aria-label="الجاهزية" aria-valuenow="'+scoreWidth+'" aria-valuemin="0" aria-valuemax="100"><span style="width:'+scoreWidth+'%"></span></div></div>'+
  '<div class="compact-footer"><div class="compact-footer-status">'+missingLabel(x)+'</div><button type="button" class="compact-star" data-action="favorite" data-symbol="'+esc(x.symbol)+'" aria-label="'+(favorites.has(x.symbol)?'إزالة من قنصي':'إضافة لقنصي')+'">'+(favorites.has(x.symbol)?'★ قنصي':'☆ قنصي')+'</button>'+
