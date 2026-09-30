@@ -391,11 +391,11 @@ function archiveMove(title,m){
  return '<div class="archive-stat"><small>'+esc(title)+'</small><b>'+(m?esc('+'+fmt(m.gain_pct)+'%'):'لم تُرصد')+'</b><span>'+(m?esc(m.low_date+' → '+m.high_date+' · '+money(m.low)+' → '+money(m.high)+' · '+m.sessions+' جلسات'):'حسب قاعدة 100% الحالية')+'</span></div>';
 }
 function archiveView(a){
- const splits=a.splits||[],offers=a.offerings||[],owners=a.ownership||[],post=a.post_split_max_gain;
+ const splits=a.splits||[],offers=a.offerings||[],owners=a.ownership||[],post=a.post_split_max_gain,ext=a.extended_hours_run,filings=a.filings||[];
  const latestReverse=[...splits].reverse().find(x=>x.reverse), lastOffer=offers[0], sales=owners.filter(x=>/بيع|خفض|خروج/.test(x.change||'')), cycles=(a.split_cycles||[]), latestCycle=cycles[cycles.length-1];
  const summaryBits=[
   'قسم عكسي '+a.reverse_split_count+' مرة'+(latestReverse?'، وآخر تقسيم '+latestReverse.ratio+' بتاريخ '+latestReverse.date:''),
-  latestCycle?'يوم آخر تقسيم تحرك بين '+money(latestCycle.split_day_low)+' و'+money(latestCycle.split_day_high)+' (مدى +'+fmt(latestCycle.split_day_intraday_gain_pct)+'%)'+(latestCycle.strongest_run?'، وأقوى حركة بعده +'+fmt(latestCycle.strongest_run.gain_pct)+'% حتى '+latestCycle.strongest_run.high_date:''):(post?'أقوى صعود مرصود بعد آخر تقسيم '+fmt(post.gain_pct)+'%':'لم تُرصد حركة بعد آخر تقسيم'),
+  latestCycle?'يوم آخر تقسيم تحرك بين '+money(latestCycle.split_day_low)+' و'+money(latestCycle.split_day_high)+' (مدى يومي +'+fmt(latestCycle.split_day_intraday_gain_pct)+'%)'+(latestCycle.strongest_run?'، وأقوى حركة يومية بعده +'+fmt(latestCycle.strongest_run.gain_pct)+'% حتى '+latestCycle.strongest_run.high_date:'')+(ext?'، ومع الساعات الممتدة رُصد مسار +'+fmt(ext.gain_pct)+'% من '+money(ext.low)+' إلى '+money(ext.high):''):(post?'أقوى صعود مرصود بعد آخر تقسيم '+fmt(post.gain_pct)+'%':'لم تُرصد حركة بعد آخر تقسيم'),
   lastOffer?'آخر حدث طرح/تسجيل '+lastOffer.date+' وحالته: '+lastOffer.status:'لم نرصد طرحًا حديثًا في إفصاحات SEC المتاحة',
   sales.length?'رصدنا '+sales.length+' إفصاح بيع/خفض ملكية، منها '+sales.slice(0,3).map(x=>x.holder||'مالك كبير').join('، '):owners.length?'توجد إفصاحات ملكية حديثة، لكن لا نثبت خروجًا بدون Form 4/إفصاح واضح':'لم نرصد ملفات ملكية حديثة في النطاق المتاح'
  ];
@@ -413,6 +413,7 @@ function archiveView(a){
  '<div class="archive-timeline"><h3>تاريخ التقسيمات</h3>'+(splitRows||'<div class="research-empty">لا توجد تقسيمات عكسية موثقة.</div>')+'</div>'+
  '<div class="archive-timeline"><h3>الطرح والتخفيف · SEC</h3>'+(offerRows||'<div class="research-empty">لم نرصد إفصاح طرح حديثًا.</div>')+'</div>'+
  '<div class="archive-timeline"><h3>الصناديق والملكية · 13D/G + Forms 3/4/5</h3>'+(ownerRows||'<div class="research-empty">لا توجد ملفات ملكية حديثة مرصودة. هذا لا يعني عدم وجود مؤسسات.</div>')+'</div>'+
+ '<div class="archive-timeline"><h3>نبش إفصاحات الشركة · SEC</h3>'+((filings.filter(x=>x.topics?.length).slice(0,20).map(x=>'<div class="timeline-row"><i class="timeline-dot"></i><div><b>'+esc(x.form||'SEC')+' · '+esc((x.topics||[]).join(' / '))+'</b><p>'+esc((x.evidence||[])[0]||x.description||'إفصاح تمت مراجعته ولم نستخرج منه حدثًا محددًا.')+'</p></div><time>'+esc(x.date||'—')+'</time></div>').join(''))||'<div class="research-empty">تمت مراجعة الإفصاحات الحديثة ولم نرصد كلمات أحداث رئيسية ضمن القواعد الحالية.</div>')+'</div>'+
  (a.warnings?.length?'<div class="status">'+a.warnings.map(esc).join(' · ')+'</div>':'')+'<div class="status">'+esc(a.method_note||'')+'</div>';
 }
 async function runArchive(){
