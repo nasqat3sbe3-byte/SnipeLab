@@ -256,8 +256,30 @@ async def live_daily_rsi_loop():
                         if not result:return
                         indicators=result.get("indicators") or {}
                         q=(indicators.get("quote") or [{}])[0]
-                        closes=[float(x) for x in (q.get("close") or [])
-                                if x is not None and float(x)>0]
+                        raw=q.get("close") or []
+                        timestamps=result.get("timestamp") or []
+                        tz=ZoneInfo((result.get("meta") or {}).get("exchangeTimezoneName") or "America/New_York")
+                        today=datetime.now(tz).date()
+                        closes=[]
+                        today_index=None
+                        for i,x in enumerate(raw):
+                            try:
+                                if x is None or float(x)<=0:continue
+                                day=datetime.fromtimestamp(timestamps[i],tz).date()
+                                closes.append(float(x))
+                                if day==today:today_index=len(closes)-1
+                            except (IndexError,TypeError,ValueError):continue
+                        # Yahoo's 1d endpoint may keep today's close stale/cached intraday.
+                        # Replace ONLY today's in-progress daily close with our freshest quote,
+                        # while keeping the full historical series on the same raw Yahoo scale.
+                        live_q=QUOTES.get(sym) or {}
+                        try:
+                            live_price=float(live_q.get("price"))
+                            live_ts=datetime.fromisoformat(str(live_q.get("market_timestamp")).replace("Z","+00:00")).astimezone(tz).date()
+                            if live_price>0 and live_ts==today:
+                                if today_index is not None:closes[today_index]=live_price
+                                elif closes:closes.append(live_price)
+                        except (TypeError,ValueError):pass
                         if len(closes)<15:return
                         changes=[closes[i]-closes[i-1] for i in range(1,len(closes))]
                         gains=[max(x,0.0) for x in changes];losses=[max(-x,0.0) for x in changes]
@@ -269,10 +291,10 @@ async def live_daily_rsi_loop():
                         # Keep live RSI outside HISTORY. historical_worker replaces history
                         # records during refreshes and used to erase/roll back the live value.
                         LIVE_RSI[sym]={"value":value,"updated_at":utcnow().isoformat(),
-                            "method":"Wilder 14 / Yahoo 1d current candle / 2y seed"}
+                            "method":"Wilder 14 / Yahoo 1d history + freshest live quote / 2y seed"}
                         h=HISTORY.setdefault(sym,{})
                         h["rsi_daily"]=value;h["rsi_daily_live"]=value
-                        h["rsi_method"]="Wilder 14 / Yahoo 1d current candle / 2y seed"
+                        h["rsi_method"]="Wilder 14 / Yahoo 1d history + freshest live quote / 2y seed"
                         h["rsi_live_updated_at"]=LIVE_RSI[sym]["updated_at"]
                     except Exception as exc:
                         rsi_errors.append(f"{sym}: {type(exc).__name__}: {str(exc)[:80]}")
