@@ -390,10 +390,28 @@ document.querySelectorAll('.section-nav button').forEach(b=>b.addEventListener('
 function archiveCard(sym){
  const x=rows().find(r=>String(r.symbol).toUpperCase()===sym);
  if(!x)return '<div class="research-empty">السهم غير موجود حاليًا في قاعدة SnipeLab.</div>';
- const split=x.split_date||x.effective_date||'—',hi=x.split_day_high??x.day_high??null,lo=x.post_split_low??x.lowest_low??null;
+ const split=x.split_date||x.effective_date||'—';
+ const splitHi=x.split_day_high??x.day_high??null;
+ const postHi=x.highest_since_split??x.post_split_high??null;
+ const low=x.post_split_low??x.lowest_low??null;
+ const price=x.q?.price??x.price?.price??null;
+ const dist=(price!=null&&low!=null&&Number(low)>0)?((Number(price)/Number(low)-1)*100):null;
+ const summary=[
+  'آخر تقسيم مسجل: '+split,
+  splitHi!=null?'قمة يوم التقسيم: '+money(splitHi):'قمة يوم التقسيم غير مكتملة حاليًا',
+  postHi!=null?'أعلى قمة بعد التقسيم: '+money(postHi):'أعلى قمة بعد التقسيم غير متوفرة حاليًا',
+  low!=null?'قاع ما بعد التقسيم: '+money(low):'قاع ما بعد التقسيم غير متوفر حاليًا',
+  price!=null?'السعر الحالي: '+money(price)+(dist!=null?' · يبعد '+fmt(dist)+'% عن القاع':''):'السعر الحالي غير متوفر'
+ ];
  return '<div class="archive-head"><div><div class="archive-symbol">'+esc(sym)+'</div><div class="archive-company">'+esc(x.company_name||x.name||'')+'</div></div><span class="label">Reverse Split · '+esc(split)+'</span></div>'+
- '<div class="archive-grid"><div class="archive-stat"><small>آخر +100% قبل التقسيم</small><b>قيد بناء المحرك</b><span>لن نخمن تاريخًا أو حركة غير موثقة</span></div><div class="archive-stat"><small>أول +100% بعد التقسيم</small><b>قيد بناء المحرك</b><span>سيُحسب من الشموع التاريخية</span></div><div class="archive-stat"><small>قمة يوم التقسيم</small><b>'+esc(money(hi))+'</b><span>من بيانات SnipeLab الحالية</span></div><div class="archive-stat"><small>قاع ما بعد التقسيم</small><b>'+esc(money(lo))+'</b><span>من بيانات SnipeLab الحالية</span></div></div>'+
- '<div class="archive-timeline"><h3>الخط الزمني</h3><div class="timeline-row"><i class="timeline-dot"></i><div><b>Reverse Split</b><p>تاريخ التنفيذ المسجل في قاعدة السهم.</p></div><time>'+esc(split)+'</time></div><div class="timeline-row"><i class="timeline-dot"></i><div><b>طرح / ATM / زيادة أسهم</b><p>سيظهر هنا فقط الحدث المثبت من الإفصاحات الرسمية عند توصيل محرك الأرشيف.</p></div><time>—</time></div></div>';
+ '<div class="ai-overview"><strong>ملخص سريع من بيانات SnipeLab الحالية</strong><p>'+summary.map(esc).join('<br>')+'</p></div>'+
+ '<div class="archive-grid">'+
+ '<div class="archive-stat"><small>قمة يوم التقسيم</small><b>'+esc(money(splitHi))+'</b><span>بدون أي طلب خارجي إضافي</span></div>'+
+ '<div class="archive-stat"><small>أعلى قمة بعد التقسيم</small><b>'+esc(money(postHi))+'</b><span>من التاريخ الموجود أصلًا في السيرفر</span></div>'+
+ '<div class="archive-stat"><small>قاع ما بعد التقسيم</small><b>'+esc(money(low))+'</b><span>من قاعدة SnipeLab الحالية</span></div>'+
+ '<div class="archive-stat"><small>السعر / عن القاع</small><b>'+esc(money(price))+'</b><span>'+(dist==null?'—':esc(fmt(dist)+'%'))+'</span></div>'+
+ '</div>'+
+ '<div class="archive-timeline"><h3>الخط الزمني · المرحلة الخفيفة</h3><div class="timeline-row"><i class="timeline-dot"></i><div><b>Reverse Split</b><p>نعرض الآن فقط البيانات الموجودة أصلًا في SnipeLab حتى نختبر سرعة السيرفر قبل إضافة أي بحث تاريخي خارجي.</p></div><time>'+esc(split)+'</time></div></div>';
 }
 async function runArchive(){
  const sym=$('archiveQuery').value.trim().toUpperCase().replace(/[^A-Z0-9.-]/g,'');if(!sym)return;
