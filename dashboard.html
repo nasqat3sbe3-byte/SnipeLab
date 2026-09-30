@@ -391,17 +391,27 @@ function archiveMove(title,m){
  return '<div class="archive-stat"><small>'+esc(title)+'</small><b>'+(m?esc('+'+fmt(m.gain_pct)+'%'):'لم تُرصد')+'</b><span>'+(m?esc(m.low_date+' → '+m.high_date+' · '+money(m.low)+' → '+money(m.high)+' · '+m.sessions+' جلسات'):'حسب قاعدة 100% الحالية')+'</span></div>';
 }
 function archiveView(a){
- const splits=a.splits||[],offers=a.offerings||[],owners=a.ownership||[];
- const latestReverse=[...splits].reverse().find(x=>x.reverse);
- const splitRows=splits.filter(x=>x.reverse).slice().reverse().slice(0,8).map(x=>'<div class="timeline-row"><i class="timeline-dot"></i><div><b>Reverse Split · '+esc(x.ratio||'—')+'</b><p>حدث تقسيم مسجل في المصدر.</p></div><time>'+esc(x.date||'—')+'</time></div>').join('');
+ const splits=a.splits||[],offers=a.offerings||[],owners=a.ownership||[],post=a.post_split_max_gain;
+ const latestReverse=[...splits].reverse().find(x=>x.reverse), lastOffer=offers[0], sales=owners.filter(x=>/بيع|خفض|خروج/.test(x.change||''));
+ const summaryBits=[
+  'قسم عكسي '+a.reverse_split_count+' مرة'+(latestReverse?'، وآخر تقسيم '+latestReverse.ratio+' بتاريخ '+latestReverse.date:''),
+  post?'أقوى صعود مرصود بعد آخر تقسيم '+fmt(post.gain_pct)+'% من '+money(post.low)+' إلى '+money(post.high)+' بين '+post.low_date+' و'+post.high_date:'لم تُرصد حتى الآن حركة صاعدة بعد آخر تقسيم',
+  lastOffer?'آخر حدث طرح/تسجيل '+lastOffer.date+' وحالته: '+lastOffer.status:'لم نرصد طرحًا حديثًا في إفصاحات SEC المتاحة',
+  sales.length?'رصدنا '+sales.length+' إفصاح بيع/خفض ملكية، منها '+sales.slice(0,3).map(x=>x.holder||'مالك كبير').join('، '):owners.length?'توجد إفصاحات ملكية حديثة، لكن لا نثبت خروجًا بدون Form 4/إفصاح واضح':'لم نرصد ملفات ملكية حديثة في النطاق المتاح'
+ ];
+ const splitRows=splits.filter(x=>x.reverse).slice().reverse().slice(0,12).map(x=>'<div class="timeline-row"><i class="timeline-dot"></i><div><b>Reverse Split · '+esc(x.ratio||'—')+'</b><p>حدث تقسيم مسجل في المصدر.</p></div><time>'+esc(x.date||'—')+'</time></div>').join('');
  const offerRows=offers.map(x=>'<div class="timeline-row"><i class="timeline-dot"></i><div><b>'+esc(x.kind||'Offering')+' · '+esc(x.status||'الحالة غير مؤكدة')+'</b><p>'+esc(x.form||'')+(x.description?' · '+esc(x.description):'')+'</p></div><time>'+esc(x.date||'—')+'</time></div>').join('');
- const ownerRows=owners.map(x=>'<div class="timeline-row"><i class="timeline-dot"></i><div><b>'+esc(x.holder||'مالك كبير / صندوق')+'</b><p>'+esc(x.form||'13D/G')+' · '+esc(x.change||'')+'</p></div><time>'+esc(x.date||'—')+'</time></div>').join('');
+ const ownerRows=owners.map(x=>'<div class="timeline-row"><i class="timeline-dot"></i><div><b>'+esc(x.holder||'مالك كبير / صندوق')+'</b><p>'+esc(x.form||'')+' · '+esc(x.change||'')+(x.remaining_shares!=null?' · المتبقي المبلغ عنه '+fmt(x.remaining_shares)+' سهم':'')+'</p></div><time>'+esc(x.date||'—')+'</time></div>').join('');
  return '<div class="archive-head"><div><div class="archive-symbol">'+esc(a.symbol)+'</div><div class="archive-company">'+esc(a.company_name||'')+'</div></div><span class="label">'+esc(a.reverse_split_count)+' تقسيم عكسي</span></div>'+
- '<div class="archive-grid"><div class="archive-stat"><small>عدد التقسيمات العكسية</small><b>'+esc(a.reverse_split_count)+'</b><span>'+(latestReverse?'آخرها '+esc(latestReverse.date)+' · '+esc(latestReverse.ratio):'لا يوجد حدث موثق')+'</span></div><div class="archive-stat"><small>آخر طرح / ATM</small><b>'+(offers[0]?esc(offers[0].kind):'لم يُرصد')+'</b><span>'+(offers[0]?esc(offers[0].date+' · '+offers[0].status):'في إفصاحات SEC الحديثة')+'</span></div>'+
+ '<div class="ai-overview"><strong>برنت '+esc(a.symbol)+'</strong><p>'+summaryBits.map((x,i)=>(i+1)+'. '+esc(x)).join('<br>')+'</p></div>'+
+ '<div class="archive-grid"><div class="archive-stat"><small>عدد التقسيمات العكسية</small><b>'+esc(a.reverse_split_count)+'</b><span>'+(latestReverse?'آخرها '+esc(latestReverse.date)+' · '+esc(latestReverse.ratio):'لا يوجد حدث موثق')+'</span></div>'+
+ '<div class="archive-stat"><small>أقوى صعود بعد آخر تقسيم</small><b>'+(post?esc('+'+fmt(post.gain_pct)+'%'):'لم يُرصد')+'</b><span>'+(post?esc(post.low_date+' → '+post.high_date+' · '+money(post.low)+' → '+money(post.high)):'')+'</span></div>'+
+ '<div class="archive-stat"><small>آخر طرح / ATM</small><b>'+(lastOffer?esc(lastOffer.kind):'لم يُرصد')+'</b><span>'+(lastOffer?esc(lastOffer.date+' · '+lastOffer.status):'في إفصاحات SEC الحديثة')+'</span></div>'+
+ '<div class="archive-stat"><small>بيع / خفض ملكية</small><b>'+esc(sales.length)+'</b><span>'+(sales.length?esc(sales.slice(0,2).map(x=>x.holder||'مالك كبير').join(' · ')):'لا يوجد خروج مثبت في النطاق الحالي')+'</span></div>'+
  archiveMove('آخر +100% قبل آخر تقسيم',a.last_100_before_split)+archiveMove('أول +100% بعد آخر تقسيم',a.first_100_after_split)+'</div>'+
- '<div class="archive-timeline"><h3>تاريخ التقسيمات</h3>'+(splitRows||'<div class="research-empty">لا توجد تقسيمات عكسية موثقة في المصدر.</div>')+'</div>'+
- '<div class="archive-timeline"><h3>الطرح والتخفيف · SEC</h3>'+(offerRows||'<div class="research-empty">لم نرصد إفصاح طرح حديثًا في سجل SEC المتاح.</div>')+'</div>'+
- '<div class="archive-timeline"><h3>الصناديق والملكية الكبيرة · 13D / 13G</h3>'+(ownerRows||'<div class="research-empty">لا توجد ملفات 13D/13G حديثة مرصودة. هذا لا يعني عدم وجود مؤسسات.</div>')+'</div>'+
+ '<div class="archive-timeline"><h3>تاريخ التقسيمات</h3>'+(splitRows||'<div class="research-empty">لا توجد تقسيمات عكسية موثقة.</div>')+'</div>'+
+ '<div class="archive-timeline"><h3>الطرح والتخفيف · SEC</h3>'+(offerRows||'<div class="research-empty">لم نرصد إفصاح طرح حديثًا.</div>')+'</div>'+
+ '<div class="archive-timeline"><h3>الصناديق والملكية · 13D/G + Forms 3/4/5</h3>'+(ownerRows||'<div class="research-empty">لا توجد ملفات ملكية حديثة مرصودة. هذا لا يعني عدم وجود مؤسسات.</div>')+'</div>'+
  (a.warnings?.length?'<div class="status">'+a.warnings.map(esc).join(' · ')+'</div>':'')+'<div class="status">'+esc(a.method_note||'')+'</div>';
 }
 async function runArchive(){
