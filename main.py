@@ -1116,7 +1116,7 @@ async def stock_archive(symbol: str):
     if cached and time.time()-cached["at"]<_ARCHIVE_TTL:return cached["result"]
     headers={"User-Agent":os.environ.get("SEC_USER_AGENT","SnipeLab research admin@snipelab.local")}
     result={"symbol":symbol,"generated_at":utcnow().isoformat(),"sources":[],"splits":[],"reverse_split_count":0,
-            "last_100_before_split":None,"first_100_after_split":None,"post_split_max_gain":None,"offerings":[],"ownership":[],"warnings":[]}
+            "last_100_before_split":None,"first_100_after_split":None,"post_split_max_gain":None,"offerings":[],"ownership":[],"filings":[],"warnings":[]}
     async with httpx.AsyncClient(timeout=14,follow_redirects=True,headers=headers) as client:
         # Yahoo supplies long daily history + corporate split events. Prices are adjusted,
         # so wave percentages are comparable across split boundaries.
@@ -1193,6 +1193,32 @@ async def stock_archive(symbol: str):
                     result["post_split_max_gain"]=max(gains,key=lambda x:x["gain_pct"]) if gains else None
                 result["sources"].append({"name":"Yahoo Finance chart","purpose":"daily price history and split events"})
         except Exception as exc:result["warnings"].append("تعذر تحميل تاريخ السعر/التقسيم: "+type(exc).__name__)
+        # Extended-hours fingerprint for the latest reverse split. Yahoo 5m covers recent history only;
+        # when available, merge premarket/after-hours bars with the daily split cycle.
+        try:
+            latest_rev=next((x for x in reversed(result.get("splits") or []) if x.get("reverse")),None)
+            if latest_rev:
+                er=await client.get(YAHOO.format(symbol=symbol),params={"range":"60d","interval":"5m","includePrePost":"true","events":"history"})
+                er.raise_for_status();ec=(er.json().get("chart",{}).get("result") or [None])[0]
+                if ec:
+                    ets=ec.get("timestamp") or [];eq=((ec.get("indicators") or {}).get("quote") or [{}])[0]
+                    ny=ZoneInfo("America/New_York");extbars=[]
+                    for i,t in enumerate(ets):
+                        try:
+                            lo=float(eq["low"][i]);hi=float(eq["high"][i])
+                            dt=datetime.fromtimestamp(int(t),timezone.utc).astimezone(ny)
+                            if lo>0 and hi>=lo and dt.date().isoformat()>=latest_rev["date"]:
+                                extbars.append({"at":dt.isoformat(),"date":dt.date().isoformat(),"low":lo,"high":hi})
+                        except (TypeError,ValueError,IndexError):continue
+                    if extbars:
+                        low=min(extbars,key=lambda x:x["low"]); after=[x for x in extbars if x["at"]>=low["at"]]
+                        high=max(after,key=lambda x:x["high"]) if after else None
+                        if high:
+                            result["extended_hours_run"]={"low":round(low["low"],6),"low_at":low["at"],
+                                "high":round(high["high"],6),"high_at":high["at"],
+                                "gain_pct":round((high["high"]/low["low"]-1)*100,2),"source":"Yahoo 5m includePrePost"}
+                            result["sources"].append({"name":"Yahoo 5m extended hours","purpose":"recent premarket/regular/after-hours price path"})
+        except Exception as exc:result["warnings"].append("تعذر تحميل الساعات الممتدة: "+type(exc).__name__)
         # SEC EDGAR: filings are authoritative for registration/pricing/closing language.
         try:
             cik=await _sec_cik(client,symbol);result["cik"]=cik
@@ -1200,6 +1226,25 @@ async def stock_archive(symbol: str):
                 sr=await client.get(f"https://data.sec.gov/submissions/CIK{cik:010d}.json");sr.raise_for_status();sub=sr.json()
                 result["company_name"]=sub.get("name")
                 rows=_sec_rows(sub)
+                # Deep filing print: read the newest company filings, not just offering/ownership forms.
+                # Each entry carries a concise evidence extract and accession so the UI can expose what was found.
+                deep_forms={"8-K","8-K/A","6-K","10-Q","10-K","20-F","F-1","F-1/A","S-1","S-1/A","424B3","424B4","424B5","EFFECT","DEF 14A","PRE 14A","SC 13D","SC 13D/A","SC 13G","SC 13G/A","3","4","5"}
+                deep_candidates=[x for x in rows if x.get("form") in deep_forms][:35]
+                semdeep=asyncio.Semaphore(3)
+                async def deep_one(row):
+                    async with semdeep:
+                        txt=await _sec_doc_text(client,cik,row)
+                        clean=re.sub(r"\s+"," ",txt)
+                        keys=("reverse split","public offering","registered direct","at-the-market","sales agreement","warrant","convertible","nasdaq","compliance","delisting","acquisition","merger","bankruptcy","going concern","stockholder equity","authorized shares","shareholder approval")
+                        hits=[k for k in keys if k in clean.lower()]
+                        evidence=[]
+                        low=clean.lower()
+                        for k in hits[:4]:
+                            pos=low.find(k)
+                            if pos>=0:evidence.append(clean[max(0,pos-120):pos+320])
+                        return {"date":row.get("filingDate"),"form":row.get("form"),"accession":row.get("accessionNumber"),
+                            "description":row.get("primaryDocDescription"),"topics":hits[:8],"evidence":evidence[:3],"source":"SEC EDGAR"}
+                result["filings"]=await asyncio.gather(*(deep_one(x) for x in deep_candidates))
                 offer_forms={"S-1","S-1/A","F-1","F-1/A","424B3","424B4","424B5","8-K","6-K","EFFECT"}
                 own_forms={"SC 13D","SC 13D/A","SC 13G","SC 13G/A","3","3/A","4","4/A","5","5/A"}
                 offer_candidates=[x for x in rows if x.get("form") in offer_forms][:18]
