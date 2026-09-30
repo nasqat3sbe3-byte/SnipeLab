@@ -728,9 +728,24 @@ async def legacy_news_loop_disabled():
         await asyncio.sleep(600)
 
 @app.on_event("startup")
+async def delayed_secondary_workers():
+    # Keep startup responsive: live dashboard/market/borrow get the first minute alone.
+    await asyncio.sleep(75)
+    asyncio.create_task(live_daily_rsi_loop())
+    asyncio.create_task(short_analysis_loop())
+    asyncio.create_task(finnhub_live_loop())
+    asyncio.create_task(halt_loop())
+    asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
+
+@app.on_event("startup")
 async def startup():
     load_persistent_state()
-    asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(live_daily_rsi_loop()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(short_analysis_loop()); asyncio.create_task(finnhub_live_loop()); asyncio.create_task(halt_loop()); asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
+    asyncio.create_task(heartbeat_loop())
+    asyncio.create_task(universe_loop())
+    asyncio.create_task(delayed_market_start())
+    asyncio.create_task(delayed_borrow_start())
+    asyncio.create_task(analytics_loop())
+    asyncio.create_task(delayed_secondary_workers())
 
 @app.get("/")
 async def root():
