@@ -64,7 +64,7 @@ def offering_status(form,text):
 
 async def main(symbol):
     out={"symbol":symbol,"generated_at":datetime.now(timezone.utc).isoformat(),"splits":[],"reverse_split_count":0,
-         "split_cycles":[],"last_strong_move":None,"extended_hours":None,"offerings":[],"ownership":[],"filings":[],
+         "split_cycles":[],"last_strong_move":None,"extended_hours":None,"offerings":[],"dilution":[],"ownership":[],"filings":[],
          "summary":[],"warnings":[],"sources":[]}
     async with httpx.AsyncClient(timeout=12,follow_redirects=True,headers=HEADERS,limits=httpx.Limits(max_connections=5,max_keepalive_connections=3)) as client:
         # Price/splits
@@ -121,35 +121,76 @@ async def main(symbol):
             if cik:
                 sr=await client.get(f"https://data.sec.gov/submissions/CIK{cik:010d}.json");sr.raise_for_status();sub=sr.json();out["company_name"]=sub.get("name")
                 rows=sec_rows(sub)
-                forms={"8-K","8-K/A","6-K","10-Q","10-K","20-F","F-1","F-1/A","S-1","S-1/A","424B3","424B4","424B5","EFFECT","DEF 14A","PRE 14A","SC 13D","SC 13D/A","SC 13G","SC 13G/A","3","3/A","4","4/A","5","5/A"}
-                candidates=[x for x in rows if x.get("form") in forms][:24]
+                # Do not let a flood of 8-Ks crowd out ownership/offering forms.
+                offer_forms={"S-1","S-1/A","F-1","F-1/A","424B3","424B4","424B5","EFFECT","8-K","8-K/A","6-K"}
+                owner_forms={"SC 13D","SC 13D/A","SC 13G","SC 13G/A","3","3/A","4","4/A","5","5/A"}
+                material_forms={"8-K","8-K/A","6-K","10-Q","10-K","20-F","DEF 14A","PRE 14A"}
+                selected=[]
+                seen=set()
+                for pool,limit in (
+                    ([x for x in rows if x.get("form") in offer_forms],18),
+                    ([x for x in rows if x.get("form") in owner_forms],18),
+                    ([x for x in rows if x.get("form") in material_forms],18)):
+                    for x in pool[:limit]:
+                        acc=x.get("accessionNumber")
+                        if acc and acc not in seen:
+                            seen.add(acc);selected.append(x)
                 sem=asyncio.Semaphore(4)
                 async def enrich(row):
                     async with sem:
                         txt=await fetch_text(client,cik,row);low=txt.lower()
-                        topics=[k for k in ("reverse split","public offering","registered direct","at-the-market","sales agreement","warrant","convertible","nasdaq","compliance","delisting","merger","acquisition","bankruptcy","going concern","authorized shares","shareholder approval") if k in low]
+                        topics=[k for k in ("reverse split","public offering","registered direct","at-the-market","sales agreement","warrant","convertible","nasdaq","compliance","delisting","merger","acquisition","bankruptcy","going concern","authorized shares","shareholder approval","unregistered sales of equity securities","item 3.02") if k in low]
                         base={"date":row.get("filingDate"),"form":row.get("form"),"description":row.get("primaryDocDescription"),"accession":row.get("accessionNumber"),"topics":topics}
                         evidence=[]
-                        for k in topics[:3]:
+                        for k in topics[:4]:
                             p=low.find(k)
-                            if p>=0:evidence.append(re.sub(r"\s+"," ",txt[max(0,p-120):p+360]))
+                            if p>=0:evidence.append(re.sub(r"\s+"," ",txt[max(0,p-120):p+420]))
                         base["evidence"]=evidence
-                        if row.get("form") in ("S-1","S-1/A","F-1","F-1/A","424B3","424B4","424B5","EFFECT","8-K","6-K") and any(k in low for k in ("offering","at-the-market","sales agreement","registered direct","public offering","securities purchase")):
-                            base["offering"]={"kind":"ATM" if ("at-the-market" in low or "at the market offering" in low) else ("Registered Direct" if "registered direct" in low else "Offering / Registration"),"status":offering_status(row.get("form"),txt)}
-                        if row.get("form") in ("SC 13D","SC 13D/A","SC 13G","SC 13G/A","3","3/A","4","4/A","5","5/A"):
+
+                        # Offering / registration classification.
+                        if row.get("form") in offer_forms:
+                            if any(k in low for k in ("offering","at-the-market","sales agreement","registered direct","public offering","securities purchase")) or row.get("form") in ("S-1","S-1/A","F-1","F-1/A","424B3","424B4","424B5","EFFECT"):
+                                base["offering"]={"kind":"ATM" if ("at-the-market" in low or "at the market offering" in low or "sales agreement" in low) else ("Registered Direct" if "registered direct" in low else "Offering / Registration"),"status":offering_status(row.get("form"),txt)}
+
+                        # Equity issuance / dilution can be disclosed in 8-K Item 3.02
+                        # without the word "offering", so classify it separately.
+                        is_302=("item 3.02" in low or "unregistered sales of equity securities" in low)
+                        issue_hits=[]
+                        for pat in (r"(?:issue|issued|issuance of|agreed to issue)\s+(?:an aggregate (?:amount )?of\s+)?([0-9][0-9,]*)\s+shares",
+                                    r"([0-9][0-9,]*)\s+shares of (?:its )?common stock"):
+                            for m in re.finditer(pat,txt,re.I):
+                                try: issue_hits.append(int(m.group(1).replace(",","")))
+                                except Exception: pass
+                        if is_302 or issue_hits:
+                            base["dilution"]={"kind":"Unregistered equity issuance / exchange" if is_302 else "Share issuance",
+                                "shares_mentioned":max(issue_hits) if issue_hits else None,
+                                "status":"تم الإفصاح عن إصدار/اتفاق إصدار أسهم؛ راجع الإفصاح لتفاصيل التسوية"}
+
+                        if row.get("form") in owner_forms:
                             name=holder_name(txt)
                             change="إفصاح ملكية"
-                            if row.get("form") in ("3","3/A"):change="إفصاح ملكية أولي"
+                            remaining=None
+                            if row.get("form") in ("3","3/A"):
+                                change="إفصاح ملكية أولي"
                             elif row.get("form") in ("4","4/A"):
-                                sale=bool(re.search(r"\bTransaction Code\b.{0,180}\bS\b",txt,re.I))
+                                sale=bool(re.search(r"\bTransaction Code\b.{0,220}\bS\b",txt,re.I) or
+                                          re.search(r"\bS\b\s+\d[\d,]*\s+\$?[0-9.]+",txt))
                                 change="بيع / خفض ملكية" if sale else "تغير ملكية مُبلغ عنه"
-                            elif row.get("form","").startswith("SC 13"):change="ملكية كبيرة 13D/13G؛ لا نثبت الخروج دون إفصاح واضح"
-                            base["ownership"]={"holder":name,"change":change}
+                                m=re.search(r"Amount of Securities Beneficially Owned Following Reported Transaction\(s\).*?([0-9][0-9,]*)",txt,re.I|re.S)
+                                if m:
+                                    try: remaining=int(m.group(1).replace(",",""))
+                                    except Exception: pass
+                            elif row.get("form","").startswith("SC 13"):
+                                # 13D/G are ownership snapshots/amendments; do not label exit without evidence.
+                                change="ملكية كبيرة 13D/13G؛ لا نثبت الخروج دون إفصاح واضح"
+                            base["ownership"]={"holder":name,"change":change,"remaining_shares":remaining}
                         return base
-                enriched=await asyncio.gather(*(enrich(x) for x in candidates))
+
+                enriched=await asyncio.gather(*(enrich(x) for x in selected))
                 out["filings"]=enriched
-                out["offerings"]=[{"date":x["date"],"form":x["form"],**x["offering"],"description":x.get("description")} for x in enriched if x.get("offering")][:10]
-                out["ownership"]=[{"date":x["date"],"form":x["form"],**x["ownership"]} for x in enriched if x.get("ownership")][:12]
+                out["offerings"]=[{"date":x["date"],"form":x["form"],**x["offering"],"description":x.get("description")} for x in enriched if x.get("offering")][:14]
+                out["dilution"]=[{"date":x["date"],"form":x["form"],**x["dilution"],"description":x.get("description")} for x in enriched if x.get("dilution")][:14]
+                out["ownership"]=[{"date":x["date"],"form":x["form"],**x["ownership"]} for x in enriched if x.get("ownership")][:18]
                 out["sources"].append("SEC EDGAR recent relevant filings")
             else:out["warnings"].append("لم يتم ربط الرمز بـ CIK في SEC")
         except Exception as e:out["warnings"].append("تعذر جزء SEC: "+type(e).__name__)
@@ -166,12 +207,16 @@ async def main(symbol):
     if out.get("last_strong_move"):
         x=out["last_strong_move"];out["summary"].append(f"آخر حركة قوية +100% أو أكثر ضمن قاعدة 10 جلسات كانت +{x['gain_pct']}% بين {x['low_date']} و{x['high_date']}.")
     if out["offerings"]:
-        x=out["offerings"][0];out["summary"].append(f"آخر حدث طرح مرصود بتاريخ {x['date']}: {x['kind']} — {x['status']}.")
+        x=out["offerings"][0];out["summary"].append(f"آخر حدث طرح/تسجيل مرصود بتاريخ {x['date']}: {x['kind']} — {x['status']}.")
+    if out["dilution"]:
+        x=out["dilution"][0]
+        qty=f" وذكر {x.get('shares_mentioned'):,} سهم" if x.get("shares_mentioned") else ""
+        out["summary"].append(f"آخر تخفيف/إصدار أسهم مرصود بتاريخ {x['date']}: {x['kind']}{qty}.")
     if out["ownership"]:
         sells=[x for x in out["ownership"] if "بيع" in x.get("change","") or "خفض" in x.get("change","")]
         if sells:out["summary"].append("رُصدت إفصاحات بيع/خفض ملكية: "+"، ".join((x.get("holder") or "مالك مُبلغ") for x in sells[:4])+".")
         else:out["summary"].append("توجد إفصاحات ملكية حديثة، لكن لم نثبت خروجًا صريحًا ضمن الملفات المفحوصة.")
-    out["coverage_note"]="SEC: تم فحص أحدث 24 إفصاحًا من النماذج المهمة فقط؛ لا تعني النتيجة فحص كل ملف تاريخي للشركة. الساعات الممتدة متاحة فقط إذا كان آخر التقسيم ضمن نافذة Yahoo الحديثة."
+    out["coverage_note"]="SEC: تم فحص مجموعات مستقلة من أحدث ملفات الطرح، الملكية، والإفصاحات الجوهرية حتى لا تطغى كثرة 8-K على Forms 4 أو S-1/424B. النتيجة لا تعني فحص كل التاريخ القديم للشركة. الساعات الممتدة متاحة فقط ضمن نافذة Yahoo الحديثة."
     return out
 
 if __name__=="__main__":
