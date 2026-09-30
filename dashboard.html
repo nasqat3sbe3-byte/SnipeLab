@@ -334,6 +334,13 @@ body{
  .compact-numbers.compact-metrics .number small{font-size:6.8px!important}
  .price-stability{gap:5px}.stability-pill{font-size:8px;padding:3px 5px}
 }
+
+/* Five-up mobile metrics: preserve full RSI/Rebate values without changing data */
+@media(max-width:640px){
+ .compact-numbers.compact-metrics .number strong{font-size:10px!important;letter-spacing:-.45px!important;overflow:visible!important;text-overflow:clip!important;transform:none!important}
+ .compact-numbers.compact-metrics .number:last-child strong{font-size:11px!important;letter-spacing:-.2px!important;direction:ltr!important}
+ .compact-numbers.compact-metrics .number:nth-child(2) strong{font-size:9px!important;letter-spacing:-.6px!important}
+}
 </style></head><body><main class="shell"><header class="head"><div class="head-primary"><div class="brand-wrap"><div class="brand"><span class="brand-mark">◎</span>SnipeLab</div><div class="brand-sub">ماسح أسهم التقسيم العكسي</div></div><div class="uptime offline" id="uptime"><small><span class="dot"></span>جارٍ فحص السيرفر</small><b>—</b></div></div><div class="head-market"><span class="market-heading">♧ حالة السوق</span><span class="market-state" id="marketState">جارٍ التحقق</span></div></header><section class="events"><div class="event-head"><span>ϟ آخر التنبيهات <small id="eventCount" class="event-count"></small></span><button id="eventToggle" type="button">عرض الكل ⌄</button></div><div id="eventsList" aria-live="polite"><div class="event-line">جارٍ تحميل الأحداث...</div></div></section><div class="summary" aria-label="إحصائيات قابلة للضغط"><button data-filter="all" type="button"><b id="countAll">—</b>جميع الأسهم</button><button data-filter="borrow" type="button"><b id="countBorrow">—</b>Available &lt;15K</button><button data-filter="ready" type="button"><b id="countReady">—</b>الجاهز</button><button data-filter="near" type="button"><b id="countNear">—</b>تحت الجاهزية</button></div><div class="browse-tools"><div class="quick-filter-row">
 <select id="premiumSort"><option value="readiness">الجاهزية</option><option value="available">Available الأقل</option><option value="rsi">RSI الأقل</option><option value="distance">الأقرب للقاع</option></select>
 <label><input type="checkbox" id="useRsi"> RSI</label><select id="premiumRsi"><option value="30">Under 30</option><option value="35">Under 35</option><option value="40">Under 40</option></select>
