@@ -40,7 +40,7 @@ STATE = {
     "universe_count":len(UNIVERSE_SEED),"last_universe_sync":None,"universe_error":None,"universe_attempts":0,"universe_source":"seed",
     "market_scan_count":0,"last_market_scan":None,"market_ok":0,"market_failed":0,"market_total_cached":0,"last_market_error":None,"market_cursor":0,"market_cycle":0,
     "borrow_scan_count":0,"last_borrow_scan":None,"borrow_ok":0,"borrow_missing":0,"last_borrow_error":None,
-    "analytics_count":0,"last_analytics":None,"last_halt_scan":None,"halt_error":None,"last_news_scan":None,"news_error":None,"last_state_save":None,"persistence_error":None,"pid":os.getpid(),
+    "analytics_count":0,"last_analytics":None,"last_halt_scan":None,"halt_error":None,"last_news_scan":None,"news_error":None,"last_state_save":None,"persistence_error":None,"last_rsi_scan":None,"rsi_ok":0,"rsi_failed":0,"last_rsi_error":None,"pid":os.getpid(),
 }
 UNIVERSE = {s:{"symbol":s,"effective_date":None,"source":"seed"} for s in UNIVERSE_SEED}
 QUOTES = {}
@@ -246,6 +246,7 @@ async def live_daily_rsi_loop():
         while True:
             syms=sorted(UNIVERSE)
             sem=asyncio.Semaphore(4)
+            rsi_errors=[]
             async def one(sym):
                 async with sem:
                     try:
@@ -273,11 +274,16 @@ async def live_daily_rsi_loop():
                         h["rsi_daily"]=value;h["rsi_daily_live"]=value
                         h["rsi_method"]="Wilder 14 / Yahoo 1d current candle / 2y seed"
                         h["rsi_live_updated_at"]=LIVE_RSI[sym]["updated_at"]
-                    except Exception:
+                    except Exception as exc:
+                        rsi_errors.append(f"{sym}: {type(exc).__name__}: {str(exc)[:80]}")
                         return
             for pos in range(0,len(syms),20):
                 await asyncio.gather(*(one(s) for s in syms[pos:pos+20]))
                 await asyncio.sleep(1)
+            STATE["last_rsi_scan"]=utcnow().isoformat()
+            STATE["rsi_ok"]=len(LIVE_RSI)
+            STATE["rsi_failed"]=len(rsi_errors)
+            STATE["last_rsi_error"]=rsi_errors[0] if rsi_errors else None
             save_persistent_state()
             await asyncio.sleep(120)
 
@@ -751,6 +757,16 @@ async def health():
     now=utcnow()
     workers={"market":worker_health(now,STATE.get("last_market_scan"),180),"borrow":worker_health(now,STATE.get("last_borrow_scan"),420),"history":worker_health(now,max((v.get("attempted_at","") for v in HISTORY.values()),default=None),900),"analytics":worker_health(now,STATE.get("last_analytics"),120),"halt":worker_health(now,STATE.get("last_halt_scan"),240)}
     return {"ok":bool(last) and age<30,"heartbeat_age_seconds":age,"workers":workers,"storage":storage.status(),"quotes_cached":len(QUOTES),"history_cached":len(HISTORY),"history_verified":sum(bool(HISTORY.get(sym,{}).get("verified")) for sym in UNIVERSE),"history_failed":sum(bool(HISTORY.get(sym,{}).get("error")) for sym in UNIVERSE),"history_last_attempt":max((v.get("attempted_at","") for v in HISTORY.values()),default=None),**STATE}
+
+@app.get("/api/rsi-status/{symbol}")
+async def rsi_status(symbol: str):
+    symbol=re.sub(r"[^A-Z0-9.-]","",symbol.upper())[:12]
+    return {"symbol":symbol,"live":LIVE_RSI.get(symbol),
+        "displayed":wilder_rsi_live_from_history(symbol),
+        "history":{k:(HISTORY.get(symbol) or {}).get(k) for k in
+            ("rsi_daily","rsi_daily_live","rsi_method","rsi_live_updated_at")},
+        "worker":{"last_scan":STATE.get("last_rsi_scan"),"ok":STATE.get("rsi_ok"),
+            "failed":STATE.get("rsi_failed"),"error":STATE.get("last_rsi_error")}}
 
 @app.get("/api/storage-check")
 async def storage_check():
