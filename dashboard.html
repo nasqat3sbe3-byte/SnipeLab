@@ -416,12 +416,14 @@ function archiveCard(sym){
 function deepArchiveView(j){
  const summary=(j.summary||[]).map(x=>esc(x)).join('<br>');
  const offers=(j.offerings||[]).map(x=>'<div class="timeline-row"><i class="timeline-dot"></i><div><b>'+esc(x.kind||'Offering')+' · '+esc(x.status||'')+'</b><p>'+esc(x.form||'')+(x.description?' · '+esc(x.description):'')+'</p></div><time>'+esc(x.date||'—')+'</time></div>').join('');
- const owners=(j.ownership||[]).map(x=>'<div class="timeline-row"><i class="timeline-dot"></i><div><b>'+esc(x.holder||'مالك/صندوق مُبلغ')+'</b><p>'+esc(x.form||'')+' · '+esc(x.change||'')+'</p></div><time>'+esc(x.date||'—')+'</time></div>').join('');
+ const dilution=(j.dilution||[]).map(x=>'<div class="timeline-row"><i class="timeline-dot"></i><div><b>'+esc(x.kind||'إصدار أسهم')+'</b><p>'+esc(x.form||'')+(x.shares_mentioned!=null?' · '+esc(fmt(x.shares_mentioned))+' سهم':'')+(x.status?' · '+esc(x.status):'')+'</p></div><time>'+esc(x.date||'—')+'</time></div>').join('');
+ const owners=(j.ownership||[]).map(x=>'<div class="timeline-row"><i class="timeline-dot"></i><div><b>'+esc(x.holder||'مالك/صندوق مُبلغ')+'</b><p>'+esc(x.form||'')+' · '+esc(x.change||'')+(x.remaining_shares!=null?' · المتبقي '+esc(fmt(x.remaining_shares))+' سهم':'')+'</p></div><time>'+esc(x.date||'—')+'</time></div>').join('');
  const filings=(j.filings||[]).filter(x=>x.topics?.length).slice(0,18).map(x=>'<div class="timeline-row"><i class="timeline-dot"></i><div><b>'+esc(x.form||'SEC')+' · '+esc((x.topics||[]).join(' / '))+'</b><p>'+esc((x.evidence||[])[0]||x.description||'إفصاح تمت مراجعته.')+'</p></div><time>'+esc(x.date||'—')+'</time></div>').join('');
  const ext=j.extended_hours;
  return '<div class="ai-overview"><strong>البرنت الكامل</strong><p>'+(summary||'لم يكتمل الملخص بعد.')+'</p></div>'+
  (ext?'<div class="archive-grid"><div class="archive-stat"><small>الساعات الممتدة</small><b>+'+esc(fmt(ext.gain_pct))+'%</b><span>'+esc(money(ext.low))+' → '+esc(money(ext.high))+'</span></div><div class="archive-stat"><small>الفترة</small><b>'+esc((ext.low_at||'').slice(0,16))+'</b><span>إلى '+esc((ext.high_at||'').slice(0,16))+'</span></div></div>':'')+
- '<div class="archive-timeline"><h3>الطرح والتخفيف · SEC</h3>'+(offers||'<div class="research-empty">لم نرصد طرحًا حديثًا ضمن الملفات المفحوصة.</div>')+'</div>'+
+ '<div class="archive-timeline"><h3>الطرح والتسجيل · SEC</h3>'+(offers||'<div class="research-empty">لم نرصد طرحًا/تسجيلًا حديثًا ضمن الملفات المفحوصة.</div>')+'</div>'+
+ '<div class="archive-timeline"><h3>التخفيف وإصدار الأسهم · SEC</h3>'+(dilution||'<div class="research-empty">لم نرصد إصدار أسهم/Item 3.02 ضمن الملفات المفحوصة.</div>')+'</div>'+
  '<div class="archive-timeline"><h3>الصناديق والملكية · SEC</h3>'+(owners||'<div class="research-empty">لم نرصد ملفات ملكية حديثة ضمن النطاق المفحوص.</div>')+'</div>'+
  '<div class="archive-timeline"><h3>نبش الإفصاحات المهمة</h3>'+(filings||'<div class="research-empty">لم نستخرج أحداثًا رئيسية إضافية من أحدث الإفصاحات المهمة.</div>')+'</div>'+
  '<div class="status">'+esc(j.coverage_note||'')+(j.warnings?.length?' · '+j.warnings.map(esc).join(' · '):'')+'</div>';
