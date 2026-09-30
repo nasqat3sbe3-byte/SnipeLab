@@ -727,24 +727,10 @@ async def legacy_news_loop_disabled():
         except Exception as exc:STATE["news_error"]=f"{type(exc).__name__}: {str(exc)[:100]}"
         await asyncio.sleep(600)
 
-async def delayed_secondary_workers():
-    # Keep startup responsive: live dashboard/market/borrow get the first minute alone.
-    await asyncio.sleep(75)
-    asyncio.create_task(live_daily_rsi_loop())
-    asyncio.create_task(short_analysis_loop())
-    asyncio.create_task(finnhub_live_loop())
-    asyncio.create_task(halt_loop())
-    asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
-
 @app.on_event("startup")
 async def startup():
     load_persistent_state()
-    asyncio.create_task(heartbeat_loop())
-    asyncio.create_task(universe_loop())
-    asyncio.create_task(delayed_market_start())
-    asyncio.create_task(delayed_borrow_start())
-    asyncio.create_task(analytics_loop())
-    asyncio.create_task(delayed_secondary_workers())
+    asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(live_daily_rsi_loop()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(short_analysis_loop()); asyncio.create_task(finnhub_live_loop()); asyncio.create_task(halt_loop()); asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
 
 @app.get("/")
 async def root():
@@ -929,7 +915,8 @@ async def dashboard_data():
             "top_10_source":h.get("top_10_source"),
             "top_10_provisional":bool(h.get("top_10_provisional")),
             "history_status":h.get("error") or ("verified" if h.get("verified") else "pending"),
-            "short_analysis":SHORT_ANALYSIS.get(sym,{})}
+            "short_analysis":SHORT_ANALYSIS.get(sym,{}),
+            "available_zero_estimate":available_zero_estimate(sym)}
         # A same-day live rise is a separate, explicitly provisional measure:
         # never mix it silently with the completed-session low-to-high TOP.
         q=QUOTES.get(sym) or {}
@@ -1045,22 +1032,6 @@ async def ticker_news(symbol: str):
     _NEWS_INFLIGHT[symbol]=task
     try:return await task
     finally:_NEWS_INFLIGHT.pop(symbol,None)
-
-
-
-@app.get("/api/archive/{symbol}")
-async def stock_archive(symbol: str):
-    """Archive research is isolated from live market workers while its background engine is rebuilt."""
-    symbol=re.sub(r"[^A-Z0-9.-]","",symbol.upper())[:12]
-    meta=UNIVERSE.get(symbol) or {}
-    h=HISTORY.get(symbol) or {}
-    return {"symbol":symbol,"company_name":meta.get("company"),"generated_at":utcnow().isoformat(),
-        "maintenance":True,"message":"الأرشيف العميق قيد العزل عن محرك السوق لحماية البيانات الحية.",
-        "splits":[],"reverse_split_count":0,"split_cycles":[],
-        "last_100_before_split":None,"first_100_after_split":None,"post_split_max_gain":None,
-        "offerings":[],"ownership":[],"filings":[],"warnings":[],
-        "current_split":{"date":meta.get("effective_date"),"ratio":meta.get("ratio"),
-                         "post_split_high":h.get("post_split_high"),"post_split_low":h.get("post_split_low")}}
 
 @app.get("/api/history-coverage")
 async def history_coverage():
