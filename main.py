@@ -18,6 +18,7 @@ from bs4 import BeautifulSoup
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
+APP_BUILD="c078be4-av-rsi"
 app = FastAPI(title="SnipeLab Engine", version="0.6.0")
 BOOTED_AT = datetime.now(timezone.utc)
 
@@ -759,7 +760,9 @@ async def health():
 @app.get("/api/rsi-status/{symbol}")
 async def rsi_status(symbol: str):
     symbol=re.sub(r"[^A-Z0-9.-]","",symbol.upper())[:12]
-    return {"symbol":symbol,"live":LIVE_RSI.get(symbol),
+    return {"build":APP_BUILD,"pid":os.getpid(),"booted_at":BOOTED_AT.isoformat(),
+        "alpha_key_present":bool(os.environ.get("ALPHAVANTAGE_API_KEY","").strip()),
+        "symbol":symbol,"live":LIVE_RSI.get(symbol),
         "displayed":wilder_rsi_live_from_history(symbol),
         "history":{k:(HISTORY.get(symbol) or {}).get(k) for k in
             ("rsi_daily","rsi_daily_live","rsi_method","rsi_live_updated_at")},
