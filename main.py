@@ -51,6 +51,7 @@ TRAIL = {}
 HALTS = {}
 NEWS = {}
 HISTORY = {}
+LIVE_RSI = {}
 BORROW_HISTORY = {}
 RADAR_MEMORY = {}
 SHORT_ANALYSIS = {}
@@ -254,15 +255,8 @@ async def live_daily_rsi_loop():
                         if not result:return
                         indicators=result.get("indicators") or {}
                         q=(indicators.get("quote") or [{}])[0]
-                        adjusted=(indicators.get("adjclose") or [{}])[0].get("adjclose") or []
-                        raw=q.get("close") or []
-                        closes=[]
-                        for i,x in enumerate(raw):
-                            try:
-                                a=adjusted[i] if i<len(adjusted) else None
-                                v=float(a) if a is not None and float(a)>0 else float(x)
-                                if v>0:closes.append(v)
-                            except (TypeError,ValueError):continue
+                        closes=[float(x) for x in (q.get("close") or [])
+                                if x is not None and float(x)>0]
                         if len(closes)<15:return
                         changes=[closes[i]-closes[i-1] for i in range(1,len(closes))]
                         gains=[max(x,0.0) for x in changes];losses=[max(-x,0.0) for x in changes]
@@ -270,10 +264,15 @@ async def live_daily_rsi_loop():
                         for i in range(14,len(changes)):
                             g=((g*13.0)+gains[i])/14.0;l=((l*13.0)+losses[i])/14.0
                         value=100.0 if l==0 else 100.0-(100.0/(1.0+g/l))
+                        value=round(value,2)
+                        # Keep live RSI outside HISTORY. historical_worker replaces history
+                        # records during refreshes and used to erase/roll back the live value.
+                        LIVE_RSI[sym]={"value":value,"updated_at":utcnow().isoformat(),
+                            "method":"Wilder 14 / Yahoo 1d current candle / 2y seed"}
                         h=HISTORY.setdefault(sym,{})
-                        h["rsi_daily"]=round(value,2);h["rsi_daily_live"]=round(value,2)
-                        h["rsi_method"]="Wilder 14 / Yahoo split-adjusted 1d current candle"
-                        h["rsi_live_updated_at"]=utcnow().isoformat()
+                        h["rsi_daily"]=value;h["rsi_daily_live"]=value
+                        h["rsi_method"]="Wilder 14 / Yahoo 1d current candle / 2y seed"
+                        h["rsi_live_updated_at"]=LIVE_RSI[sym]["updated_at"]
                     except Exception:
                         return
             for pos in range(0,len(syms),20):
@@ -332,13 +331,9 @@ async def market_loop():
             await asyncio.sleep(3)
 
 def wilder_rsi_live_from_history(symbol):
-    """Return the latest independently refreshed Daily RSI(14).
-
-    The RSI worker calculates Wilder RSI from split-adjusted Yahoo daily closes,
-    including today's in-progress daily candle. Do not overlay the raw quote here:
-    after a reverse split raw quote and adjusted historical closes are on different
-    price scales and corrupt the RSI.
-    """
+    """Return RSI from the dedicated live cache; history worker cannot overwrite it."""
+    live=LIVE_RSI.get(symbol) or {}
+    if live.get("value") is not None:return live["value"]
     hist=HISTORY.get(symbol) or {}
     return hist.get("rsi_daily_live",hist.get("rsi_daily"))
 
