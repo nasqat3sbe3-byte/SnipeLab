@@ -267,6 +267,46 @@ body{background:
  .compact-numbers.compact-metrics small{font-size:7.5px}
  .compact-numbers.compact-metrics strong{font-size:11.5px}
 }
+
+/* 2026-09-30 approved premium execution: graphite + champagne, no green UI */
+:root{
+ --bg:#080a0b;--panel:#0e1112;--edge:#303335;--gold:#d6ad69;--teal:#aaa79e;
+ --green:#d8c08e;--red:#e65f69;--muted:#8f9495
+}
+body{
+ background:
+ radial-gradient(900px 360px at 50% -180px,rgba(214,173,105,.09),transparent 70%),
+ linear-gradient(180deg,#07090a,#0b0e0f 48%,#07090a);
+ color:#eeeae2
+}
+.head{border-bottom:1px solid #292b2c}.brand,.sym{color:#f1ede5}.brand-mark{color:#d6ad69}
+.uptime,.uptime.offline{background:#0b0e0f;border-color:#5b492c}.uptime small,.uptime.offline small{color:#d6ad69}.dot{background:#d6ad69}
+.events{background:linear-gradient(135deg,#111313,#0a0c0d);border-color:#675230}
+.summary button{background:linear-gradient(145deg,#111415,#0a0c0d);border-color:#303335;color:#d8d6d0}
+.summary button:first-child{background:linear-gradient(145deg,#211a10,#0e0e0d);border-color:#80653a;color:#e8c984}
+.search,.number{background:#0b0e0f;border-color:#292c2e}
+.stock,.stock.compact-stock{background:linear-gradient(145deg,#111415,#0a0d0e);border-color:#303335;box-shadow:0 12px 32px rgba(0,0,0,.24)}
+.stock.ready,.stock.top{border-color:#7a6138;background:linear-gradient(145deg,#15130f,#0a0d0e)}
+.good{color:#d8c08e!important}.bad{color:#e66a73!important}
+.label,.label.ready,.label.top{color:#d8c08e;border-color:#665333;background:#15120d}
+.compact-progress{background:#272a2b}.compact-progress span{background:linear-gradient(90deg,#765d34,#d9b66f)}
+.score{background:#211a10;color:#e2bd75}
+.filters button.on,.filters .on{color:#f0d18d!important;border-color:#80653a!important;background:linear-gradient(180deg,#211a10,#0d0e0e)!important}
+.compact-star{color:#d6ad69!important}
+@media(max-width:640px){
+ html,body{width:100%;max-width:100%;overflow-x:hidden}
+ .shell{width:100%;max-width:100%;padding:8px 8px 82px}
+ .head{padding:4px 2px 10px}.brand{font-size:25px}
+ .summary{gap:5px}.summary button{min-width:0;padding:8px 4px}
+ .browse-tools{padding:7px 0;background:rgba(8,10,11,.97)}
+ .stocks{display:block!important;width:100%}
+ .stock.compact-stock{width:100%;max-width:100%;margin:0 0 7px;padding:11px 10px 9px;border-radius:11px}
+ .compact-head{padding-bottom:7px}
+ .compact-numbers.compact-metrics{display:grid!important;grid-template-columns:repeat(6,minmax(0,1fr))!important;width:100%;gap:0}
+ .compact-numbers.compact-metrics .number{padding:5px 1px;min-width:0;border:0;border-left:1px solid #25282a;background:transparent}
+ .compact-numbers.compact-metrics small{font-size:7px}.compact-numbers.compact-metrics strong{font-size:11px}
+ .compact-readiness{margin-top:7px}.compact-footer{margin-top:4px}
+}
 </style></head><body><main class="shell"><header class="head"><div class="head-primary"><div class="brand-wrap"><div class="brand"><span class="brand-mark">◎</span>SnipeLab</div><div class="brand-sub">ماسح أسهم التقسيم العكسي</div></div><div class="uptime offline" id="uptime"><small><span class="dot"></span>جارٍ فحص السيرفر</small><b>—</b></div></div><div class="head-market"><span class="market-heading">♧ حالة السوق</span><span class="market-state" id="marketState">جارٍ التحقق</span></div></header><section class="events"><div class="event-head"><span>ϟ آخر التنبيهات <small id="eventCount" class="event-count"></small></span><button id="eventToggle" type="button">عرض الكل ⌄</button></div><div id="eventsList" aria-live="polite"><div class="event-line">جارٍ تحميل الأحداث...</div></div></section><div class="summary" aria-label="إحصائيات قابلة للضغط"><button data-filter="all" type="button"><b id="countAll">—</b>جميع الأسهم</button><button data-filter="borrow" type="button"><b id="countBorrow">—</b>Available &lt;15K</button><button data-filter="ready" type="button"><b id="countReady">—</b>الجاهز</button><button data-filter="near" type="button"><b id="countNear">—</b>تحت الجاهزية</button></div><div class="browse-tools"><input id="query" class="search" type="search" placeholder="ابحث باسم السهم أو الشركة..." aria-label="البحث عن سهم"><div class="filters" role="group" aria-label="فلترة الأسهم"><button class="on" data-filter="all">الكل</button><button data-filter="ready">الجاهز</button><button data-filter="radar">الرادار <span id="radarCount"></span></button><button data-filter="favorites">☆ قنصي</button><details class="filter-more"><summary aria-label="عرض فلاتر إضافية" title="المزيد من الفلاتر"><span class="mobile-more-icon" aria-hidden="true">☷</span><span class="desktop-more-label">المزيد <span class="more-arrow">⌄</span></span></summary><div class="filter-more-menu"><button data-filter="near">تحت الجاهزية</button><button data-filter="borrow">Available &lt;15K</button><button data-filter="top">♛ توب</button><button type="button" id="labOpen">⚗ المختبر</button></div></details></div></div><div id="status" class="status">جارٍ تحميل بيانات الأسهم...</div><section id="stocks" class="stocks" aria-live="polite"></section></main><dialog id="labDialog" class="chart-dialog"><div class="chart-head"><strong>مختبر نتائج الرادار</strong><button type="button" id="labClose">✕</button></div><div id="labBody" class="history-body">جارٍ التحميل...</div></dialog><dialog id="historyDialog" class="chart-dialog"><div class="chart-head"><strong id="historyTitle">تاريخ الشورت</strong><button id="historyClose" type="button">✕</button></div><div id="historyBody" class="history-body">جارٍ التحميل...</div></dialog><dialog id="chartDialog" class="chart-dialog" aria-label="شارت TradingView"><div class="chart-head"><strong id="chartTitle">الشارت</strong><div><a id="chartExternal" href="https://www.tradingview.com/chart/" target="_blank" rel="noopener noreferrer">فتح TradingView ↗</a><button type="button" id="chartClose" aria-label="إغلاق الشارت">✕</button></div></div><div id="tvChart" class="tradingview-widget-container"><div class="chart-loading">جارٍ تحميل شارت TradingView…</div></div><div class="chart-note">الشارت من TradingView؛ بعض بيانات السوق قد تكون متأخرة حسب المزود.</div></dialog><script>
 'use strict';
 let favorites=new Set(JSON.parse(localStorage.getItem('snipelab-favorites')||'[]'));let payload={rows:{},events:[],news:{}},selected='all',limit=24,showAllEvents=false,loading=false,serverBoot=0,newsLoaded=new Set(),newsLoading=new Set();
