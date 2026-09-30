@@ -248,7 +248,7 @@ async def live_daily_rsi_loop():
             async def one(sym):
                 async with sem:
                     try:
-                        r=await client.get(YAHOO.format(symbol=sym),params={"range":"3mo","interval":"1d","includePrePost":"false","events":"history"})
+                        r=await client.get(YAHOO.format(symbol=sym),params={"range":"2y","interval":"1d","includePrePost":"false","events":"history"})
                         r.raise_for_status()
                         result=(r.json().get("chart",{}).get("result") or [None])[0]
                         if not result:return
@@ -280,7 +280,7 @@ async def live_daily_rsi_loop():
                 await asyncio.gather(*(one(s) for s in syms[pos:pos+20]))
                 await asyncio.sleep(1)
             save_persistent_state()
-            await asyncio.sleep(240)
+            await asyncio.sleep(120)
 
 async def delayed_market_start():
     await asyncio.sleep(5)
@@ -332,31 +332,15 @@ async def market_loop():
             await asyncio.sleep(3)
 
 def wilder_rsi_live_from_history(symbol):
-    """Recalculate daily RSI(14) using full historical closes plus today's freshest quote.
+    """Return the latest independently refreshed Daily RSI(14).
 
-    Historical worker remains responsible for validated split metrics. This overlay only
-    replaces the final daily close with the current market quote when it is from today.
+    The RSI worker calculates Wilder RSI from split-adjusted Yahoo daily closes,
+    including today's in-progress daily candle. Do not overlay the raw quote here:
+    after a reverse split raw quote and adjusted historical closes are on different
+    price scales and corrupt the RSI.
     """
     hist=HISTORY.get(symbol) or {}
-    q=QUOTES.get(symbol) or {}
-    base=hist.get("rsi_daily")
-    # The history worker's RSI can be stale during the session. Fetching full daily
-    # history here would be wasteful, so the history worker stores Wilder state below.
-    try:
-        avg_gain=float(hist["rsi_wilder_avg_gain"])
-        avg_loss=float(hist["rsi_wilder_avg_loss"])
-        last_close=float(hist["rsi_wilder_last_closed_close"])
-        live=float(q.get("price"))
-        market_ts=datetime.fromisoformat(str(q.get("market_timestamp")).replace("Z","+00:00"))
-        market_day=market_ts.astimezone(ZoneInfo("America/New_York")).date()
-        today=datetime.now(ZoneInfo("America/New_York")).date()
-    except (KeyError,TypeError,ValueError):
-        return base
-    if market_day!=today or min(last_close,live)<=0:return base
-    change=live-last_close
-    gain=max(change,0.0);loss=max(-change,0.0)
-    g=((avg_gain*13.0)+gain)/14.0;l=((avg_loss*13.0)+loss)/14.0
-    return round(100.0 if l==0 else 100.0-(100.0/(1.0+g/l)),2)
+    return hist.get("rsi_daily_live",hist.get("rsi_daily"))
 
 def readiness_state(meta,q,b,a):
     """Four weighted factors plus mandatory 2-session post-low stability gate."""
