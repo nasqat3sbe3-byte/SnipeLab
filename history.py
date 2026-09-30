@@ -32,13 +32,23 @@ def calculate(effective, candles):
                      "top_10_low_date":low["date"],"top_10_high_date":peak["date"],
                      "top_10_sessions_since_peak":sessions_since_peak,
                      "top_10_source":"daily_prior_session_low_to_later_high"}
-    closes=[b["close"] for b in completed]
-    rsi=None
-    if len(closes)>=15:
-        diff=[closes[i]-closes[i-1] for i in range(len(closes)-14,len(closes))]
-        gain=sum(max(x,0) for x in diff)/14
-        loss=sum(max(-x,0) for x in diff)/14
-        rsi=round(100 if loss==0 else 100-100/(1+gain/loss),2)
+    def wilder_rsi(closes, period=14):
+        vals=[float(x) for x in closes if x is not None and float(x)>0]
+        if len(vals)<period+1:return None
+        changes=[vals[i]-vals[i-1] for i in range(1,len(vals))]
+        gains=[max(x,0.0) for x in changes];losses=[max(-x,0.0) for x in changes]
+        avg_gain=sum(gains[:period])/period;avg_loss=sum(losses[:period])/period
+        for i in range(period,len(changes)):
+            avg_gain=((avg_gain*(period-1))+gains[i])/period
+            avg_loss=((avg_loss*(period-1))+losses[i])/period
+        return 100.0 if avg_loss==0 else 100.0-(100.0/(1.0+avg_gain/avg_loss))
+    # Live daily RSI includes today's in-progress daily candle, matching chart RSI during the session.
+    # Closed RSI is retained separately for audit/comparison.
+    live_closes=[b["close"] for b in bars]
+    closed_closes=[b["close"] for b in completed]
+    rsi_live=wilder_rsi(live_closes,14)
+    rsi_closed=wilder_rsi(closed_closes,14)
+    rsi=round(rsi_live,2) if rsi_live is not None else None
     return {"verified":verified,"source":"Yahoo 1d; split adjustment requires validation",
         "effective_date":effective,
         "post_split_low":min(b["low"] for b in bars) if verified else None,
@@ -60,7 +70,9 @@ def calculate(effective, candles):
                  if b["date"]<min(bars,key=lambda x:x["low"])["date"]),default=None)
             if verified else None),
         "half_rule_version":2,
-        "rsi_daily":rsi,"first_bar":first["date"],"bar_count":len(bars),
+        "rsi_daily":rsi,"rsi_daily_live":rsi,"rsi_daily_closed":round(rsi_closed,2) if rsi_closed is not None else None,
+        "rsi_method":"Wilder 14","rsi_includes_current_daily_candle":True,
+        "first_bar":first["date"],"bar_count":len(bars),
         "top_10_verified":bool(top and verified and top["top_10_gain_pct"]>=40),
         "top_calculated_at":datetime.now(timezone.utc).isoformat(),
         "top_calculator_version":3,**(top or {}),
