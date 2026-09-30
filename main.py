@@ -236,6 +236,43 @@ async def fetch_quote(client, sem, symbol):
                 continue
         return symbol,None
 
+async def live_daily_rsi_loop():
+    """Refresh today's Daily RSI(14) for every ticker, independent of split history."""
+    await asyncio.sleep(12)
+    headers={"User-Agent":"Mozilla/5.0 SnipeLab/0.7"}
+    limits=httpx.Limits(max_connections=5,max_keepalive_connections=4)
+    async with httpx.AsyncClient(timeout=10,follow_redirects=True,headers=headers,limits=limits) as client:
+        while True:
+            syms=sorted(UNIVERSE)
+            sem=asyncio.Semaphore(4)
+            async def one(sym):
+                async with sem:
+                    try:
+                        r=await client.get(YAHOO.format(symbol=sym),params={"range":"3mo","interval":"1d","includePrePost":"false","events":"history"})
+                        r.raise_for_status()
+                        result=(r.json().get("chart",{}).get("result") or [None])[0]
+                        if not result:return
+                        q=((result.get("indicators") or {}).get("quote") or [{}])[0]
+                        closes=[float(x) for x in (q.get("close") or []) if x is not None and float(x)>0]
+                        if len(closes)<15:return
+                        changes=[closes[i]-closes[i-1] for i in range(1,len(closes))]
+                        gains=[max(x,0.0) for x in changes];losses=[max(-x,0.0) for x in changes]
+                        g=sum(gains[:14])/14.0;l=sum(losses[:14])/14.0
+                        for i in range(14,len(changes)):
+                            g=((g*13.0)+gains[i])/14.0;l=((l*13.0)+losses[i])/14.0
+                        value=100.0 if l==0 else 100.0-(100.0/(1.0+g/l))
+                        h=HISTORY.setdefault(sym,{})
+                        h["rsi_daily"]=round(value,2);h["rsi_daily_live"]=round(value,2)
+                        h["rsi_method"]="Wilder 14 / Yahoo 1d current candle"
+                        h["rsi_live_updated_at"]=utcnow().isoformat()
+                    except Exception:
+                        return
+            for pos in range(0,len(syms),20):
+                await asyncio.gather(*(one(s) for s in syms[pos:pos+20]))
+                await asyncio.sleep(1)
+            save_persistent_state()
+            await asyncio.sleep(240)
+
 async def delayed_market_start():
     await asyncio.sleep(5)
     await market_loop()
@@ -705,7 +742,7 @@ async def legacy_news_loop_disabled():
 @app.on_event("startup")
 async def startup():
     load_persistent_state()
-    asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(short_analysis_loop()); asyncio.create_task(finnhub_live_loop()); asyncio.create_task(halt_loop()); asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
+    asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(live_daily_rsi_loop()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(short_analysis_loop()); asyncio.create_task(finnhub_live_loop()); asyncio.create_task(halt_loop()); asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
 
 @app.get("/")
 async def root():
