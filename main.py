@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
-app = FastAPI(title="SnipeLab Engine", version="0.6.0")
+app = FastAPI(title="SnipeLab Engine", version="0.7.0")
 BOOTED_AT = datetime.now(timezone.utc)
 
 UNIVERSE_SEED = ["MSGY","WCT","NCT","EPOW","CPOP","LGCL","NRSN","HUBC","MGN","FGL","OMH","AIXI","SFWL","TNMG","LRHC","RCON","CXAI","YYAI","YXT","RBNE","CISS","IZM","GAUZ","LGHL","UCAR","HLSQ","ALP","GTBP","GOSS","JAGX","NFE","IPDN","NXXT","ENLV","STKH","TRIB","FFAI"]
@@ -36,6 +36,8 @@ ANALYTICS = {}
 TRAIL = {}
 HALTS = {}
 NEWS = {}
+DAILY = {}
+BORROW_HISTORY = {}
 STATE_FILE = Path(os.environ.get("SNIPELAB_STATE_FILE","/tmp/snipelab_state.json"))
 _LAST_SAVE = 0.0
 
@@ -46,6 +48,7 @@ def load_persistent_state():
         ANALYTICS.update(d.get("analytics") or {})
         BORROW.update(d.get("borrow") or {})
         EVENTS.extend((d.get("events") or [])[:100])
+        BORROW_HISTORY.update(d.get("borrow_history") or {})
     except Exception as exc:
         STATE["persistence_error"]=f"load {type(exc).__name__}: {str(exc)[:100]}"
 
@@ -55,7 +58,7 @@ def save_persistent_state(force=False):
     if not force and now-_LAST_SAVE<60:return
     try:
         tmp=STATE_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"saved_at":utcnow().isoformat(),"analytics":ANALYTICS,"borrow":BORROW,"events":EVENTS[:100]},separators=(",",":")),"utf-8")
+        tmp.write_text(json.dumps({"saved_at":utcnow().isoformat(),"analytics":ANALYTICS,"borrow":BORROW,"borrow_history":BORROW_HISTORY,"events":EVENTS[:100]},separators=(",",":")),"utf-8")
         tmp.replace(STATE_FILE); _LAST_SAVE=now
         STATE["last_state_save"]=utcnow().isoformat(); STATE["persistence_error"]=None
     except Exception as exc:
@@ -151,6 +154,89 @@ async def fetch_quote(client, sem, symbol):
             return symbol,{"symbol":symbol,"price":p,"day_high":max(hi) if hi else p,"day_low":min(lo) if lo else p,
                 "market_timestamp":datetime.fromtimestamp(t,tz=timezone.utc).isoformat(),"received_at":utcnow().isoformat(),"source":"yahoo_1m_prepost"}
         except Exception:return symbol,None
+
+
+def wilder_rsi(closes, period=14):
+    vals=[float(x) for x in closes if x is not None and float(x)>0]
+    if len(vals)<period+1:return None
+    changes=[vals[i]-vals[i-1] for i in range(1,len(vals))]
+    gains=[max(x,0.0) for x in changes]; losses=[max(-x,0.0) for x in changes]
+    avg_gain=sum(gains[:period])/period; avg_loss=sum(losses[:period])/period
+    for i in range(period,len(changes)):
+        avg_gain=((avg_gain*(period-1))+gains[i])/period
+        avg_loss=((avg_loss*(period-1))+losses[i])/period
+    if avg_loss==0:return 100.0
+    rs=avg_gain/avg_loss
+    return 100.0-(100.0/(1.0+rs))
+
+async def fetch_daily_rsi(client, sem, symbol):
+    async with sem:
+        try:
+            r=await client.get(YAHOO.format(symbol=symbol),params={"range":"3mo","interval":"1d","includePrePost":"false","events":"history"})
+            r.raise_for_status(); result=(r.json().get("chart",{}).get("result") or [None])[0]
+            if not result:return symbol,None
+            ts=result.get("timestamp") or []; q=((result.get("indicators") or {}).get("quote") or [{}])[0]
+            closes=q.get("close") or []
+            bars=[(int(ts[i]),float(v)) for i,v in enumerate(closes) if i<len(ts) and v is not None and float(v)>0]
+            if len(bars)<15:return symbol,None
+            # Yahoo's last daily candle can be today's still-forming candle. RSI Daily uses completed sessions only.
+            today=utcnow().date()
+            completed=[v for t,v in bars if datetime.fromtimestamp(t,tz=timezone.utc).date()<today]
+            if len(completed)<15:completed=[v for _,v in bars[:-1]]
+            value=wilder_rsi(completed,14)
+            if value is None:return symbol,None
+            return symbol,{"rsi14":round(value,2),"period":14,"method":"Wilder","timeframe":"1d","completed_candles_only":True,
+                "bars_used":len(completed),"received_at":utcnow().isoformat(),"source":"yahoo_1d"}
+        except Exception:return symbol,None
+
+async def daily_rsi_loop():
+    await asyncio.sleep(75)
+    headers={"User-Agent":"Mozilla/5.0 SnipeLab/0.7"}
+    limits=httpx.Limits(max_connections=4,max_keepalive_connections=3)
+    async with httpx.AsyncClient(timeout=10,follow_redirects=True,headers=headers,limits=limits) as client:
+        while True:
+            syms=sorted(UNIVERSE); sem=asyncio.Semaphore(3)
+            for i in range(0,len(syms),10):
+                rows=await asyncio.gather(*(fetch_daily_rsi(client,sem,s) for s in syms[i:i+10]))
+                for s,row in rows:
+                    if row is not None:DAILY[s]=row
+                await asyncio.sleep(1)
+            await asyncio.sleep(900)
+
+def short_estimate(symbol):
+    hist=BORROW_HISTORY.get(symbol) or []
+    downs=[]
+    for x in hist:
+        try:
+            old=float(x["old_available"]); new=float(x["available"]); price=float(x["price"])
+        except Exception:continue
+        if old>new and price>0:
+            downs.append({"drop":old-new,"price":price,"available":new,"at":x.get("at")})
+    if not downs:
+        return {"status":"insufficient_data","message":"بيانات غير كافية","down_events":0,"short_avg_est":None,"zero_price_est":None,"confidence":"none"}
+    total=sum(x["drop"] for x in downs)
+    short_avg=sum(x["price"]*x["drop"] for x in downs)/total if total>0 else None
+    zero=None; r2=None
+    # Estimate price at Available=0 only from observed downward-borrow events. Require >=3 distinct observations.
+    pts=[(x["available"],x["price"]) for x in downs]
+    if len(pts)>=3 and len({a for a,_ in pts})>=3:
+        ma=sum(a for a,_ in pts)/len(pts); mp=sum(p for _,p in pts)/len(pts)
+        den=sum((a-ma)**2 for a,_ in pts)
+        if den>0:
+            beta=sum((a-ma)*(p-mp) for a,p in pts)/den
+            alpha=mp-beta*ma
+            pred=[alpha+beta*a for a,_ in pts]
+            ss_res=sum((p-y)**2 for (_,p),y in zip(pts,pred)); ss_tot=sum((p-mp)**2 for _,p in pts)
+            r2=1-(ss_res/ss_tot) if ss_tot>0 else 0
+            prices=[p for _,p in pts]
+            # Reject wild extrapolation: zero estimate must remain within a conservative band around observed prices.
+            if alpha>0 and min(prices)*0.5<=alpha<=max(prices)*1.5 and r2>=0.35:zero=alpha
+    conf="high" if len(downs)>=6 and r2 is not None and r2>=0.70 else "medium" if len(downs)>=4 and r2 is not None and r2>=0.50 else "low"
+    status="ok" if zero is not None else "collecting"
+    return {"status":status,"message":None if zero is not None else "بيانات غير كافية لتقدير سعر الصفر",
+        "down_events":len(downs),"borrowed_observed":round(total,2),"short_avg_est":round(short_avg,4) if short_avg else None,
+        "zero_price_est":round(zero,4) if zero else None,"fit_r2":round(r2,3) if r2 is not None else None,"confidence":conf,
+        "method":"weighted price of observed Available drops + guarded linear extrapolation"}
 
 async def delayed_market_start():
     await asyncio.sleep(30)
@@ -279,7 +365,9 @@ def refresh_analytics():
             "missing_count":st["missing_count"],"missing":st["missing"],"strength":st["strength"],
             "ready_at":ready_at,"ready_price":ready_price,"launched":launched,
             "max_rise_pct":round(max_rise,2) if max_rise is not None else None,"rise_pct":round(max_rise,2) if max_rise is not None else None,
-            "ignition":ignition,"last_market_day":st["market_day"]}
+            "ignition":ignition,"last_market_day":st["market_day"],
+            "daily_rsi":(DAILY.get(sym) or {}).get("rsi14"),"daily_rsi_meta":DAILY.get(sym),
+            "short_estimate":short_estimate(sym)}
 
 async def analytics_loop():
     await asyncio.sleep(40)
@@ -327,7 +415,13 @@ async def borrow_loop():
                 if old:
                     oa,na=old.get("available"),new.get("available")
                     if oa is not None and na is not None and na<oa:
-                        changed+=1; add_event(sym,"available_down",f"Available {oa:g} -> {na:g}",{"old":oa,"new":na})
+                        changed+=1
+                        px=(QUOTES.get(sym) or {}).get("price")
+                        if px is not None:
+                            h=BORROW_HISTORY.setdefault(sym,[])
+                            h.append({"at":now,"old_available":oa,"available":na,"price":float(px)})
+                            if len(h)>120:del h[:-120]
+                        add_event(sym,"available_down",f"Available {oa:g} -> {na:g}",{"old":oa,"new":na})
                     if oa!=0 and na==0:add_event(sym,"available_zero","Available reached 0",{"old":oa,"new":0})
                 BORROW[sym]=new
             STATE["borrow_scan_count"]+=1; STATE["last_borrow_scan"]=now; STATE["borrow_ok"]=sum(1 for s in UNIVERSE if s in rows)
@@ -378,11 +472,11 @@ async def legacy_news_loop_disabled():
 @app.on_event("startup")
 async def startup():
     load_persistent_state()
-    asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(halt_loop())
+    asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(daily_rsi_loop()); asyncio.create_task(analytics_loop()); asyncio.create_task(halt_loop())
 
 @app.get("/")
 async def root():
-    return {"service":"snipelab-engine","message":"SnipeLab Engine is alive","version":"0.6.0",**STATE,
+    return {"service":"snipelab-engine","message":"SnipeLab Engine is alive","version":"0.7.0",**STATE,
         "prices_ready":len(QUOTES),"borrow_ready":len(BORROW),"events":len(EVENTS),
         "uptime_seconds":int(time.time()-BOOTED_AT.timestamp()),
         "endpoints":["/dashboard","/health","/universe","/prices","/borrow","/snapshot","/signals","/ready","/zero-short","/momentum","/top","/halts","/news","/events"]}
@@ -392,7 +486,7 @@ DASHBOARD = r"""<!doctype html><html lang="ar" dir="rtl"><head><meta charset="ut
 <section id="radar"><div id="topbox"></div><div class="title">🎯 الجاهزية · Available ≤ 20K · قريب من القاع · ثبات 4/4</div><div class="filters"><button class="f on" data-f="ready">الجاهزية</button><button class="f" data-f="all">الكل</button><button class="f" data-f="zero">0 شورت</button><button class="f" data-f="momentum">⚡ لحظي</button><button class="f" data-f="top">👑 TOP</button></div><div id="count" class="title"></div><div id="cards"></div></section><section id="pulse" style="display:none" class="events"><div class="title">🔔 الSnipeLab · الأحداث وHALT والأخبار</div><div id="events"></div></section></div><div class="nav"><div class="navin"><button class="on" data-p="radar">🎯 الرادار</button><button data-p="pulse">🔔 الSnipeLab</button></div></div><script>
 let d={},filter='ready';const N=v=>v==null?'—':Number(v).toLocaleString('en-US',{maximumFractionDigits:1}),P=v=>v==null?'—':Number(v).toFixed(1)+'%',D=v=>v==null?'—':'$'+Number(v).toFixed(Number(v)<1?4:2);async function J(){let r=await fetch('/api/dashboard',{cache:'no-store'});if(!r.ok)throw Error(r.status);return r.json()}function rows(){return Object.values(d.rows||{}).map(x=>({...x,...(x.signal||{}),q:x.price||{},br:x.borrow||{}}))}
 function pick(){let a=rows();if(filter==='ready')a=a.filter(x=>x.ready_candidate||x.ready);if(filter==='zero')a=a.filter(x=>Number(x.br.available??x.available)===0);if(filter==='momentum')a=a.filter(x=>x.ignition?.fresh);if(filter==='top')a=a.filter(x=>x.launched);return a.sort((a,b)=>filter==='ready'?(Number(a.br.available??a.available??1e12)-Number(b.br.available??b.available??1e12)):(Number(b.readiness_pct||0)-Number(a.readiness_pct||0)))}
-function card(x){let av=x.br.available??x.available,pr=x.q.price??x.price;return '<div class="card" onclick="this.classList.toggle(\'open\')"><div class="top"><div><span class="sym">'+x.symbol+'</span>'+(x.ready?'<span class="tag">جاهز</span>':x.ready_candidate?'<span class="tag gold">مرشح</span>':'')+'</div><div><b>'+D(pr)+'</b> <span class="score">'+N(x.readiness_pct)+'%</span></div></div><div class="grid"><div class="kv"><small>Available</small><b>'+N(av)+'</b></div><div class="kv low"><small>أدنى قاع</small><b>'+D(x.effective_low)+'</b></div><div class="kv"><small>البعد عن القاع</small><b>'+P(x.effective_distance_pct)+'</b></div><div class="kv"><small>الثبات</small><b>'+(x.effective_sessions??0)+'/4</b></div></div><div class="more grid"><div class="kv"><small>Rebate</small><b>'+P(x.br.rebate??x.rebate)+'</b></div><div class="kv"><small>CTB</small><b>'+P(x.br.ctb??x.ctb)+'</b></div><div class="kv"><small>النصف</small><b>'+(x.half_reached?'✓ ':'')+D(x.half_level)+'</b></div><div class="kv"><small>أعلى بعد التقسيم</small><b>'+D(x.highest_since_split)+'</b></div><div class="kv"><small>تاريخ التقسيم</small><b>'+(x.effective_date||'—')+'</b></div><div class="kv"><small>Ready Price</small><b>'+D(x.ready_price)+'</b></div></div></div>'}
+function card(x){let av=x.br.available??x.available,pr=x.q.price??x.price;return '<div class="card" onclick="this.classList.toggle(\'open\')"><div class="top"><div><span class="sym">'+x.symbol+'</span>'+(x.ready?'<span class="tag">جاهز</span>':x.ready_candidate?'<span class="tag gold">مرشح</span>':'')+'</div><div><b>'+D(pr)+'</b> <span class="score">'+N(x.readiness_pct)+'%</span></div></div><div class="grid"><div class="kv"><small>Available</small><b>'+N(av)+'</b></div><div class="kv low"><small>أدنى قاع</small><b>'+D(x.effective_low)+'</b></div><div class="kv"><small>البعد عن القاع</small><b>'+P(x.effective_distance_pct)+'</b></div><div class="kv"><small>الثبات</small><b>'+(x.effective_sessions??0)+'/4</b></div></div><div class="more grid"><div class="kv"><small>Rebate</small><b>'+P(x.br.rebate??x.rebate)+'</b></div><div class="kv"><small>CTB</small><b>'+P(x.br.ctb??x.ctb)+'</b></div><div class="kv"><small>النصف</small><b>'+(x.half_reached?'✓ ':'')+D(x.half_level)+'</b></div><div class="kv"><small>أعلى بعد التقسيم</small><b>'+D(x.highest_since_split)+'</b></div><div class="kv"><small>تاريخ التقسيم</small><b>'+(x.effective_date||'—')+'</b></div><div class="kv"><small>Ready Price</small><b>'+D(x.ready_price)+'</b></div><div class="kv"><small>RSI Daily 14</small><b>'+N(x.daily_rsi)+'</b></div><div class="kv"><small>متوسط الشورت التقديري</small><b>'+D(x.short_estimate?.short_avg_est)+'</b></div><div class="kv"><small>سعر الصفر المحتمل</small><b>'+(x.short_estimate?.zero_price_est!=null?D(x.short_estimate.zero_price_est):'بيانات غير كافية')+'</b></div></div></div>'}
 function render(){let tops=rows().filter(x=>x.launched).sort((a,b)=>Number(b.max_rise_pct||0)-Number(a.max_rise_pct||0));topbox.innerHTML=tops.length?'<div class="title">👑 TOP · الأسهم المنطلقة</div><div class="topdeck">'+tops.map(x=>'<div class="hero"><div class="top"><b>'+x.symbol+'</b><span>👑</span></div><div class="rise">+'+N(x.max_rise_pct)+'%</div><small>من سعر الجاهزية '+D(x.ready_price)+'</small></div>').join('')+'</div>':'';let a=pick();count.textContent=a.length+' سهم';cards.innerHTML=a.map(card).join('')||'<div class="empty">لا توجد أسهم مطابقة حاليًا</div>';let mix=[...(d.events||[])];Object.values(d.halts||{}).forEach(h=>mix.push({symbol:h.symbol,text:'🚨 HALT · '+h.reason,at:(h.halt_date||'')+' '+(h.halt_time||'')}));Object.entries(d.news||{}).forEach(([s,z])=>(z||[]).filter(n=>n.tone==='positive').forEach(n=>mix.push({symbol:s,text:'🟢 '+n.title,at:n.published_at||''})));events.innerHTML=mix.slice(0,40).map(e=>'<div class="card"><div class="top"><b>'+e.symbol+'</b><span class="time">'+String(e.at||'').replace('T',' ').slice(0,19)+'</span></div><div>'+e.text+'</div></div>').join('')||'<div class="empty">لا توجد أحداث</div>'}
 function clocker(){let n=new Date();clock.textContent=n.toLocaleTimeString('ar-SA');date.textContent=n.toLocaleDateString('ar-SA',{weekday:'short',year:'numeric',month:'short',day:'numeric'})}async function load(){try{d=await J();let h=d.health||{},age=h.heartbeat?Math.max(0,(Date.now()-Date.parse(h.heartbeat))/1000):999;server.textContent='● السيرفر شغال · آخر SnipeLabة '+Math.round(age)+'ث';server.style.color=age<30?'#39dfa0':'#ff8177';mkt.classList.toggle('ok',h.price_count>0);ibkr.classList.toggle('ok',h.borrow_count>0);sig.classList.toggle('ok',h.analytics_count>0);haltm.classList.toggle('ok',true);render()}catch(e){server.textContent='● تعذر الاتصال';server.style.color='#ff8177'}}document.querySelectorAll('.f').forEach(b=>b.onclick=()=>{document.querySelectorAll('.f').forEach(z=>z.classList.remove('on'));b.classList.add('on');filter=b.dataset.f;render()});document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.nav button').forEach(z=>z.classList.remove('on'));b.classList.add('on');radar.style.display=b.dataset.p==='radar'?'block':'none';pulse.style.display=b.dataset.p==='pulse'?'block':'none'});clocker();setInterval(clocker,1000);load();setInterval(load,10000)</script></body></html>"""
 
@@ -441,6 +535,11 @@ async def ready():
 async def zero_short():
     rows=[x for x in ANALYTICS.values() if x.get("available") is not None and float(x["available"])==0]
     return {"count":len(rows),"rows":rows}
+
+@app.get("/short-estimates")
+async def short_estimates():
+    rows={s:{"symbol":s,"available":(BORROW.get(s) or {}).get("available"),"rsi_daily":DAILY.get(s),"estimate":short_estimate(s),"history_points":len(BORROW_HISTORY.get(s) or [])} for s in UNIVERSE}
+    return {"generated_at":utcnow().isoformat(),"rows":rows}
 
 @app.get("/momentum")
 async def momentum():
