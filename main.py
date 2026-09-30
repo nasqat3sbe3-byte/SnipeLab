@@ -727,7 +727,6 @@ async def legacy_news_loop_disabled():
         except Exception as exc:STATE["news_error"]=f"{type(exc).__name__}: {str(exc)[:100]}"
         await asyncio.sleep(600)
 
-@app.on_event("startup")
 async def delayed_secondary_workers():
     # Keep startup responsive: live dashboard/market/borrow get the first minute alone.
     await asyncio.sleep(75)
