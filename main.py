@@ -1042,7 +1042,7 @@ async def archive_splits(symbol: str):
     symbol=re.sub(r"[^A-Z0-9.-]","",symbol.upper())[:12]
     if not symbol:return {"symbol":symbol,"splits":[],"reverse_split_count":0,"error":"invalid symbol"}
     cached=_ARCHIVE_SPLIT_CACHE.get(symbol)
-    if cached and time.time()-cached["at"]<86400:return cached["result"]
+    if cached and cached.get("version")==_ARCHIVE_DEEP_VERSION and time.time()-cached["at"]<86400:return cached["result"]
     result={"symbol":symbol,"splits":[],"reverse_split_count":0,"source":"Yahoo chart split events",
             "last_strong_move":None}
     try:
@@ -1126,6 +1126,7 @@ async def archive_splits(symbol: str):
     return result
 
 _ARCHIVE_DEEP_CACHE={}
+_ARCHIVE_DEEP_VERSION=2
 _ARCHIVE_DEEP_LOCK=asyncio.Semaphore(1)
 
 @app.get("/api/archive-deep/{symbol}")
@@ -1134,7 +1135,7 @@ async def archive_deep(symbol: str):
     symbol=re.sub(r"[^A-Z0-9.-]","",symbol.upper())[:12]
     if not symbol:return {"symbol":symbol,"error":"invalid symbol"}
     cached=_ARCHIVE_DEEP_CACHE.get(symbol)
-    if cached and time.time()-cached["at"]<86400:return cached["result"]
+    if cached and cached.get("version")==_ARCHIVE_DEEP_VERSION and time.time()-cached["at"]<86400:return cached["result"]
     worker=Path(__file__).parent/"archive_worker.py"
     if not worker.exists():return {"symbol":symbol,"error":"archive worker missing"}
     async with _ARCHIVE_DEEP_LOCK:
@@ -1148,7 +1149,7 @@ async def archive_deep(symbol: str):
             if proc.returncode!=0:
                 return {"symbol":symbol,"error":"archive worker failed","detail":err.decode("utf-8","replace")[-500:]}
             result=json.loads(out.decode("utf-8","replace"))
-            _ARCHIVE_DEEP_CACHE[symbol]={"at":time.time(),"result":result}
+            _ARCHIVE_DEEP_CACHE[symbol]={"at":time.time(),"version":_ARCHIVE_DEEP_VERSION,"result":result}
             return result
         except asyncio.TimeoutError:
             try: proc.kill()
