@@ -179,14 +179,17 @@ async def fetch_daily_rsi(client, sem, symbol):
             closes=q.get("close") or []
             bars=[(int(ts[i]),float(v)) for i,v in enumerate(closes) if i<len(ts) and v is not None and float(v)>0]
             if len(bars)<15:return symbol,None
-            # Yahoo's last daily candle can be today's still-forming candle. RSI Daily uses completed sessions only.
+            # Daily Live matches the chart during the session; closed value is kept separately for audit/comparison.
+            live=[v for _,v in bars]
             today=utcnow().date()
             completed=[v for t,v in bars if datetime.fromtimestamp(t,tz=timezone.utc).date()<today]
             if len(completed)<15:completed=[v for _,v in bars[:-1]]
-            value=wilder_rsi(completed,14)
-            if value is None:return symbol,None
-            return symbol,{"rsi14":round(value,2),"period":14,"method":"Wilder","timeframe":"1d","completed_candles_only":True,
-                "bars_used":len(completed),"received_at":utcnow().isoformat(),"source":"yahoo_1d"}
+            live_value=wilder_rsi(live,14); closed_value=wilder_rsi(completed,14)
+            if live_value is None:return symbol,None
+            return symbol,{"rsi14":round(live_value,2),"rsi14_live":round(live_value,2),
+                "rsi14_closed":round(closed_value,2) if closed_value is not None else None,
+                "period":14,"method":"Wilder","timeframe":"1d","includes_current_daily_candle":True,
+                "bars_used":len(live),"received_at":utcnow().isoformat(),"source":"yahoo_1d"}
         except Exception:return symbol,None
 
 async def daily_rsi_loop():
