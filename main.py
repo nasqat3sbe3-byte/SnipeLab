@@ -285,6 +285,33 @@ async def market_loop():
             save_persistent_state()
             await asyncio.sleep(3)
 
+def wilder_rsi_live_from_history(symbol):
+    """Recalculate daily RSI(14) using full historical closes plus today's freshest quote.
+
+    Historical worker remains responsible for validated split metrics. This overlay only
+    replaces the final daily close with the current market quote when it is from today.
+    """
+    hist=HISTORY.get(symbol) or {}
+    q=QUOTES.get(symbol) or {}
+    base=hist.get("rsi_daily")
+    # The history worker's RSI can be stale during the session. Fetching full daily
+    # history here would be wasteful, so the history worker stores Wilder state below.
+    try:
+        avg_gain=float(hist["rsi_wilder_avg_gain"])
+        avg_loss=float(hist["rsi_wilder_avg_loss"])
+        last_close=float(hist["rsi_wilder_last_closed_close"])
+        live=float(q.get("price"))
+        market_ts=datetime.fromisoformat(str(q.get("market_timestamp")).replace("Z","+00:00"))
+        market_day=market_ts.astimezone(ZoneInfo("America/New_York")).date()
+        today=datetime.now(ZoneInfo("America/New_York")).date()
+    except (KeyError,TypeError,ValueError):
+        return base
+    if market_day!=today or min(last_close,live)<=0:return base
+    change=live-last_close
+    gain=max(change,0.0);loss=max(-change,0.0)
+    g=((avg_gain*13.0)+gain)/14.0;l=((avg_loss*13.0)+loss)/14.0
+    return round(100.0 if l==0 else 100.0-(100.0/(1.0+g/l)),2)
+
 def readiness_state(meta,q,b,a):
     """Four weighted factors plus mandatory 2-session post-low stability gate."""
     price=float(q["price"])
@@ -317,7 +344,7 @@ def readiness_state(meta,q,b,a):
         av=float(str(raw_av).replace(",","")) if raw_av is not None else None
         if av is not None and (not 0<=av<float("inf")):av=None
     except (TypeError,ValueError):av=None
-    raw_rsi=hist.get("rsi_daily")
+    raw_rsi=wilder_rsi_live_from_history(meta.get("symbol"))
     try:
         rsi=float(raw_rsi) if raw_rsi is not None else None
         if rsi is not None and not 0<=rsi<=100:rsi=None
