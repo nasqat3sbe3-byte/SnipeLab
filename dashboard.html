@@ -392,14 +392,15 @@ function archiveMove(title,m){
 }
 function archiveView(a){
  const splits=a.splits||[],offers=a.offerings||[],owners=a.ownership||[],post=a.post_split_max_gain;
- const latestReverse=[...splits].reverse().find(x=>x.reverse), lastOffer=offers[0], sales=owners.filter(x=>/بيع|خفض|خروج/.test(x.change||''));
+ const latestReverse=[...splits].reverse().find(x=>x.reverse), lastOffer=offers[0], sales=owners.filter(x=>/بيع|خفض|خروج/.test(x.change||'')), cycles=(a.split_cycles||[]), latestCycle=cycles[cycles.length-1];
  const summaryBits=[
   'قسم عكسي '+a.reverse_split_count+' مرة'+(latestReverse?'، وآخر تقسيم '+latestReverse.ratio+' بتاريخ '+latestReverse.date:''),
-  post?'أقوى صعود مرصود بعد آخر تقسيم '+fmt(post.gain_pct)+'% من '+money(post.low)+' إلى '+money(post.high)+' بين '+post.low_date+' و'+post.high_date:'لم تُرصد حتى الآن حركة صاعدة بعد آخر تقسيم',
+  latestCycle?'يوم آخر تقسيم تحرك بين '+money(latestCycle.split_day_low)+' و'+money(latestCycle.split_day_high)+' (مدى +'+fmt(latestCycle.split_day_intraday_gain_pct)+'%)'+(latestCycle.strongest_run?'، وأقوى حركة بعده +'+fmt(latestCycle.strongest_run.gain_pct)+'% حتى '+latestCycle.strongest_run.high_date:''):(post?'أقوى صعود مرصود بعد آخر تقسيم '+fmt(post.gain_pct)+'%':'لم تُرصد حركة بعد آخر تقسيم'),
   lastOffer?'آخر حدث طرح/تسجيل '+lastOffer.date+' وحالته: '+lastOffer.status:'لم نرصد طرحًا حديثًا في إفصاحات SEC المتاحة',
   sales.length?'رصدنا '+sales.length+' إفصاح بيع/خفض ملكية، منها '+sales.slice(0,3).map(x=>x.holder||'مالك كبير').join('، '):owners.length?'توجد إفصاحات ملكية حديثة، لكن لا نثبت خروجًا بدون Form 4/إفصاح واضح':'لم نرصد ملفات ملكية حديثة في النطاق المتاح'
  ];
- const splitRows=splits.filter(x=>x.reverse).slice().reverse().slice(0,12).map(x=>'<div class="timeline-row"><i class="timeline-dot"></i><div><b>Reverse Split · '+esc(x.ratio||'—')+'</b><p>حدث تقسيم مسجل في المصدر.</p></div><time>'+esc(x.date||'—')+'</time></div>').join('');
+ const cycles=(a.split_cycles||[]).slice().reverse();
+ const splitRows=cycles.slice(0,18).map(x=>{const r=x.strongest_run,f=x.first_100_run;return '<div class="timeline-row"><i class="timeline-dot"></i><div><b>Reverse Split · '+esc(x.ratio||'—')+'</b><p>يوم التقسيم: '+money(x.split_day_low)+' → '+money(x.split_day_high)+' · مدى +'+fmt(x.split_day_intraday_gain_pct)+'%</p><p>'+(r?'أقوى حركة بعده: +'+fmt(r.gain_pct)+'% · '+money(r.low)+' → '+money(r.high)+' · '+r.low_date+' → '+r.high_date:'لم تُرصد حركة بعده')+'</p>'+(f?'<p>أول +100%: '+f.low_date+' → '+f.high_date+' · +'+fmt(f.gain_pct)+'%</p>':'')+'</div><time>'+esc(x.date||'—')+'</time></div>'}).join('');
  const offerRows=offers.map(x=>'<div class="timeline-row"><i class="timeline-dot"></i><div><b>'+esc(x.kind||'Offering')+' · '+esc(x.status||'الحالة غير مؤكدة')+'</b><p>'+esc(x.form||'')+(x.description?' · '+esc(x.description):'')+'</p></div><time>'+esc(x.date||'—')+'</time></div>').join('');
  const ownerRows=owners.map(x=>'<div class="timeline-row"><i class="timeline-dot"></i><div><b>'+esc(x.holder||'مالك كبير / صندوق')+'</b><p>'+esc(x.form||'')+' · '+esc(x.change||'')+(x.remaining_shares!=null?' · المتبقي المبلغ عنه '+fmt(x.remaining_shares)+' سهم':'')+'</p></div><time>'+esc(x.date||'—')+'</time></div>').join('');
  return '<div class="archive-head"><div><div class="archive-symbol">'+esc(a.symbol)+'</div><div class="archive-company">'+esc(a.company_name||'')+'</div></div><span class="label">'+esc(a.reverse_split_count)+' تقسيم عكسي</span></div>'+
