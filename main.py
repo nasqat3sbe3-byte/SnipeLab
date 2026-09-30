@@ -442,7 +442,7 @@ def refresh_analytics():
         hist=HISTORY.get(sym,{})
         if hist.get("verified") and b and b.get("available") is not None:
             try:
-                av=float(b["available"]);rsi=float(hist["rsi_daily"])
+                av=float(b["available"]);rsi=float(wilder_rsi_live_from_history(sym))
                 dist=float(st["effective_distance_pct"]);sessions=int(st["effective_sessions"])
                 missing=[name for name,ok in (("الشورت",av<15000),("RSI",rsi<=35),
                     ("نصف القمة",st["half_reached"] is True),("القاع",dist<=25),
@@ -481,7 +481,7 @@ def refresh_analytics():
             add_event(sym,"ignition",f"Momentum +{ignition['pct']:.1f}%",ignition)
         ANALYTICS[sym]={"symbol":sym,"active":True,"effective_date":eff,"price":price,
             "post_split_low":hist.get("post_split_low"),"highest_since_split":hist.get("post_split_high"),
-            "history_verified":bool(hist.get("verified")),"split_day_high":hist.get("split_day_high"),"split_day_4h_high":hist.get("split_day_4h_high"),"split_day_4h_status":hist.get("split_day_4h_status"),"split_day_open":hist.get("split_day_open"),"rsi_daily":hist.get("rsi_daily"),
+            "history_verified":bool(hist.get("verified")),"split_day_high":hist.get("split_day_high"),"split_day_4h_high":hist.get("split_day_4h_high"),"split_day_4h_status":hist.get("split_day_4h_status"),"split_day_open":hist.get("split_day_open"),"rsi_daily":wilder_rsi_live_from_history(sym),
             "top_10_gain_pct":hist.get("top_10_gain_pct"),"top_10_low":hist.get("top_10_low"),"top_10_high":hist.get("top_10_high"),
             "top_10_low_date":hist.get("top_10_low_date"),"top_10_high_date":hist.get("top_10_high_date"),"top_10_verified":bool(hist.get("top_10_verified")),
             "top_10_sessions_since_peak":hist.get("top_10_sessions_since_peak"),
@@ -903,7 +903,7 @@ async def dashboard_data():
             "post_split_low_date":h.get("post_split_low_date"),
             "quality_warnings":h.get("quality_warnings",[]),
             "extended_history_complete":h.get("extended_history_complete",False),
-            "rsi_daily":h.get("rsi_daily"),
+            "rsi_daily":wilder_rsi_live_from_history(sym),
             "top_10_gain_pct":h.get("top_10_gain_pct"),
             "top_10_low":h.get("top_10_low"),
             "top_10_high":h.get("top_10_high"),
