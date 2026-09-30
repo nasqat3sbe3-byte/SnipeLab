@@ -85,7 +85,7 @@ def calculate(effective, candles):
             if verified else None),
         "half_rule_version":2,
         "rsi_daily":rsi,"rsi_daily_live":rsi,"rsi_daily_closed":round(rsi_closed,2) if rsi_closed is not None else None,
-        "rsi_method":"Wilder 14","rsi_includes_current_daily_candle":True,
+        "rsi_method":"Wilder 14","rsi_rule_version":2,"rsi_includes_current_daily_candle":True,
         "rsi_wilder_avg_gain":rsi_wilder_avg_gain,"rsi_wilder_avg_loss":rsi_wilder_avg_loss,
         "rsi_wilder_last_closed_close":rsi_wilder_last_closed_close,
         "first_bar":first["date"],"bar_count":len(bars),
@@ -339,7 +339,7 @@ async def worker(universe,history,yahoo,save):
                 age=(datetime.now(timezone.utc).date()-
                      date.fromisoformat(meta["effective_date"])).days
                 return (h.get("effective_date")==meta["effective_date"]
-                        and (h.get("stability_sessions") is None or h.get("top_calculator_version",0)<3 or h.get("half_rule_version",0)<2)
+                        and (h.get("stability_sessions") is None or h.get("top_calculator_version",0)<3 or h.get("half_rule_version",0)<2 or h.get("rsi_rule_version",0)<2)
                         and (bool(h.get("top_10_verified"))
                              or (h.get("top_10_gain_pct") or 0)>=40
                              or age<=90))
@@ -385,7 +385,10 @@ async def worker(universe,history,yahoo,save):
             for sym,meta in todo[:16]:
                 try:
                     eff=meta["effective_date"]
-                    start=int(datetime.combine(date.fromisoformat(eff),datetime.min.time(),timezone.utc).timestamp())-86400
+                    # Pull enough PRE-split daily history for a true Wilder RSI.
+                    # Post-split extrema are still filtered by effective date inside calculate().
+                    rsi_start=date.fromisoformat(eff)-__import__("datetime").timedelta(days=180)
+                    start=int(datetime.combine(rsi_start,datetime.min.time(),timezone.utc).timestamp())
                     r=await client.get(yahoo.format(symbol=sym),params={"period1":start,"period2":int(time.time())+86400,"interval":"1d","events":"history"})
                     r.raise_for_status()
                     result=(r.json().get("chart",{}).get("result") or [None])[0]
