@@ -1037,21 +1037,33 @@ _ARCHIVE_SPLIT_CACHE = {}
 
 @app.get("/api/archive-splits/{symbol}")
 async def archive_splits(symbol: str):
-    """Small on-demand split-history lookup. No background worker and no impact on market feeds."""
+    """On-demand archive step: split history + bounded post-split moves. No background worker."""
     symbol=re.sub(r"[^A-Z0-9.-]","",symbol.upper())[:12]
     if not symbol:return {"symbol":symbol,"splits":[],"reverse_split_count":0,"error":"invalid symbol"}
     cached=_ARCHIVE_SPLIT_CACHE.get(symbol)
     if cached and time.time()-cached["at"]<86400:return cached["result"]
-    result={"symbol":symbol,"splits":[],"reverse_split_count":0,"source":"Yahoo chart split events"}
+    result={"symbol":symbol,"splits":[],"reverse_split_count":0,"source":"Yahoo chart split events",
+            "last_strong_move":None}
     try:
-        async with httpx.AsyncClient(timeout=6,follow_redirects=True,
+        async with httpx.AsyncClient(timeout=7,follow_redirects=True,
             limits=httpx.Limits(max_connections=2,max_keepalive_connections=1),
             headers={"User-Agent":"Mozilla/5.0 SnipeLab archive"}) as client:
             r=await client.get(YAHOO.format(symbol=symbol),
-                params={"range":"max","interval":"1mo","events":"splits","includePrePost":"false"})
+                params={"range":"10y","interval":"1d","events":"splits","includePrePost":"false"})
             r.raise_for_status()
             chart=(r.json().get("chart",{}).get("result") or [None])[0]
             events=((chart or {}).get("events") or {}).get("splits") or {}
+            ts=(chart or {}).get("timestamp") or []
+            q=(((chart or {}).get("indicators") or {}).get("quote") or [{}])[0]
+            bars=[]
+            for i,t in enumerate(ts):
+                try:
+                    lo=float(q["low"][i]);hi=float(q["high"][i])
+                    if lo>0 and hi>=lo:
+                        bars.append({"date":datetime.fromtimestamp(int(t),timezone.utc).date().isoformat(),
+                                     "low":lo,"high":hi})
+                except (TypeError,ValueError,IndexError):
+                    continue
             rows=[]
             for ev in events.values():
                 raw=ev.get("splitRatio")
@@ -1064,8 +1076,44 @@ async def archive_splits(symbol: str):
                 d=datetime.fromtimestamp(int(ev.get("date")),timezone.utc).date().isoformat() if ev.get("date") else None
                 rows.append({"date":d,"ratio":raw,"reverse":bool(a and b and a<b)})
             rows.sort(key=lambda x:x.get("date") or "")
+            reverse=[x for x in rows if x.get("reverse")]
+            # For every reverse split: split-day range and strongest low->later-high move
+            # within the first 10 trading sessions. This bounded scan keeps the endpoint light.
+            for sp in reverse:
+                cut=next((i for i,b in enumerate(bars) if b["date"]>=sp["date"]),None)
+                if cut is None:continue
+                window=bars[cut:min(len(bars),cut+10)]
+                if not window:continue
+                day=window[0]
+                sp["split_day_range_pct"]=round((day["high"]/day["low"]-1)*100,2) if day["low"]>0 else None
+                sp["split_day_low"]=round(day["low"],6);sp["split_day_high"]=round(day["high"],6)
+                best=None
+                for li in range(len(window)):
+                    low=window[li]["low"]
+                    for hi in range(li,len(window)):
+                        high=window[hi]["high"]
+                        if low<=0 or high<=low:continue
+                        gain=round((high/low-1)*100,2)
+                        cand={"gain_pct":gain,"low":round(low,6),"high":round(high,6),
+                              "low_date":window[li]["date"],"high_date":window[hi]["date"],
+                              "sessions":hi-li,"same_day":hi==li}
+                        if best is None or gain>best["gain_pct"]:best=cand
+                sp["best_10_session_move"]=best
+            # Latest strong move: >=100% low->later-high within 10 trading sessions.
+            latest=None
+            for li in range(len(bars)):
+                low=bars[li]["low"]
+                for hi in range(li+1,min(len(bars),li+11)):
+                    high=bars[hi]["high"]
+                    if low>0 and high/low>=2:
+                        cand={"gain_pct":round((high/low-1)*100,2),"low":round(low,6),"high":round(high,6),
+                              "low_date":bars[li]["date"],"high_date":bars[hi]["date"],"sessions":hi-li}
+                        if latest is None or (cand["high_date"],cand["gain_pct"])>(latest["high_date"],latest["gain_pct"]):
+                            latest=cand
             result["splits"]=rows
-            result["reverse_split_count"]=sum(1 for x in rows if x.get("reverse"))
+            result["reverse_split_count"]=len(reverse)
+            result["last_strong_move"]=latest
+            result["strong_move_rule"]="آخر حركة +100% أو أكثر من قاع جلسة إلى قمة جلسة لاحقة خلال 10 جلسات تداول"
     except Exception as exc:
         result["error"]=type(exc).__name__
         meta=UNIVERSE.get(symbol) or {}
