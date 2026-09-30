@@ -387,18 +387,31 @@ function openSection(name){
  window.scrollTo({top:0,behavior:'smooth'});
 }
 document.querySelectorAll('.section-nav button').forEach(b=>b.addEventListener('click',()=>openSection(b.dataset.section)));
-function archiveCard(sym){
- const x=rows().find(r=>String(r.symbol).toUpperCase()===sym);
- if(!x)return '<div class="research-empty">السهم غير موجود حاليًا في قاعدة SnipeLab.</div>';
- const split=x.split_date||x.effective_date||'—',hi=x.split_day_high??x.day_high??null,lo=x.post_split_low??x.lowest_low??null;
- return '<div class="archive-head"><div><div class="archive-symbol">'+esc(sym)+'</div><div class="archive-company">'+esc(x.company_name||x.name||'')+'</div></div><span class="label">Reverse Split · '+esc(split)+'</span></div>'+
- '<div class="archive-grid"><div class="archive-stat"><small>آخر +100% قبل التقسيم</small><b>قيد بناء المحرك</b><span>لن نخمن تاريخًا أو حركة غير موثقة</span></div><div class="archive-stat"><small>أول +100% بعد التقسيم</small><b>قيد بناء المحرك</b><span>سيُحسب من الشموع التاريخية</span></div><div class="archive-stat"><small>قمة يوم التقسيم</small><b>'+esc(money(hi))+'</b><span>من بيانات SnipeLab الحالية</span></div><div class="archive-stat"><small>قاع ما بعد التقسيم</small><b>'+esc(money(lo))+'</b><span>من بيانات SnipeLab الحالية</span></div></div>'+
- '<div class="archive-timeline"><h3>الخط الزمني</h3><div class="timeline-row"><i class="timeline-dot"></i><div><b>Reverse Split</b><p>تاريخ التنفيذ المسجل في قاعدة السهم.</p></div><time>'+esc(split)+'</time></div><div class="timeline-row"><i class="timeline-dot"></i><div><b>طرح / ATM / زيادة أسهم</b><p>سيظهر هنا فقط الحدث المثبت من الإفصاحات الرسمية عند توصيل محرك الأرشيف.</p></div><time>—</time></div></div>';
+function archiveMove(title,m){
+ return '<div class="archive-stat"><small>'+esc(title)+'</small><b>'+(m?esc('+'+fmt(m.gain_pct)+'%'):'لم تُرصد')+'</b><span>'+(m?esc(m.low_date+' → '+m.high_date+' · '+money(m.low)+' → '+money(m.high)+' · '+m.sessions+' جلسات'):'حسب قاعدة 100% الحالية')+'</span></div>';
+}
+function archiveView(a){
+ const splits=a.splits||[],offers=a.offerings||[],owners=a.ownership||[];
+ const latestReverse=[...splits].reverse().find(x=>x.reverse);
+ const splitRows=splits.filter(x=>x.reverse).slice().reverse().slice(0,8).map(x=>'<div class="timeline-row"><i class="timeline-dot"></i><div><b>Reverse Split · '+esc(x.ratio||'—')+'</b><p>حدث تقسيم مسجل في المصدر.</p></div><time>'+esc(x.date||'—')+'</time></div>').join('');
+ const offerRows=offers.map(x=>'<div class="timeline-row"><i class="timeline-dot"></i><div><b>'+esc(x.kind||'Offering')+' · '+esc(x.status||'الحالة غير مؤكدة')+'</b><p>'+esc(x.form||'')+(x.description?' · '+esc(x.description):'')+'</p></div><time>'+esc(x.date||'—')+'</time></div>').join('');
+ const ownerRows=owners.map(x=>'<div class="timeline-row"><i class="timeline-dot"></i><div><b>'+esc(x.holder||'مالك كبير / صندوق')+'</b><p>'+esc(x.form||'13D/G')+' · '+esc(x.change||'')+'</p></div><time>'+esc(x.date||'—')+'</time></div>').join('');
+ return '<div class="archive-head"><div><div class="archive-symbol">'+esc(a.symbol)+'</div><div class="archive-company">'+esc(a.company_name||'')+'</div></div><span class="label">'+esc(a.reverse_split_count)+' تقسيم عكسي</span></div>'+
+ '<div class="archive-grid"><div class="archive-stat"><small>عدد التقسيمات العكسية</small><b>'+esc(a.reverse_split_count)+'</b><span>'+(latestReverse?'آخرها '+esc(latestReverse.date)+' · '+esc(latestReverse.ratio):'لا يوجد حدث موثق')+'</span></div><div class="archive-stat"><small>آخر طرح / ATM</small><b>'+(offers[0]?esc(offers[0].kind):'لم يُرصد')+'</b><span>'+(offers[0]?esc(offers[0].date+' · '+offers[0].status):'في إفصاحات SEC الحديثة')+'</span></div>'+
+ archiveMove('آخر +100% قبل آخر تقسيم',a.last_100_before_split)+archiveMove('أول +100% بعد آخر تقسيم',a.first_100_after_split)+'</div>'+
+ '<div class="archive-timeline"><h3>تاريخ التقسيمات</h3>'+(splitRows||'<div class="research-empty">لا توجد تقسيمات عكسية موثقة في المصدر.</div>')+'</div>'+
+ '<div class="archive-timeline"><h3>الطرح والتخفيف · SEC</h3>'+(offerRows||'<div class="research-empty">لم نرصد إفصاح طرح حديثًا في سجل SEC المتاح.</div>')+'</div>'+
+ '<div class="archive-timeline"><h3>الصناديق والملكية الكبيرة · 13D / 13G</h3>'+(ownerRows||'<div class="research-empty">لا توجد ملفات 13D/13G حديثة مرصودة. هذا لا يعني عدم وجود مؤسسات.</div>')+'</div>'+
+ (a.warnings?.length?'<div class="status">'+a.warnings.map(esc).join(' · ')+'</div>':'')+'<div class="status">'+esc(a.method_note||'')+'</div>';
 }
 async function runArchive(){
  const sym=$('archiveQuery').value.trim().toUpperCase().replace(/[^A-Z0-9.-]/g,'');if(!sym)return;
- $('archiveResult').innerHTML=archiveCard(sym);
+ const box=$('archiveResult'),btn=$('archiveSearch');btn.disabled=true;box.className='research-empty';box.textContent='جارٍ بناء برنت '+sym+' من التاريخ وSEC…';
+ try{const r=await fetch('/api/archive/'+encodeURIComponent(sym),{cache:'no-store',signal:AbortSignal.timeout(25000)});if(!r.ok)throw Error('HTTP '+r.status);const a=await r.json();box.className='';box.innerHTML=archiveView(a)}
+ catch(e){box.className='research-empty';box.textContent='تعذر بناء الأرشيف الآن: '+e.message}
+ finally{btn.disabled=false}
 }
+
 async function runAi(){
  const sym=$('aiQuery').value.trim().toUpperCase().replace(/[^A-Z0-9.-]/g,'');if(!sym)return;
  const box=$('aiResult'),btn=$('aiSearch');btn.disabled=true;box.className='research-empty';box.textContent='جارٍ البحث عن أخبار '+sym+'…';
