@@ -1141,6 +1141,33 @@ async def stock_archive(symbol: str):
                     splits.append({"date":d,"ratio":raw,"reverse":reverse,"source":"Yahoo chart split event"})
                 splits.sort(key=lambda x:x["date"] or "")
                 result["splits"]=splits;result["reverse_split_count"]=sum(1 for x in splits if x["reverse"])
+                # Build a fingerprint for EACH reverse split: split-day move, strongest
+                # post-split run before the next reverse split, and first >=100% run.
+                reverse_splits=[x for x in splits if x["reverse"]]
+                split_cycles=[]
+                for si,sp in enumerate(reverse_splits):
+                    cut=next((i for i,b in enumerate(bars) if b["date"]>=sp["date"]),len(bars))
+                    next_date=reverse_splits[si+1]["date"] if si+1<len(reverse_splits) else None
+                    end=next((i for i,b in enumerate(bars) if next_date and b["date"]>=next_date),len(bars))
+                    if cut>=len(bars):continue
+                    day=bars[cut]
+                    day_gain=round((day["high"]/day["low"]-1)*100,2) if day["low"]>0 else None
+                    gains=[]
+                    for lo_i in range(cut,end):
+                        low=bars[lo_i]["low"]
+                        for hi_i in range(lo_i,end):
+                            high=bars[hi_i]["high"]
+                            if low>0 and high>low:
+                                gains.append({"low_date":bars[lo_i]["date"],"low":round(low,6),
+                                    "high_date":bars[hi_i]["date"],"high":round(high,6),
+                                    "gain_pct":round((high/low-1)*100,2),"sessions":hi_i-lo_i,
+                                    "same_day":hi_i==lo_i})
+                    best=max(gains,key=lambda x:x["gain_pct"]) if gains else None
+                    first100=min((x for x in gains if x["gain_pct"]>=100),key=lambda x:(x["high_date"],x["low_date"])) if any(x["gain_pct"]>=100 for x in gains) else None
+                    split_cycles.append({"date":sp["date"],"ratio":sp["ratio"],"split_day_intraday_gain_pct":day_gain,
+                        "split_day_low":round(day["low"],6),"split_day_high":round(day["high"],6),
+                        "strongest_run":best,"first_100_run":first100})
+                result["split_cycles"]=split_cycles
                 latest=next((x for x in reversed(splits) if x["reverse"]),None)
                 if latest and bars:
                     cut=next((i for i,b in enumerate(bars) if b["date"]>=latest["date"]),len(bars))
@@ -1210,7 +1237,7 @@ async def stock_archive(symbol: str):
                 if not result["ownership"]:result["warnings"].append("لا توجد ملفات ملكية 13D/13G/3/4/5 حديثة في سجل SEC المتاح؛ هذا لا يعني عدم وجود مؤسسات.")
             else:result["warnings"].append("تعذر ربط الرمز بـ CIK في SEC.")
         except Exception as exc:result["warnings"].append("تعذر تحميل إفصاحات SEC: "+type(exc).__name__)
-    result["method_note"]="حركة +100% = قاع جلسة إلى قمة جلسة لاحقة خلال 10 جلسات تداول؛ لا نستخدم قاع وقمة اليوم نفسه لأن ترتيب الحركة غير معروف من شمعة يومية."
+    result["method_note"]="برنت كل تقسيم يعرض حركة يوم التقسيم (Low→High داخل الجلسة كمدى سعري، دون ادعاء ترتيب التنفيذ) ثم أقوى حركة من يوم التقسيم حتى التقسيم التالي. وحركة +100% التاريخية المنفصلة تستخدم قاع جلسة إلى قمة لاحقة."
     _ARCHIVE_CACHE[symbol]={"at":time.time(),"result":result}
     return result
 
