@@ -915,8 +915,7 @@ async def dashboard_data():
             "top_10_source":h.get("top_10_source"),
             "top_10_provisional":bool(h.get("top_10_provisional")),
             "history_status":h.get("error") or ("verified" if h.get("verified") else "pending"),
-            "short_analysis":SHORT_ANALYSIS.get(sym,{}),
-            "available_zero_estimate":available_zero_estimate(sym)}
+            "short_analysis":SHORT_ANALYSIS.get(sym,{})}
         # A same-day live rise is a separate, explicitly provisional measure:
         # never mix it silently with the completed-session low-to-high TOP.
         q=QUOTES.get(sym) or {}
