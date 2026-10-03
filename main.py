@@ -1,3 +1,4 @@
+# Snipe AI release: durable isolated screening v2.
 import asyncio
 import ftplib
 import io
