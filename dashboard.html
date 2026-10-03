@@ -952,7 +952,14 @@ async function runAiPatterns(){
  try{
   const r=await fetch('/api/ai-patterns',{cache:'no-store',signal:AbortSignal.timeout(45000)});
   if(!r.ok)throw Error('HTTP '+r.status);
-  const j=await r.json(),picks=j.picks||[];
+  let j=await r.json();
+  if((j.risk_pending||[]).length){
+   box.textContent='جارٍ فحص مخاطر SEC للمرشحين…';
+   await new Promise(resolve=>setTimeout(resolve,5000));
+   const rr=await fetch('/api/ai-patterns',{cache:'no-store',signal:AbortSignal.timeout(12000)});
+   if(rr.ok)j=await rr.json();
+  }
+  const picks=j.picks||[];
   const historical=j.method==='trajectory_similarity';
   meta.innerHTML='<div class="ai-pattern-pill"><small>حالات +100% الموثقة</small><b>'+esc(j.winner_samples||0)+'</b></div><div class="ai-pattern-pill"><small>حالة المحرك</small><b>'+(historical?'تشابه تاريخي + فلتر مخاطر':'ذاكرة غير كافية')+'</b></div>'+(j.excluded_recent_risk?.length?'<div class="ai-risk-gate"><b>🛡️ استبعدنا '+esc(j.excluded_recent_risk.length)+' بسبب خطر حديث</b><small>'+j.excluded_recent_risk.map(x=>esc(x.symbol)+' · '+esc(x.reason?.kind||'تمويل/تخفيف حديث')+' '+esc(x.reason?.date||'')).join(' · ')+'</small></div>':'');
   if(!picks.length){box.className='research-empty';box.textContent='ما عندنا بيانات كافية لإخراج اختيارات الآن.';return}
