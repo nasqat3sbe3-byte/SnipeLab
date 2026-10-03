@@ -735,7 +735,7 @@ async def legacy_news_loop_disabled():
 @app.on_event("startup")
 async def startup():
     load_persistent_state()
-    asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(live_daily_rsi_loop()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(short_analysis_loop()); asyncio.create_task(finnhub_live_loop()); asyncio.create_task(finnhub_country_loop()); asyncio.create_task(halt_loop()); asyncio.create_task(ai_risk_background_loop()); asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
+    asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(live_daily_rsi_loop()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(short_analysis_loop()); asyncio.create_task(finnhub_live_loop()); asyncio.create_task(finnhub_country_loop()); asyncio.create_task(fmp_float_loop()); asyncio.create_task(halt_loop()); asyncio.create_task(ai_risk_background_loop()); asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
 
 @app.get("/")
 async def root():
@@ -1525,6 +1525,53 @@ def select_finnhub_live_symbols():
         if pct is not None and pct>=30 and sym not in ready:hot.append((pct,sym))
     hot=[sym for pct,sym in sorted(hot,reverse=True)[:15]]
     return ready,hot,ready+hot
+
+async def fmp_float_loop():
+    """Fetch FMP-reported share float in the background; never derive float locally."""
+    await asyncio.sleep(95)
+    token=os.environ.get("FMP_API_KEY","").strip()
+    if not token:return
+    while True:
+        changed=False
+        try:
+            async with httpx.AsyncClient(timeout=12,follow_redirects=True) as client:
+                for sym in list(UNIVERSE):
+                    cached=FUNDAMENTALS.get(sym) or {}
+                    stamp=cached.get("free_float_checked_at")
+                    if stamp:
+                        try:
+                            if (utcnow()-datetime.fromisoformat(stamp)).total_seconds()<86400:continue
+                        except (TypeError,ValueError):pass
+                    try:
+                        r=await client.get("https://financialmodelingprep.com/stable/shares-float",
+                            params={"symbol":sym,"apikey":token})
+                        if r.status_code==429:
+                            await asyncio.sleep(65);break
+                        if r.status_code in (401,402,403):
+                            FUNDAMENTALS[sym]={**cached,"free_float_checked_at":utcnow().isoformat(),
+                                "free_float_error":"FMP plan/key does not allow shares-float"}
+                            changed=True
+                            break
+                        r.raise_for_status()
+                        payload=r.json() if r.content else []
+                        row=(payload[0] if isinstance(payload,list) and payload else payload) or {}
+                        try:float_shares=float(row.get("floatShares"))
+                        except (TypeError,ValueError):float_shares=None
+                        try:free_float_pct=float(row.get("freeFloat"))
+                        except (TypeError,ValueError):free_float_pct=None
+                        FUNDAMENTALS[sym]={**cached,
+                            "free_float":float_shares,
+                            "free_float_pct":free_float_pct,
+                            "free_float_source":"fmp_shares_float" if float_shares is not None else None,
+                            "free_float_checked_at":utcnow().isoformat()}
+                        changed=True
+                    except Exception:
+                        pass
+                    await asyncio.sleep(1.1)
+            if changed:save_persistent_state(force=True)
+        except Exception:
+            pass
+        await asyncio.sleep(21600)
 
 async def finnhub_country_loop():
     """Finnhub is used here only to resolve issuer country for UI flags."""
