@@ -230,7 +230,7 @@ async def fetch_quote(client, sem, symbol):
                 try: reference=float(reference) if reference is not None else None
                 except (TypeError,ValueError): reference=None
                 if reference is not None and reference<=0: reference=None
-                sparkline=await fetch_sparkline(client,symbol) if interval=="1m" else []\n                return symbol,{"symbol":symbol,"price":p,"day_high":hi,"day_low":lo,"sparkline":sparkline,
+                return symbol,{"symbol":symbol,"price":p,"day_high":hi,"day_low":lo,
                     "previous_close":reference,
                     "change_pct":round(((p-reference)/reference)*100,2) if reference else None,
                     "exchange":meta.get("fullExchangeName") or meta.get("exchangeName"),
@@ -242,26 +242,6 @@ async def fetch_quote(client, sem, symbol):
             except Exception:
                 continue
         return symbol,None
-
-async def fetch_sparkline(client, symbol):
-    """Real Yahoo intraday closes including pre/post market; never fabricate points."""
-    try:
-        r=await client.get(YAHOO.format(symbol=symbol),params={"range":"5d","interval":"15m","includePrePost":"true","events":"history"})
-        r.raise_for_status()
-        result=(r.json().get("chart",{}).get("result") or [None])[0]
-        if not result:return []
-        ts=result.get("timestamp") or []
-        q=((result.get("indicators") or {}).get("quote") or [{}])[0]
-        closes=q.get("close") or []
-        pts=[{"t":int(t),"close":round(float(closes[i]),6)} for i,t in enumerate(ts)
-             if i<len(closes) and closes[i] is not None and float(closes[i])>0]
-        # Keep payload small while retaining the real shape.
-        if len(pts)>48:
-            step=max(1,len(pts)//48)
-            pts=pts[::step][-48:]
-        return pts
-    except Exception:
-        return []
 
 async def live_daily_rsi_loop():
     """Refresh today's Daily RSI(14) for every ticker, independent of split history."""
