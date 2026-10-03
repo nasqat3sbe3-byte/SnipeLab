@@ -56,13 +56,13 @@ LIVE_RSI = {}
 BORROW_HISTORY = {}
 RADAR_MEMORY = {}
 SHORT_ANALYSIS = {}
-FINNHUB_COUNTRIES = {}
+FINNHUB_COUNTRIES = {}\nFUNDAMENTALS = {}
 STATE_FILE = Path(os.environ.get("SNIPELAB_STATE_FILE","/tmp/snipelab_state.json"))
 _LAST_SAVE = 0.0
 
 def load_persistent_state():
     try:
-        d=storage.load(("universe","quotes","analytics","borrow","history","events","halts","borrow_history","radar_memory","finnhub_countries"))
+        d=storage.load(("universe","quotes","analytics","borrow","history","events","halts","borrow_history","radar_memory","finnhub_countries","fundamentals"))
         STATE["restored_from_sqlite"]=bool(d)
         STATE["restored_at"]=utcnow().isoformat() if d else None
         if not d and STATE_FILE.exists():d=json.loads(STATE_FILE.read_text("utf-8"))
@@ -75,7 +75,7 @@ def load_persistent_state():
         EVENTS.extend((d.get("events") or [])[:100])
         BORROW_HISTORY.update(d.get("borrow_history") or {})
         RADAR_MEMORY.update(d.get("radar_memory") or {})
-        FINNHUB_COUNTRIES.update(d.get("finnhub_countries") or {})
+        FINNHUB_COUNTRIES.update(d.get("finnhub_countries") or {})\n        FUNDAMENTALS.update(d.get("fundamentals") or {})
     except Exception as exc:
         STATE["persistence_error"]=f"load {type(exc).__name__}: {str(exc)[:100]}"
 
@@ -84,7 +84,7 @@ def save_persistent_state(force=False):
     now=time.time()
     if not force and now-_LAST_SAVE<60:return
     try:
-        storage.save({"universe":UNIVERSE,"quotes":QUOTES,"analytics":ANALYTICS,"borrow":BORROW,"history":HISTORY,"events":EVENTS[:100],"halts":HALTS,"borrow_history":BORROW_HISTORY,"radar_memory":RADAR_MEMORY,"finnhub_countries":FINNHUB_COUNTRIES})
+        storage.save({"universe":UNIVERSE,"quotes":QUOTES,"analytics":ANALYTICS,"borrow":BORROW,"history":HISTORY,"events":EVENTS[:100],"halts":HALTS,"borrow_history":BORROW_HISTORY,"radar_memory":RADAR_MEMORY,"finnhub_countries":FINNHUB_COUNTRIES,"fundamentals":FUNDAMENTALS})
         _LAST_SAVE=now
         STATE["last_state_save"]=utcnow().isoformat(); STATE["persistence_error"]=None
     except Exception as exc:
@@ -1198,7 +1198,7 @@ async def dashboard_data():
                 signal["live_day_rise_provisional"]=True
         except (KeyError,TypeError,ValueError,OverflowError,ZeroDivisionError):
             pass
-        rows[sym]={"symbol":sym,"company_name":meta.get("company_name") or meta.get("name") or (QUOTES.get(sym) or {}).get("short_name"),"effective_date":meta.get("effective_date"),"country":(FINNHUB_COUNTRIES.get(sym) or {}).get("country"),"country_source":(FINNHUB_COUNTRIES.get(sym) or {}).get("source"),"price":QUOTES.get(sym),"borrow":BORROW.get(sym),"borrow_history":BORROW_HISTORY.get(sym,[])[-12:],"signal":signal}
+        rows[sym]={"symbol":sym,"company_name":meta.get("company_name") or meta.get("name") or (QUOTES.get(sym) or {}).get("short_name"),"effective_date":meta.get("effective_date"),"country":(FINNHUB_COUNTRIES.get(sym) or {}).get("country"),"country_source":(FINNHUB_COUNTRIES.get(sym) or {}).get("source"),"market_cap":(FUNDAMENTALS.get(sym) or {}).get("market_cap"),"market_cap_source":(FUNDAMENTALS.get(sym) or {}).get("market_cap_source"),"free_float":(FUNDAMENTALS.get(sym) or {}).get("free_float"),"free_float_source":(FUNDAMENTALS.get(sym) or {}).get("free_float_source"),"price":QUOTES.get(sym),"borrow":BORROW.get(sym),"borrow_history":BORROW_HISTORY.get(sym,[])[-12:],"signal":signal}
     relevant_kinds={"price_25","halt","available_10k","available_zero","ready"}
     important_events=[e for e in EVENTS if e.get("kind") in relevant_kinds]
     return {"server_time":utcnow().isoformat(),"uptime_seconds":int(time.time()-BOOTED_AT.timestamp()),"storage":storage.status(),"history_count":sum(bool(HISTORY.get(sym,{}).get("verified")) for sym in UNIVERSE),"history_pending":sum(1 for sym in UNIVERSE if not HISTORY.get(sym,{}).get("verified")),"health":{"ok":STATE.get("status")=="running","heartbeat":STATE.get("heartbeat"),"universe_count":len(UNIVERSE),"price_count":len(QUOTES),"borrow_count":len(BORROW),"analytics_count":len(ANALYTICS)},"rows":rows,"events":important_events[:40],"halts":HALTS,"news":NEWS}
@@ -1545,6 +1545,16 @@ async def finnhub_country_loop():
                         profile=r.json() if r.content else {}
                         country=str(profile.get("country") or "").strip()
                         FINNHUB_COUNTRIES[sym]={"country":country,"checked":utcnow().isoformat(),"source":"finnhub_profile2"}
+                        # Same already-authorized Profile 2 response supplies market cap.
+                        # Keep it isolated from every readiness/price/borrow calculation.
+                        try:market_cap_m=float(profile.get("marketCapitalization"))
+                        except (TypeError,ValueError):market_cap_m=None
+                        try:shares_out_m=float(profile.get("shareOutstanding"))
+                        except (TypeError,ValueError):shares_out_m=None
+                        FUNDAMENTALS[sym]={**(FUNDAMENTALS.get(sym) or {}),
+                            "market_cap":market_cap_m*1_000_000 if market_cap_m is not None else None,
+                            "shares_outstanding":shares_out_m*1_000_000 if shares_out_m is not None else None,
+                            "market_cap_source":"finnhub_profile2","updated_at":utcnow().isoformat()}
                         changed=True
                     except Exception:
                         # Leave unresolved so a later pass can retry; never guess a country.
