@@ -18,20 +18,28 @@ def calculate(effective, candles):
     # For each peak in the latest ten sessions, compare with earlier lows
     # in at most ten trading sessions (inclusive). This permits a new wave.
     top=None
-    # Daily OHLC cannot establish whether a same-day low came before a high.
-    # Only compare a peak with lows from STRICTLY EARLIER sessions.
-    for peak_i in range(max(1,len(completed)-10),len(completed)):
+    # Readiness quarantine needs to catch a >=70% move even when the entire
+    # low-to-high expansion happened inside one completed session (LGHL case).
+    # Keep the normal TOP rule conservative (<70% still requires an earlier-session low).
+    for peak_i in range(max(0,len(completed)-10),len(completed)):
         peak=completed[peak_i]
-        for low_i in range(max(0,peak_i-10),peak_i):
+        start=max(0,peak_i-10)
+        candidates=[]
+        for low_i in range(start,peak_i):
             low=completed[low_i]
-            rise=(peak["high"]/low["low"]-1)*100
+            candidates.append((low,(peak["high"]/low["low"]-1)*100,
+                               "daily_prior_session_low_to_later_high"))
+        same_day_rise=(peak["high"]/peak["low"]-1)*100
+        if same_day_rise>=70:
+            candidates.append((peak,same_day_rise,"daily_same_session_low_to_high_70_quarantine"))
+        for low,rise,source in candidates:
             sessions_since_peak=len(completed)-1-peak_i
             if top is None or rise>top["top_10_gain_pct"]:
                 top={"top_10_gain_pct":round(rise,2),
                      "top_10_low":low["low"],"top_10_high":peak["high"],
                      "top_10_low_date":low["date"],"top_10_high_date":peak["date"],
                      "top_10_sessions_since_peak":sessions_since_peak,
-                     "top_10_source":"daily_prior_session_low_to_later_high"}
+                     "top_10_source":source}
     def wilder_rsi(closes, period=14):
         vals=[float(x) for x in closes if x is not None and float(x)>0]
         if len(vals)<period+1:return None
@@ -91,7 +99,7 @@ def calculate(effective, candles):
         "first_bar":first["date"],"bar_count":len(bars),
         "top_10_verified":bool(top and verified and top["top_10_gain_pct"]>=40),
         "top_calculated_at":datetime.now(timezone.utc).isoformat(),
-        "top_calculator_version":3,**(top or {}),
+        "top_calculator_version":4,**(top or {}),
         "updated_at":datetime.now(timezone.utc).isoformat()}
 
 def stability_from_bars(result, candles):
