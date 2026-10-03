@@ -952,29 +952,11 @@ async function runAiPatterns(){
  try{
   const r=await fetch('/api/ai-patterns',{cache:'no-store',signal:AbortSignal.timeout(45000)});
   if(!r.ok)throw Error('HTTP '+r.status);
-  let j=await r.json();
-  let picks=j.picks||[];
-  if(picks.length){
-   box.textContent='جارٍ التحقق من الطرح والمخاطر الحديثة لكل مرشح…';
-   const verified=[];
-   const excluded=[...(j.excluded_recent_risk||[])];
-   for(const x of picks){
-    if(verified.length>=5)break;
-    try{
-     const rr=await fetch('/api/ai-risk/'+encodeURIComponent(x.symbol),{cache:'no-store',signal:AbortSignal.timeout(15000)});
-     if(!rr.ok)throw Error('HTTP '+rr.status);
-     const risk=await rr.json();
-     if(risk.blocked)excluded.push({symbol:x.symbol,reason:risk.latest,score_before_gate:x.score});
-     else if(risk.checked)verified.push(x);
-     // Fail closed: a failed SEC check never fills one of the five slots.
-    }catch(_e){}
-   }
-   picks=verified.slice(0,5);
-   j.excluded_recent_risk=excluded;
-  }
+  const j=await r.json();
+  const picks=j.picks||[];
   const historical=j.method==='trajectory_similarity';
   meta.innerHTML='<div class="ai-pattern-pill"><small>حالات +100% الموثقة</small><b>'+esc(j.winner_samples||0)+'</b></div><div class="ai-pattern-pill"><small>حالة المحرك</small><b>'+(historical?'تشابه تاريخي + فلتر مخاطر':'ذاكرة غير كافية')+'</b></div>'+(j.excluded_recent_risk?.length?'<div class="ai-risk-gate"><b>🛡️ استبعدنا '+esc(j.excluded_recent_risk.length)+' بسبب خطر حديث</b><small>'+j.excluded_recent_risk.map(x=>esc(x.symbol)+' · '+esc(x.reason?.kind||'تمويل/تخفيف حديث')+' '+esc(x.reason?.date||'')).join(' · ')+'</small></div>':'');
-  if(!picks.length){box.className='research-empty';box.textContent='لم يكتمل تحقق SEC لمرشحين نظيفين الآن؛ لن يعرض Snipe AI سهمًا قبل اجتياز فلتر المخاطر.';return}
+  if(!picks.length){box.className='research-empty';box.textContent=(j.risk_pending||[]).length?'ماسح المخاطر الخلفي يجهز أعلى 50 سهم في الجاهزية؛ أعد المحاولة بعد قليل.':'ما عندنا مرشح نظيف كافٍ الآن.';return}
   box.className='ai-picks ai-picks-v2';
   box.innerHTML=picks.map((x,i)=>{
    const hist=x.historical_match||null;
