@@ -959,17 +959,17 @@ async function runAiPatterns(){
    const verified=[];
    const excluded=[...(j.excluded_recent_risk||[])];
    for(const x of picks){
+    if(verified.length>=5)break;
     try{
      const rr=await fetch('/api/ai-risk/'+encodeURIComponent(x.symbol),{cache:'no-store',signal:AbortSignal.timeout(15000)});
      if(!rr.ok)throw Error('HTTP '+rr.status);
      const risk=await rr.json();
      if(risk.blocked)excluded.push({symbol:x.symbol,reason:risk.latest,score_before_gate:x.score});
      else if(risk.checked)verified.push(x);
-     // Fail closed: if SEC verification did not complete, do not present the
-     // stock as a clean Snipe AI candidate.
+     // Fail closed: a failed SEC check never fills one of the five slots.
     }catch(_e){}
    }
-   picks=verified;
+   picks=verified.slice(0,5);
    j.excluded_recent_risk=excluded;
   }
   const historical=j.method==='trajectory_similarity';
