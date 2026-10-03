@@ -14,6 +14,7 @@ import httpx
 import websockets
 from history import worker as historical_worker
 import storage
+from corporate_actions import worker as corporate_actions_worker, upcoming as upcoming_actions
 from event_rules import borrow_events, ready_event, worker_health
 from bs4 import BeautifulSoup
 from fastapi import FastAPI
@@ -58,13 +59,14 @@ RADAR_MEMORY = {}
 SHORT_ANALYSIS = {}
 FINNHUB_COUNTRIES = {}
 FUNDAMENTALS = {}
+CORPORATE_ACTIONS = {}
 FUNDAMENTALS_STATUS = {"fmp":"idle","fmp_last_error":None,"fmp_last_scan":None,"finnhub":"idle","finnhub_last_error":None,"finnhub_last_scan":None}
 STATE_FILE = Path(os.environ.get("SNIPELAB_STATE_FILE","/tmp/snipelab_state.json"))
 _LAST_SAVE = 0.0
 
 def load_persistent_state():
     try:
-        d=storage.load(("universe","quotes","analytics","borrow","history","events","halts","borrow_history","radar_memory","finnhub_countries","fundamentals"))
+        d=storage.load(("universe","quotes","analytics","borrow","history","events","halts","borrow_history","radar_memory","finnhub_countries","fundamentals","corporate_actions"))
         STATE["restored_from_sqlite"]=bool(d)
         STATE["restored_at"]=utcnow().isoformat() if d else None
         if not d and STATE_FILE.exists():d=json.loads(STATE_FILE.read_text("utf-8"))
@@ -79,6 +81,7 @@ def load_persistent_state():
         RADAR_MEMORY.update(d.get("radar_memory") or {})
         FINNHUB_COUNTRIES.update(d.get("finnhub_countries") or {})
         FUNDAMENTALS.update(d.get("fundamentals") or {})
+        CORPORATE_ACTIONS.update(d.get("corporate_actions") or {})
     except Exception as exc:
         STATE["persistence_error"]=f"load {type(exc).__name__}: {str(exc)[:100]}"
 
@@ -87,7 +90,7 @@ def save_persistent_state(force=False):
     now=time.time()
     if not force and now-_LAST_SAVE<60:return
     try:
-        storage.save({"universe":UNIVERSE,"quotes":QUOTES,"analytics":ANALYTICS,"borrow":BORROW,"history":HISTORY,"events":EVENTS[:100],"halts":HALTS,"borrow_history":BORROW_HISTORY,"radar_memory":RADAR_MEMORY,"finnhub_countries":FINNHUB_COUNTRIES,"fundamentals":FUNDAMENTALS})
+        storage.save({"universe":UNIVERSE,"quotes":QUOTES,"analytics":ANALYTICS,"borrow":BORROW,"history":HISTORY,"events":EVENTS[:100],"halts":HALTS,"borrow_history":BORROW_HISTORY,"radar_memory":RADAR_MEMORY,"finnhub_countries":FINNHUB_COUNTRIES,"fundamentals":FUNDAMENTALS,"corporate_actions":CORPORATE_ACTIONS})
         _LAST_SAVE=now
         STATE["last_state_save"]=utcnow().isoformat(); STATE["persistence_error"]=None
     except Exception as exc:
@@ -151,8 +154,10 @@ async def fetch_direct_universe(client):
             if len(tds)<5 or tds[3].lower()!="reverse": continue
             try: eff=datetime.strptime(tds[0],"%b %d, %Y").date()
             except Exception: continue
-            if eff < date(2026,5,1) or eff > date(2026,12,30) or eff > utcnow().date(): continue
             sym=tds[1].upper().strip()
+            if sym and eff >= datetime.now(ZoneInfo("America/New_York")).date():
+                CORPORATE_ACTIONS["calendar:"+sym] = {"symbol":sym,"kind":"reverse_split","label":"تقسيم مستقبلي","effective_date":eff.isoformat(),"source":"StockAnalysis","source_url":url,"ratio":tds[4]}
+            if eff < date(2026,5,1) or eff > date(2026,12,30) or eff > utcnow().date(): continue
             if sym:
                 candidate={"symbol":sym,"company":tds[2],"effective_date":eff.isoformat(),"ratio":tds[4],"source":"stockanalysis"}
                 previous=merged.get(sym)
@@ -739,6 +744,7 @@ async def legacy_news_loop_disabled():
 @app.on_event("startup")
 async def startup():
     load_persistent_state()
+    asyncio.create_task(corporate_actions_worker(UNIVERSE, CORPORATE_ACTIONS, STATE, save_persistent_state))
     asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(live_daily_rsi_loop()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(short_analysis_loop()); asyncio.create_task(finnhub_live_loop()); asyncio.create_task(finnhub_country_loop()); asyncio.create_task(massive_float_loop()); asyncio.create_task(halt_loop()); asyncio.create_task(ai_risk_background_loop()); asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
 
 @app.get("/")
@@ -1208,7 +1214,7 @@ async def dashboard_data():
                 signal["live_day_rise_provisional"]=True
         except (KeyError,TypeError,ValueError,OverflowError,ZeroDivisionError):
             pass
-        rows[sym]={"symbol":sym,"company_name":meta.get("company_name") or meta.get("name") or (QUOTES.get(sym) or {}).get("short_name"),"effective_date":meta.get("effective_date"),"country":(FINNHUB_COUNTRIES.get(sym) or {}).get("country"),"country_source":(FINNHUB_COUNTRIES.get(sym) or {}).get("source"),"market_cap":(FUNDAMENTALS.get(sym) or {}).get("market_cap"),"market_cap_source":(FUNDAMENTALS.get(sym) or {}).get("market_cap_source"),"free_float":(FUNDAMENTALS.get(sym) or {}).get("free_float"),"free_float_source":(FUNDAMENTALS.get(sym) or {}).get("free_float_source"),"price":QUOTES.get(sym),"borrow":BORROW.get(sym),"borrow_history":BORROW_HISTORY.get(sym,[])[-12:],"signal":signal}
+        rows[sym]={"symbol":sym,"corporate_actions":upcoming_actions(CORPORATE_ACTIONS,sym),"company_name":meta.get("company_name") or meta.get("name") or (QUOTES.get(sym) or {}).get("short_name"),"effective_date":meta.get("effective_date"),"country":(FINNHUB_COUNTRIES.get(sym) or {}).get("country"),"country_source":(FINNHUB_COUNTRIES.get(sym) or {}).get("source"),"market_cap":(FUNDAMENTALS.get(sym) or {}).get("market_cap"),"market_cap_source":(FUNDAMENTALS.get(sym) or {}).get("market_cap_source"),"free_float":(FUNDAMENTALS.get(sym) or {}).get("free_float"),"free_float_source":(FUNDAMENTALS.get(sym) or {}).get("free_float_source"),"price":QUOTES.get(sym),"borrow":BORROW.get(sym),"borrow_history":BORROW_HISTORY.get(sym,[])[-12:],"signal":signal}
     relevant_kinds={"price_25","halt","available_10k","available_zero","ready"}
     important_events=[e for e in EVENTS if e.get("kind") in relevant_kinds]
     return {"server_time":utcnow().isoformat(),"uptime_seconds":int(time.time()-BOOTED_AT.timestamp()),"storage":storage.status(),"history_count":sum(bool(HISTORY.get(sym,{}).get("verified")) for sym in UNIVERSE),"history_pending":sum(1 for sym in UNIVERSE if not HISTORY.get(sym,{}).get("verified")),"health":{"ok":STATE.get("status")=="running","heartbeat":STATE.get("heartbeat"),"universe_count":len(UNIVERSE),"price_count":len(QUOTES),"borrow_count":len(BORROW),"analytics_count":len(ANALYTICS)},"rows":rows,"events":important_events[:40],"halts":HALTS,"news":NEWS}
