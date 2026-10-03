@@ -56,7 +56,8 @@ LIVE_RSI = {}
 BORROW_HISTORY = {}
 RADAR_MEMORY = {}
 SHORT_ANALYSIS = {}
-FINNHUB_COUNTRIES = {}\nFUNDAMENTALS = {}
+FINNHUB_COUNTRIES = {}
+FUNDAMENTALS = {}
 STATE_FILE = Path(os.environ.get("SNIPELAB_STATE_FILE","/tmp/snipelab_state.json"))
 _LAST_SAVE = 0.0
 
@@ -75,7 +76,8 @@ def load_persistent_state():
         EVENTS.extend((d.get("events") or [])[:100])
         BORROW_HISTORY.update(d.get("borrow_history") or {})
         RADAR_MEMORY.update(d.get("radar_memory") or {})
-        FINNHUB_COUNTRIES.update(d.get("finnhub_countries") or {})\n        FUNDAMENTALS.update(d.get("fundamentals") or {})
+        FINNHUB_COUNTRIES.update(d.get("finnhub_countries") or {})
+        FUNDAMENTALS.update(d.get("fundamentals") or {})
     except Exception as exc:
         STATE["persistence_error"]=f"load {type(exc).__name__}: {str(exc)[:100]}"
 
