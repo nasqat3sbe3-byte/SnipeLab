@@ -1076,22 +1076,28 @@ async def ai_patterns():
                 **cur,"reasons":reasons,"comparison":["لا توجد بعد حالة +100% موثقة كافية للمطابقة."],
                 "method":"provisional_rules","historical_match":None})
     picks.sort(key=lambda x:(x["method"]!="trajectory_similarity",-x["score"],x["available"],x["rsi"]))
-    # Capital-risk gate runs AFTER technical similarity and BEFORE Top 5.
-    # Check only enough candidates to fill five clean slots; this keeps the request
-    # fast on mobile while blocked names are still replaced by the next candidate.
+    # Never make the mobile request wait on SEC. Only cached risk results may
+    # affect this response; uncached names are returned as pending and refreshed
+    # asynchronously for the next run.
     shortlist=picks[:10]
-    clean=[];excluded=[]
+    clean=[];excluded=[];pending=[]
+    now=time.time()
     for x in shortlist:
-        risk=await _ai_recent_capital_risk(x["symbol"])
-        x["capital_risk"]=risk
-        if risk.get("blocked"):
+        cached=_AI_RISK_CACHE.get(x["symbol"])
+        risk=cached.get("result") if cached and now-cached.get("at",0)<21600 else None
+        if risk is None:
+            pending.append(x["symbol"])
+            clean.append(x)
+        elif risk.get("blocked"):
             excluded.append({"symbol":x["symbol"],"reason":risk.get("latest"),"score_before_gate":x["score"]})
         else:
             clean.append(x)
         if len(clean)>=5:break
+    for sym in pending:
+        asyncio.create_task(_ai_recent_capital_risk(sym))
     return {"generated_at":utcnow().isoformat(),"winner_samples":len(winners),
         "method":"trajectory_similarity" if winners else "provisional_rules","picks":clean[:5],
-        "excluded_recent_risk":excluded,"risk_gate":{"window_days":30,"source":"SEC EDGAR","rule":"recent offering/dilution blocks Top 5"},
+        "excluded_recent_risk":excluded,"risk_pending":pending,"risk_gate":{"window_days":30,"source":"SEC EDGAR","rule":"recent offering/dilution blocks Top 5","mode":"background_cache"},
         "note":"المحرك يطابق كل سهم حالي مع أقرب لقطة فعلية داخل مسار سهم سجله SnipeLab قبل حركة +100% أو أكثر. Available وRSI والبعد عن الدعم والثبات ونصف القمة تدخل المطابقة؛ Retest لا يدخل Snipe AI. قبل Top 5 توجد بوابة SEC مستقلة تستبعد الطرح/التمويل/التخفيف الحديث خلال 30 يومًا. الأحداث الأقدم لا تمنع السهم تلقائيًا."}
 
 @app.get("/api/dashboard")
