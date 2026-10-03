@@ -688,6 +688,38 @@ body.black-gold .ref-top-icons button:last-child svg{stroke:#d9c39a!important}
 
 .approved-filter-btn .filtered-result-count{margin-inline-start:5px;font-size:9px;font-weight:800;color:#6f8377;white-space:nowrap}
 body.black-gold .approved-filter-btn .filtered-result-count{color:#c6a864}
+
+/* === SnipeLab main-screen luxury refinement === */
+@media(max-width:600px){
+ #huntPage{padding-bottom:78px!important}
+ .head{padding:5px 2px 0!important}
+ .brand{font-size:24px!important;letter-spacing:-.5px!important}.brand-mark{transform:scale(.82)!important}
+ .theme-toggle{height:32px!important;padding:0 11px!important;font-size:9px!important}
+ .screen-title{padding:0 0 24px!important;margin-top:-1px!important}
+ .screen-title h1{font-size:21px!important;letter-spacing:-.2px!important}.screen-title p{font-size:8px!important;margin-top:2px!important}
+ .screen-title::after{bottom:5px!important;font-size:8.5px!important}
+ .summary{display:grid!important;grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:0!important;margin:5px 0 7px!important;border:1px solid #d5ddd5!important;border-radius:13px!important;overflow:hidden!important;background:rgba(251,250,246,.86)!important;box-shadow:0 7px 20px rgba(30,55,58,.055)!important}
+ .summary button{height:53px!important;min-height:53px!important;border:0!important;border-inline-start:1px solid #e1e5df!important;border-radius:0!important;background:transparent!important;box-shadow:none!important}
+ .summary button:first-child{border-inline-start:0!important}.summary b{font-size:16px!important}.summary span,.summary small{font-size:7px!important}
+ .summary button.selected{background:linear-gradient(180deg,#f5eedf,#fbfaf6)!important;box-shadow:inset 0 -2px 0 #c9a45e!important}
+ .server-strip{min-height:44px!important;height:44px!important;padding:3px 5px!important;border-radius:11px!important;box-shadow:0 7px 18px rgba(18,52,90,.10)!important}.server-strip small{font-size:7px!important}.server-strip b{font-size:9px!important}.server-strip button{width:34px!important;height:34px!important;border-radius:9px!important}
+ .prototype-tools{padding-top:6px!important}.search-row{gap:5px!important;height:36px!important}.search,.approved-filter-btn{height:36px!important;border-radius:10px!important}.approved-filter-btn{padding:0 10px!important;font-size:10px!important}.sort-row{margin-top:4px!important}.sort-clone{height:33px!important;border-radius:10px!important;font-size:9px!important}
+ #huntPage .stocks{margin-top:6px!important;border-radius:13px!important;border-color:#d9e2db!important;box-shadow:0 8px 22px rgba(25,54,66,.055)!important}
+ #huntPage .sl-row{padding:7px 9px 6px!important;transition:background .16s ease,transform .12s ease!important}
+ #huntPage .sl-row:active{background:#f0f3ec!important;transform:scale(.997)!important}
+ .sl-mainline .sl-symbol{font-size:15px!important}.sl-mainline .sl-price{font-size:14px!important}.sl-mainline .sl-change{font-size:9px!important}
+ .sl-subline{margin-top:2px!important;gap:6px!important}.sl-ready{padding:0!important;border:0!important;background:transparent!important;font-size:8px!important;font-weight:800!important;color:#587064!important}.sl-ready:before{content:"●";font-size:6px;color:#8fa88d;margin-inline-end:3px}.sl-stability{font-size:7.5px!important;color:#82908c!important}
+ .sl-metrics{margin-top:4px!important;border-top-color:#edf0ec!important}.sl-metric{padding:4px 1px 1px!important;border-inline-start-color:rgba(215,223,216,.45)!important}.sl-metric small{font-size:6px!important;color:#8a9695!important}.sl-metric b{font-size:8.5px!important}
+ .section-nav{left:14px!important;right:14px!important;width:calc(100% - 28px)!important;height:54px!important;bottom:calc(7px + env(safe-area-inset-bottom))!important;border-radius:16px!important;padding:3px!important;background:rgba(248,247,241,.96)!important;box-shadow:0 -4px 20px rgba(20,47,66,.11)!important;backdrop-filter:blur(14px)!important}
+ .section-nav button{border-radius:12px!important;gap:1px!important;font-size:12px!important}.section-nav button span{font-size:7px!important}
+ .section-nav button.active{background:linear-gradient(145deg,#dce8d9,#efe7d8)!important;border-color:#c1cdbf!important;box-shadow:0 3px 9px rgba(35,62,63,.08),inset 0 1px 0 rgba(255,255,255,.7)!important}
+}
+body.black-gold .summary{background:#111214!important;border-color:#302a20!important}
+body.black-gold .summary button{border-color:#2b2822!important}
+body.black-gold .summary button.selected{background:linear-gradient(180deg,#211b11,#15130f)!important;box-shadow:inset 0 -2px 0 #a47c38!important}
+body.black-gold .sl-ready{color:#bda879!important;background:transparent!important}
+body.black-gold .section-nav{background:rgba(17,18,20,.96)!important;border-color:#44351f!important}
+body.black-gold .section-nav button.active{background:linear-gradient(145deg,#2a2114,#17140f)!important;border-color:#74572a!important;color:#d9c39a!important}
 </style></head><body><main class="shell"><header class="head"><div class="head-primary"><div class="brand-wrap"><div class="brand"><span class="brand-mark">◎</span>SnipeLab</div><div class="brand-sub">ماسح أسهم التقسيم العكسي</div></div><button type="button" id="themeToggle" class="theme-toggle">◐ Black Gold</button><div class="uptime offline" id="uptime"><small><span class="dot"></span>جارٍ فحص السيرفر</small><b>—</b></div></div><div class="head-market"><span class="market-heading">♧ حالة السوق</span><span class="market-state" id="marketState">جارٍ التحقق</span></div></header><div id="huntPage" class="section-page"><section class="screen-title"><h1>أسهم التقسيم</h1><p>جميع أسهم التقسيم من مايو إلى ديسمبر 2026</p></section><section class="events"><div class="event-head"><span>◉ مركز الأحداث <small id="eventCount" class="event-count"></small></span><button id="eventToggle" type="button">عرض الكل ⌄</button></div><div id="eventsList" aria-live="polite"><div class="event-line">جارٍ تحميل الأحداث...</div></div></section><div class="summary" aria-label="إحصائيات قابلة للضغط"><button data-filter="all" type="button"><b id="countAll">—</b>جميع الأسهم</button><button data-filter="borrow" type="button"><b id="countBorrow">—</b>Available &lt;15K</button><button data-filter="ready" type="button"><b id="countReady">—</b>الجاهز</button><button data-filter="near" type="button"><b id="countNear">—</b>تحت الجاهزية</button></div><section class="server-strip"><div><small>حالة السيرفر</small><b id="serverConn">جارٍ الاتصال</b></div><div><small>آخر تحديث</small><b id="lastRefresh">—</b></div><div><small>التحديث القادم</small><b id="nextRefresh">—</b></div><button type="button" id="manualRefresh">↻</button></section><div class="browse-tools prototype-tools">
 <div class="search-row"><input id="query" class="search" type="search" placeholder="ابحث عن السهم أو الرمز..." aria-label="البحث عن سهم"><button type="button" id="approvedFilterOpen" class="approved-filter-btn">فلتر <span id="approvedFilterCount" class="filter-count" hidden>0</span><span id="filteredResultCount" class="filtered-result-count" hidden></span></button></div><div class="sort-row"><select id="approvedSort" class="sort-clone" aria-label="الترتيب"><option value="readiness">الترتيب: درجة الجاهزية</option><option value="available">Available الأقل</option><option value="rsi">RSI الأقل</option><option value="distance">الأقرب للدعم</option></select><span class="view-chip">▦</span><span class="view-chip">☷</span></div>
 </div><div id="legacyCompat" hidden><span id="radarCount"></span>
