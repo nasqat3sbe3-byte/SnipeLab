@@ -1248,7 +1248,12 @@ function slApplyRows(list){
   })
 }
 const _slFiltered=filtered;filtered=function(){return slApplyRows(_slFiltered())};
-function slFlag(x){const c=String(x.country||x.country_code||'US').toUpperCase();return c==='CN'?'🇨🇳':c==='CA'?'🇨🇦':c==='IL'?'🇮🇱':c==='GB'||c==='UK'?'🇬🇧':c==='SG'?'🇸🇬':c==='HK'?'🇭🇰':'🇺🇸'}
+function slFlag(x){
+ const raw=x.country_code??x.country??x.q?.country_code??x.q?.country??'';
+ const c=String(raw).trim().toUpperCase();
+ const flags={US:'🇺🇸',USA:'🇺🇸',CN:'🇨🇳',CHN:'🇨🇳',CA:'🇨🇦',CAN:'🇨🇦',IL:'🇮🇱',ISR:'🇮🇱',GB:'🇬🇧',UK:'🇬🇧',GBR:'🇬🇧',SG:'🇸🇬',SGP:'🇸🇬',HK:'🇭🇰',HKG:'🇭🇰',AU:'🇦🇺',AUS:'🇦🇺',DE:'🇩🇪',DEU:'🇩🇪',FR:'🇫🇷',FRA:'🇫🇷',NL:'🇳🇱',NLD:'🇳🇱',IE:'🇮🇪',IRL:'🇮🇪',TW:'🇹🇼',TWN:'🇹🇼',JP:'🇯🇵',JPN:'🇯🇵',KR:'🇰🇷',KOR:'🇰🇷',IN:'🇮🇳',IND:'🇮🇳',BR:'🇧🇷',BRA:'🇧🇷'};
+ return flags[c]||'';
+}
 card=function(x){
  const av=x.b?.available,low=x.history_verified?x.post_split_low:null,score=displayedReadiness(x);
  const sessions=x.history_verified&&x.stability_sessions!=null&&Number.isFinite(Number(x.stability_sessions))?Math.max(0,Math.floor(Number(x.stability_sessions))):null;
