@@ -15,7 +15,7 @@ import httpx
 import websockets
 from history import worker as historical_worker
 import storage
-from support_chart import worker as support_chart_worker, get as support_chart_get
+from support_chart import worker as support_chart_worker, get as support_chart_get, retest_signal as support_retest_signal
 from corporate_actions import worker as corporate_actions_worker, upcoming as upcoming_actions
 from event_rules import borrow_events, ready_event, worker_health
 from bs4 import BeautifulSoup
@@ -1298,6 +1298,7 @@ async def dashboard_data():
             "history_status":h.get("error") or ("verified" if h.get("verified") else "pending"),
             "short_analysis":SHORT_ANALYSIS.get(sym,{}),
             "available_zero_estimate":available_zero_estimate(sym)}
+        signal.update(support_retest_signal(sym,HISTORY))
         # A same-day live rise is a separate, explicitly provisional measure:
         # never mix it silently with the completed-session low-to-high TOP.
         q=QUOTES.get(sym) or {}
