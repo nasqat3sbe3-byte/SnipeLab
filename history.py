@@ -347,7 +347,7 @@ async def worker(universe,history,yahoo,save):
                 age=(datetime.now(timezone.utc).date()-
                      date.fromisoformat(meta["effective_date"])).days
                 return (h.get("effective_date")==meta["effective_date"]
-                        and (h.get("stability_sessions") is None or h.get("top_calculator_version",0)<3 or h.get("half_rule_version",0)<2 or h.get("rsi_rule_version",0)<3)
+                        and (h.get("stability_sessions") is None or h.get("top_calculator_version",0)<4 or h.get("half_rule_version",0)<2 or h.get("rsi_rule_version",0)<3)
                         and (bool(h.get("top_10_verified"))
                              or (h.get("top_10_gain_pct") or 0)>=40
                              or age<=90))
@@ -375,7 +375,7 @@ async def worker(universe,history,yahoo,save):
                 h=history.get(sym,{})
                 age=(datetime.now(timezone.utc).date()-date.fromisoformat(meta["effective_date"])).days
                 return (h.get("verified") and
-                        (h.get("stability_sessions") is None or h.get("top_calculator_version",0)<3) and
+                        (h.get("stability_sessions") is None or h.get("top_calculator_version",0)<4) and
                         (bool(h.get("top_10_verified"))
                          or (h.get("top_10_gain_pct") or 0)>=40
                          or age<=90))
