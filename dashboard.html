@@ -973,7 +973,8 @@ function radarExplanation(x){
  ['RSI',c.rsi<=35,'RSI '+fmt(c.rsi)+' / المطلوب 35 أو أقل'],
  ['نصف القمة',!!x.half_reached,x.half_reached?'وصل إلى نصف أعلى قمة':'لم يصل إلى نصف أعلى قمة بعد'],
  ['القاع',c.dist<=25,'البعد '+pct(c.dist)+' / المطلوب 25% أو أقل'],
- ['الثبات',c.sessions>=2,'الثبات '+Math.min(4,Math.floor(c.sessions))+'/2 / المطلوب جلستان دون كسر القاع'],\n ['إعادة اختبار الدعم',c.retest==='success',c.retest==='success'?'إعادة اختبار ناجح':c.retest==='failed'?'فشل / كسر الدعم':'لم يُختبر الدعم بعد']
+ ['الثبات',c.sessions>=2,'الثبات '+Math.min(4,Math.floor(c.sessions))+'/2 / المطلوب جلستان دون كسر القاع'],
+ ['إعادة اختبار الدعم',c.retest==='success',c.retest==='success'?'إعادة اختبار ناجح':c.retest==='failed'?'فشل / كسر الدعم':'لم يُختبر الدعم بعد']
  ];
  return '<div class="radar-checks">'+lines.map(([name,ok,desc])=>'<div class="radar-check '+(ok?'passed':'pending')+'"><b>'+(ok?'✓ ':'◌ ')+esc(name)+'</b><span>'+esc(desc)+'</span></div>').join('')+'</div>';
 }
