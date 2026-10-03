@@ -1018,7 +1018,7 @@ function conditionState(x){
 function recentTenSessionSurge70(x){
  const gain=Number(x.top_10_gain_pct);
  const since=Number(x.top_10_sessions_since_peak);
- return x.top_10_verified===true&&Number.isFinite(gain)&&gain>=70&&Number.isFinite(since)&&since>=0&&since<10;
+ return Number(x.top_calculator_version)>=4&&x.top_10_verified===true&&Number.isFinite(gain)&&gain>=70&&Number.isFinite(since)&&since>=0&&since<10;
 }
 function radarCandidate(x){
  if(recentTenSessionSurge70(x)||isTop(x)||x.ready||!x.history_verified)return false;
