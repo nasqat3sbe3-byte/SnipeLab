@@ -1028,6 +1028,13 @@ async def _ai_recent_capital_risk(symbol):
     _AI_RISK_CACHE[symbol]={"at":time.time(),"result":result}
     return result
 
+@app.get("/api/ai-risk/{symbol}")
+async def ai_risk(symbol: str):
+    """Force-check one candidate's recent SEC capital risk."""
+    symbol=re.sub(r"[^A-Z0-9.-]","",symbol.upper())[:12]
+    if not symbol:return {"symbol":symbol,"blocked":False,"checked":False,"reason":"invalid_symbol"}
+    return {"symbol":symbol,**(await _ai_recent_capital_risk(symbol))}
+
 @app.get("/api/ai-patterns")
 async def ai_patterns():
     """Top 5 current stocks matched to the closest real pre-100% historical state."""
