@@ -1077,16 +1077,18 @@ async def ai_patterns():
                 "method":"provisional_rules","historical_match":None})
     picks.sort(key=lambda x:(x["method"]!="trajectory_similarity",-x["score"],x["available"],x["rsi"]))
     # Capital-risk gate runs AFTER technical similarity and BEFORE Top 5.
-    # Scan a bounded shortlist so a blocked name is replaced by the next clean match.
+    # Check only enough candidates to fill five clean slots; this keeps the request
+    # fast on mobile while blocked names are still replaced by the next candidate.
     shortlist=picks[:10]
-    risks=await asyncio.gather(*(_ai_recent_capital_risk(x["symbol"]) for x in shortlist))
     clean=[];excluded=[]
-    for x,risk in zip(shortlist,risks):
+    for x in shortlist:
+        risk=await _ai_recent_capital_risk(x["symbol"])
         x["capital_risk"]=risk
         if risk.get("blocked"):
             excluded.append({"symbol":x["symbol"],"reason":risk.get("latest"),"score_before_gate":x["score"]})
         else:
             clean.append(x)
+        if len(clean)>=5:break
     return {"generated_at":utcnow().isoformat(),"winner_samples":len(winners),
         "method":"trajectory_similarity" if winners else "provisional_rules","picks":clean[:5],
         "excluded_recent_risk":excluded,"risk_gate":{"window_days":30,"source":"SEC EDGAR","rule":"recent offering/dilution blocks Top 5"},
