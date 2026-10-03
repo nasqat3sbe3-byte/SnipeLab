@@ -733,7 +733,7 @@ async def legacy_news_loop_disabled():
 @app.on_event("startup")
 async def startup():
     load_persistent_state()
-    asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(live_daily_rsi_loop()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(short_analysis_loop()); asyncio.create_task(finnhub_live_loop()); asyncio.create_task(finnhub_country_loop()); asyncio.create_task(halt_loop()); asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
+    asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(live_daily_rsi_loop()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(short_analysis_loop()); asyncio.create_task(finnhub_live_loop()); asyncio.create_task(finnhub_country_loop()); asyncio.create_task(halt_loop()); asyncio.create_task(ai_risk_background_loop()); asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
 
 @app.get("/")
 async def root():
@@ -941,6 +941,41 @@ def _state_similarity(cur,hist):
     return score,parts
 
 _AI_RISK_CACHE={}
+_AI_RISK_TARGETS=[]
+_AI_RISK_CURSOR=0
+
+def _ai_readiness_top50():
+    """Rank the 50 strongest current readiness candidates using existing SnipeLab analytics."""
+    rows=[]
+    for sym,a in ANALYTICS.items():
+        if not a.get("active") or not a.get("history_verified") or a.get("top_10_verified"):continue
+        cur=_current_ai_path(sym,a)
+        if not cur:continue
+        try:
+            pct=float(a.get("readiness_pct") or 0)
+            av=float(cur["available"]);rsi=float(cur["rsi"]);dist=float(cur["distance_pct"]);sessions=float(cur["sessions"])
+        except (TypeError,ValueError):continue
+        # Readiness is primary; these are deterministic tie-breakers only.
+        rows.append((pct,-min(sessions,4),av,rsi,dist,sym))
+    rows.sort()
+    rows.reverse()
+    return [x[-1] for x in rows[:50]]
+
+async def ai_risk_background_loop():
+    """Low-pressure SEC prefetcher: one Top-50 readiness name at a time."""
+    global _AI_RISK_TARGETS,_AI_RISK_CURSOR
+    await asyncio.sleep(90)
+    while True:
+        try:
+            _AI_RISK_TARGETS=_ai_readiness_top50()
+            if _AI_RISK_TARGETS:
+                sym=_AI_RISK_TARGETS[_AI_RISK_CURSOR%len(_AI_RISK_TARGETS)]
+                _AI_RISK_CURSOR+=1
+                await _ai_recent_capital_risk(sym)
+        except Exception:
+            pass
+        await asyncio.sleep(8)
+
 
 async def _ai_recent_capital_risk(symbol):
     """Recent SEC hard-risk gate for Snipe AI only. Reads filing + exhibits."""
@@ -1040,8 +1075,9 @@ async def ai_patterns():
     """Top 5 current stocks matched to the closest real pre-100% historical state."""
     winners=_historical_hundred_patterns()
     picks=[]
+    readiness_top50=set(_ai_readiness_top50())
     for sym,a in ANALYTICS.items():
-        if not a.get("active") or not a.get("history_verified") or a.get("top_10_verified"):continue
+        if sym not in readiness_top50:continue
         cur=_current_ai_path(sym,a)
         if not cur:continue
         best=None
@@ -1083,29 +1119,25 @@ async def ai_patterns():
                 **cur,"reasons":reasons,"comparison":["لا توجد بعد حالة +100% موثقة كافية للمطابقة."],
                 "method":"provisional_rules","historical_match":None})
     picks.sort(key=lambda x:(x["method"]!="trajectory_similarity",-x["score"],x["available"],x["rsi"]))
-    # Never make the mobile request wait on SEC. Only cached risk results may
-    # affect this response; uncached names are returned as pending and refreshed
-    # asynchronously for the next run.
-    # Return a ranked candidate pool. The UI verifies candidates one by one
-    # against SEC and keeps walking down this list until five clean names pass.
-    shortlist=picks[:25]
+    # Cache-only request path: SEC is owned by the background worker.
+    # Walk the full Top-50 similarity ranking until five verified-clean names pass.
+    shortlist=picks[:50]
     clean=[];excluded=[];pending=[]
     now=time.time()
     for x in shortlist:
         cached=_AI_RISK_CACHE.get(x["symbol"])
         risk=cached.get("result") if cached and now-cached.get("at",0)<21600 else None
-        if risk is None:
+        if risk is None or not risk.get("checked"):
             pending.append(x["symbol"])
-            clean.append(x)
-        elif risk.get("blocked"):
+            continue
+        if risk.get("blocked"):
             excluded.append({"symbol":x["symbol"],"reason":risk.get("latest"),"score_before_gate":x["score"]})
-        else:
-            clean.append(x)
-    for sym in pending[:10]:
-        asyncio.create_task(_ai_recent_capital_risk(sym))
+            continue
+        clean.append(x)
+        if len(clean)>=5:break
     return {"generated_at":utcnow().isoformat(),"winner_samples":len(winners),
-        "method":"trajectory_similarity" if winners else "provisional_rules","picks":clean[:25],
-        "excluded_recent_risk":excluded,"risk_pending":pending,"risk_gate":{"window_days":30,"source":"SEC EDGAR","rule":"recent offering/dilution blocks Top 5","mode":"background_cache"},
+        "method":"trajectory_similarity" if winners else "provisional_rules","picks":clean[:5],
+        "excluded_recent_risk":excluded,"risk_pending":pending,"risk_gate":{"window_days":30,"source":"SEC EDGAR","rule":"recent offering/dilution blocks Top 5","mode":"top50_background_cache"},
         "note":"المحرك يطابق كل سهم حالي مع أقرب لقطة فعلية داخل مسار سهم سجله SnipeLab قبل حركة +100% أو أكثر. Available وRSI والبعد عن الدعم والثبات ونصف القمة تدخل المطابقة؛ Retest لا يدخل Snipe AI. قبل Top 5 توجد بوابة SEC مستقلة تستبعد الطرح/التمويل/التخفيف الحديث خلال 30 يومًا. الأحداث الأقدم لا تمنع السهم تلقائيًا."}
 
 @app.get("/api/dashboard")
