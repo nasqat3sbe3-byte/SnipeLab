@@ -800,8 +800,8 @@ function openStockRoom(raw){
  const changeTxt=change==null?'—':(change>0?'+':'')+change.toFixed(2)+'%',changeCls=change==null?'':change>=0?'up':'down';
  const score=displayedReadiness(x),av=Number(x.b?.available),rsi=Number(x.rsi_daily),dist=Number(x.effective_distance_pct??x.distance_from_low_pct),sessions=Number(x.stability_sessions);
  const support=x.history_verified?x.post_split_low:null,halfTarget=x.half_target??(Number.isFinite(Number(x.split_day_high))?Number(x.split_day_high)/2:null);
- const split=x.effective_date||x.split_date||'—',ratio=x.split_ratio||x.ratio||x.reverse_split_ratio||x.split?.ratio||'—',retest=String(x.support_retest_status||'').toLowerCase();
- const retestText=retest==='success'||retest==='successful'?'ناجح':retest==='failed'||retest==='broken'?'فشل / كسر':'بانتظار البيانات',retestOk=retest==='success'||retest==='successful';
+ const split=x.effective_date||x.split_date||'—',ratio=x.split_ratio||x.ratio||x.reverse_split_ratio||x.split?.ratio||'—',retest=supportRetestState(x);
+ const retestText=retest==='success'?'ناجح':retest==='failed'?'فشل / كسر':'لم يُختبر بعد',retestOk=retest==='success';
  const exchange=x.exchange||x.q?.exchange||x.q?.full_exchange_name||x.q?.exchange_name||'';
  const statusText=score>=100?'جاهز':'جاهزية '+pct(score);
  const body='<div class="ref-room">'+
@@ -927,6 +927,12 @@ function isTop(x){return topStats(x)!==null}
 function topQuarantined(x){const t=topStats(x);return !!t&&t.gain>=60}
 
 // Radar evaluates four weighted conditions and the separate two-session gate.
+function supportRetestState(x){
+ const raw=String(x.support_retest_status??x.retest_status??x.support_retest??'').trim().toLowerCase();
+ if(['success','successful','passed','pass','ok','ناجح'].includes(raw))return 'success';
+ if(['failed','fail','broken','break','broke','كسر','فشل'].includes(raw))return 'failed';
+ return 'waiting';
+}
 function conditionState(x){
  if(!x.history_verified)return null;
  const av=x.b.available==null?NaN:Number(x.b.available),rsi=x.rsi_daily==null?NaN:Number(x.rsi_daily);
@@ -939,20 +945,26 @@ function conditionState(x){
  if(!x.half_reached)missing.push('نصف القمة');
  if(dist>25)missing.push('القاع');
  if(sessions<2)missing.push('الثبات');
- return {missing,av,rsi,dist,sessions};
+ const retest=supportRetestState(x);
+ if(retest==='waiting')missing.push('إعادة اختبار الدعم');
+ return {missing,av,rsi,dist,sessions,retest,retestFailed:retest==='failed'};
 }
 function radarCandidate(x){
  if(isTop(x)||x.ready||!x.history_verified)return false;
  const c=conditionState(x);
- return !!c&&c.missing.length>=1&&c.missing.length<=2&&c.av<=20000&&c.rsi<=40&&c.dist<=35;
+ return !!c&&!c.retestFailed&&c.missing.length>=1&&c.missing.length<=2&&c.av<=20000&&c.rsi<=40&&c.dist<=35;
 }
 function displayedReadiness(x){
  const base=Number(x.readiness_pct);
  if(x.readiness_pct==null||!Number.isFinite(base))return null;
  const c=conditionState(x);
  if(!c)return Math.min(base,99);
+ if(c.retestFailed)return 0;
+ const coreMissing=c.missing.filter(v=>v!=='إعادة اختبار الدعم');
+ if(!coreMissing.length&&c.retest==='success')return 100;
+ if(!coreMissing.length&&c.retest==='waiting')return 90;
  const stabilityPenalty=Math.max(0,2-Math.min(2,c.sessions))*5;
- return Math.max(0,Math.min(base-stabilityPenalty,c.missing.length?99:100));
+ return Math.max(0,Math.min(base-stabilityPenalty,89));
 }
 function radarExplanation(x){
  const c=conditionState(x);if(!c)return '';
@@ -961,7 +973,7 @@ function radarExplanation(x){
  ['RSI',c.rsi<=35,'RSI '+fmt(c.rsi)+' / المطلوب 35 أو أقل'],
  ['نصف القمة',!!x.half_reached,x.half_reached?'وصل إلى نصف أعلى قمة':'لم يصل إلى نصف أعلى قمة بعد'],
  ['القاع',c.dist<=25,'البعد '+pct(c.dist)+' / المطلوب 25% أو أقل'],
- ['الثبات',c.sessions>=2,'الثبات '+Math.min(4,Math.floor(c.sessions))+'/2 / المطلوب جلستان دون كسر القاع']
+ ['الثبات',c.sessions>=2,'الثبات '+Math.min(4,Math.floor(c.sessions))+'/2 / المطلوب جلستان دون كسر القاع'],\n ['إعادة اختبار الدعم',c.retest==='success',c.retest==='success'?'إعادة اختبار ناجح':c.retest==='failed'?'فشل / كسر الدعم':'لم يُختبر الدعم بعد']
  ];
  return '<div class="radar-checks">'+lines.map(([name,ok,desc])=>'<div class="radar-check '+(ok?'passed':'pending')+'"><b>'+(ok?'✓ ':'◌ ')+esc(name)+'</b><span>'+esc(desc)+'</span></div>').join('')+'</div>';
 }
