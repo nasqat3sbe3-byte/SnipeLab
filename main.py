@@ -1145,7 +1145,7 @@ async def ai_patterns():
 
 @app.get("/api/fundamentals-status")
 async def fundamentals_status():
-    return {"market_cap_count":sum((v or {}).get("market_cap") is not None for v in FUNDAMENTALS.values()),"free_float_count":sum((v or {}).get("free_float") is not None for v in FUNDAMENTALS.values()),"tracked":len(FUNDAMENTALS)}
+    return {"market_cap_count":sum((v or {}).get("market_cap") is not None for v in FUNDAMENTALS.values()),"free_float_count":sum((v or {}).get("free_float") is not None for v in FUNDAMENTALS.values()),"tracked":len(FUNDAMENTALS),"fmp":{k:v for k,v in FUNDAMENTALS_STATUS.items() if k.startswith("fmp")}}
 
 @app.get("/api/dashboard")
 async def dashboard_data():
@@ -1554,10 +1554,12 @@ async def fmp_float_loop():
                         r=await client.get("https://financialmodelingprep.com/stable/shares-float",
                             params={"symbol":sym,"apikey":token})
                         if r.status_code==429:
+                            FUNDAMENTALS_STATUS.update(fmp="rate_limited",fmp_last_error="HTTP 429",fmp_last_scan=utcnow().isoformat())
                             await asyncio.sleep(65);break
                         if r.status_code in (401,402,403):
                             FUNDAMENTALS[sym]={**cached,"free_float_checked_at":utcnow().isoformat(),
                                 "free_float_error":"FMP plan/key does not allow shares-float"}
+                            FUNDAMENTALS_STATUS.update(fmp="plan_blocked",fmp_last_error="HTTP "+str(r.status_code),fmp_last_scan=utcnow().isoformat())
                             changed=True
                             break
                         r.raise_for_status()
@@ -1572,9 +1574,10 @@ async def fmp_float_loop():
                             "free_float_pct":free_float_pct,
                             "free_float_source":"fmp_shares_float" if float_shares is not None else None,
                             "free_float_checked_at":utcnow().isoformat()}
+                        FUNDAMENTALS_STATUS.update(fmp="working" if float_shares is not None else "no_data",fmp_last_error=None,fmp_last_scan=utcnow().isoformat(),fmp_last_symbol=sym,fmp_http_status=r.status_code)
                         changed=True
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        FUNDAMENTALS_STATUS.update(fmp="error",fmp_last_error=f"{type(exc).__name__}: {str(exc)[:160]}",fmp_last_scan=utcnow().isoformat(),fmp_last_symbol=sym)
                     await asyncio.sleep(1.1)
             if changed:save_persistent_state(force=True)
         except Exception:
