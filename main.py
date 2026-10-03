@@ -232,6 +232,11 @@ async def fetch_quote(client, sem, symbol):
                 if reference is not None and reference<=0: reference=None
                 return symbol,{"symbol":symbol,"price":p,"day_high":hi,"day_low":lo,
                     "previous_close":reference,
+                    "change_pct":round(((p-reference)/reference)*100,2) if reference else None,
+                    "exchange":meta.get("fullExchangeName") or meta.get("exchangeName"),
+                    "exchange_code":meta.get("exchangeName"),
+                    "currency":meta.get("currency"),
+                    "has_prepost":meta.get("hasPrePostMarketData"),
                     "market_timestamp":datetime.fromtimestamp(t,tz=timezone.utc).isoformat(),
                     "received_at":utcnow().isoformat(),"source":"yahoo_"+interval+("_prepost" if interval=="1m" else "_fallback")}
             except Exception:
