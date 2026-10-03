@@ -1,3 +1,4 @@
+# Support Retest release: closed 4H five-percent confirmation with dated readiness.
 # Snipe AI release: durable isolated screening v2.
 import asyncio
 import ftplib
