@@ -8,6 +8,7 @@ COPY history.py .
 COPY storage.py .
 COPY event_rules.py .
 COPY corporate_actions.py .
+COPY support_chart.py .
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8080
 CMD ["uvicorn","main:app","--host","0.0.0.0","--port","8080"]
