@@ -494,6 +494,48 @@ body.black-gold .theme-toggle{background:#15120d!important;border-color:#5a4625!
 body.black-gold .head .uptime b,body.black-gold .head .uptime small{color:#9d9485!important}
 body.black-gold #huntPage .approved-filter-btn .filter-count{background:#cda557!important;color:#0c0b09!important}
 body.black-gold #huntPage .sort-clone{background:#111214!important;color:#d9c39a!important}
+
+/* === Mobile geometry reset: approved Split Stocks proportions === */
+@media(max-width:600px){
+ html,body{width:100%!important;max-width:100%!important;overflow-x:hidden!important}
+ body{font-size:12px!important}
+ .shell{width:100%!important;max-width:100%!important;padding:8px 12px 82px!important;margin:0!important}
+ .head{display:grid!important;grid-template-columns:minmax(0,1fr) auto!important;grid-template-rows:auto auto!important;column-gap:8px!important;row-gap:5px!important;padding:3px 0 7px!important;margin:0!important}
+ .head-primary{display:contents!important}
+ .brand-wrap{grid-column:1!important;grid-row:1!important;min-width:0!important}
+ .head .brand{font-size:22px!important;line-height:1.1!important;white-space:nowrap!important}
+ .head .brand-mark{font-size:22px!important;margin-left:4px!important}
+ .head .brand-sub{display:none!important}
+ .theme-toggle{grid-column:2!important;grid-row:1!important;align-self:center!important;margin:0!important;padding:6px 9px!important;font-size:10px!important;white-space:nowrap!important}
+ .head .uptime{grid-column:1/-1!important;grid-row:2!important;display:flex!important;justify-content:flex-start!important;align-items:center!important;gap:5px!important;min-width:0!important;padding:0!important;margin:0!important;direction:rtl!important;text-align:right!important}
+ .head .uptime small,.head .uptime b{font-size:9px!important;line-height:1.2!important;margin:0!important;white-space:nowrap!important}
+ .screen-title{padding:7px 0 9px!important;text-align:center!important}
+ .screen-title h1{font-size:21px!important;line-height:1.25!important;margin:0!important}
+ .screen-title p{font-size:9px!important;line-height:1.5!important;margin:4px 0 0!important}
+ .summary{display:grid!important;grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:5px!important;margin:5px 0 7px!important}
+ .summary button{min-width:0!important;min-height:54px!important;height:54px!important;padding:5px 2px!important;border-radius:10px!important;font-size:8.5px!important;line-height:1.2!important;overflow:hidden!important}
+ .summary b{font-size:17px!important;line-height:1!important;margin-bottom:4px!important}
+ .server-strip{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr)) 38px!important;align-items:center!important;gap:0!important;width:100%!important;min-height:54px!important;padding:6px 5px!important;margin:0 0 7px!important;border-radius:11px!important}
+ .server-strip>div{min-width:0!important;padding:0 5px!important;border-left:1px solid #d9e1ea!important;text-align:center!important}
+ .server-strip>div:nth-child(3){border-left:0!important}
+ .server-strip small{font-size:8px!important;white-space:nowrap!important}.server-strip b{font-size:10px!important;white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important}
+ .server-strip button{width:32px!important;height:32px!important;padding:0!important;margin:auto!important;border-radius:8px!important}
+ .prototype-tools{padding:4px 0 0!important}
+ .search-row{display:grid!important;grid-template-columns:minmax(0,1fr) 88px!important;gap:6px!important;height:42px!important}
+ .search{width:100%!important;height:42px!important;padding:0 11px!important;font-size:11px!important;border-radius:10px!important}
+ .approved-filter-btn{min-width:0!important;width:88px!important;height:42px!important;padding:0 7px!important;border-radius:10px!important;font-size:11px!important}
+ #huntPage .sort-row{margin:6px 0 7px!important}
+ #huntPage .sort-row .sort-clone{width:100%!important;height:39px!important;padding:0 10px!important;font-size:10px!important;border-radius:10px!important}
+ .status{font-size:9px!important;padding:2px 2px 5px!important}
+ #huntPage .stocks{width:100%!important;border-radius:12px!important}
+ #huntPage .sl-row{padding:10px 9px 9px!important}
+ .sl-mainline{gap:5px!important}.sl-mainline .sl-flag{font-size:16px!important}.sl-mainline .sl-symbol{font-size:16px!important}.sl-mainline .sl-price{font-size:15px!important}.sl-mainline .sl-change{font-size:10px!important}
+ .sl-subline{margin-top:5px!important;gap:5px!important}.sl-ready{font-size:9px!important;padding:3px 6px!important}.sl-stability{font-size:9px!important}
+ .sl-metrics{margin-top:7px!important}.sl-metric{padding:6px 2px 1px!important}.sl-metric small{font-size:7.5px!important;margin-bottom:2px!important}.sl-metric b{font-size:9.5px!important}
+ .section-nav{left:12px!important;right:12px!important;bottom:8px!important;width:auto!important;height:58px!important;border-radius:14px!important;padding:4px!important}
+ .section-nav button{font-size:15px!important;padding:4px 2px!important}.section-nav button span{font-size:8px!important;margin-top:2px!important}
+}
+body.black-gold .server-strip>div{border-left-color:#2d2a25!important}
 </style></head><body><main class="shell"><header class="head"><div class="head-primary"><div class="brand-wrap"><div class="brand"><span class="brand-mark">◎</span>SnipeLab</div><div class="brand-sub">ماسح أسهم التقسيم العكسي</div></div><button type="button" id="themeToggle" class="theme-toggle">◐ Black Gold</button><div class="uptime offline" id="uptime"><small><span class="dot"></span>جارٍ فحص السيرفر</small><b>—</b></div></div><div class="head-market"><span class="market-heading">♧ حالة السوق</span><span class="market-state" id="marketState">جارٍ التحقق</span></div></header><div id="huntPage" class="section-page"><section class="screen-title"><h1>أسهم التقسيم</h1><p>جميع أسهم التقسيم من مايو إلى ديسمبر 2026</p></section><section class="events"><div class="event-head"><span>◉ مركز الأحداث <small id="eventCount" class="event-count"></small></span><button id="eventToggle" type="button">عرض الكل ⌄</button></div><div id="eventsList" aria-live="polite"><div class="event-line">جارٍ تحميل الأحداث...</div></div></section><div class="summary" aria-label="إحصائيات قابلة للضغط"><button data-filter="all" type="button"><b id="countAll">—</b>جميع الأسهم</button><button data-filter="borrow" type="button"><b id="countBorrow">—</b>Available &lt;15K</button><button data-filter="ready" type="button"><b id="countReady">—</b>الجاهز</button><button data-filter="near" type="button"><b id="countNear">—</b>تحت الجاهزية</button></div><section class="server-strip"><div><small>حالة السيرفر</small><b id="serverConn">جارٍ الاتصال</b></div><div><small>آخر تحديث</small><b id="lastRefresh">—</b></div><div><small>التحديث القادم</small><b id="nextRefresh">—</b></div><button type="button" id="manualRefresh">↻</button></section><div class="browse-tools prototype-tools">
 <div class="search-row"><input id="query" class="search" type="search" placeholder="ابحث عن السهم أو الرمز..." aria-label="البحث عن سهم"><button type="button" id="approvedFilterOpen" class="approved-filter-btn">فلتر <span id="approvedFilterCount" class="filter-count" hidden>0</span></button></div><div class="sort-row"><select id="approvedSort" class="sort-clone" aria-label="الترتيب"><option value="readiness">الترتيب: درجة الجاهزية</option><option value="available">Available الأقل</option><option value="rsi">RSI الأقل</option><option value="distance">الأقرب للدعم</option></select><span class="view-chip">▦</span><span class="view-chip">☷</span></div>
 </div><div id="legacyCompat" hidden>
