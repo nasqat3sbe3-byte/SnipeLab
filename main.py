@@ -1173,6 +1173,10 @@ async def dashboard_data():
             "top_calculator_version":h.get("top_calculator_version",0),
             "top_10_source":h.get("top_10_source"),
             "top_10_provisional":bool(h.get("top_10_provisional")),
+            "surge70_verified":bool(h.get("surge70_verified")),
+            "surge70_gain_pct":h.get("surge70_gain_pct"),
+            "surge70_peak_date":h.get("surge70_peak_date"),
+            "surge70_sessions_since_peak":h.get("surge70_sessions_since_peak"),
             "history_status":h.get("error") or ("verified" if h.get("verified") else "pending"),
             "short_analysis":SHORT_ANALYSIS.get(sym,{}),
             "available_zero_estimate":available_zero_estimate(sym)}
