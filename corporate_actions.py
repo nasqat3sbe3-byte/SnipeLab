@@ -31,15 +31,16 @@ def parse_notice(title, body, url, symbol):
         return None
     text = re.sub(r'\s+', ' ', body)
     # Updates announcing cancellation/completion must replace the cached notice.
-    if re.search(r'merger closed|cancelled|canceled|withdrawn|terminated', title, re.I):
+    if re.search(r'cancelled|canceled|withdrawn|terminated', title, re.I):
         return None
-    if re.search(r'(?:merger|business combination|reverse (?:stock )?split).{0,90}(?:has been completed|was completed|has closed|was cancelled|has been cancelled|has been terminated)', text, re.I):
+    completed = bool(re.search(r'merger closed', title, re.I) or re.search(r'(?:merger|business combination|reverse (?:stock )?split).{0,90}(?:has been completed|was completed|has closed)', text, re.I))
+    if re.search(r'(?:merger|business combination|reverse (?:stock )?split).{0,90}(?:was cancelled|has been cancelled|has been terminated)', text, re.I):
         return None
     effective = None
     for sentence in re.split(r'(?<=[.!?])\s+', text):
         # Do not mistake the announcement, shareholder meeting or voting date
         # for the execution date. Only explicitly effective/trading/closing dates.
-        match = re.search(r'(?:will (?:become|be) effective|become effective|effective (?:on|as of|at)|will (?:begin|commence) trading|(?:expected|scheduled|anticipated) to (?:close|be completed)(?: on)?|closing (?:date|on)).{0,100}?(' + MONTH_DATE + ')', sentence, re.I)
+        match = re.search(r'(?:will (?:become|be) effective|become effective|effective (?:on|as of|at)|will (?:begin|commence) trading|(?:expected|scheduled|anticipated) to (?:close|be completed)(?: on)?|closing (?:date|on)|(?:was|has been) completed on|closed on).{0,100}?(' + MONTH_DATE + ')', sentence, re.I)
         if match:
             raw = re.sub(r',', '', match.group(1))
             try:
@@ -47,6 +48,8 @@ def parse_notice(title, body, url, symbol):
                 break
             except ValueError:
                 pass
+    if completed and not effective:
+        return None
     # Exchange notices announce actual corporate actions, not speculative news.
     return {'symbol': symbol, 'kind': kind, 'label': LABELS[kind],
             'effective_date': effective, 'source': 'Nasdaq', 'source_url': url,
@@ -54,16 +57,26 @@ def parse_notice(title, body, url, symbol):
 
 def upcoming(cache, symbol, today=None):
     today = today or market_today()
+    cutoff = (datetime.fromisoformat(today).date() - timedelta(days=4)).isoformat()
     matches = [a for a in cache.values() if a.get('symbol') == symbol
                and a.get('kind') in LABELS and a.get('status', 'pending') == 'pending'
-               and (not a.get('effective_date') or a['effective_date'] > today)
+               and (not a.get('effective_date') or a['effective_date'] >= cutoff)
                and (a.get('effective_date') or a.get('kind') == 'merger'
                     or a.get('published_date', '') >= (datetime.fromisoformat(today).date() - timedelta(days=14)).isoformat())]
     # Prefer exchange confirmation over public-calendar duplicates.
     result = {}
     for a in sorted(matches, key=lambda a: a.get('source') == 'Nasdaq', reverse=True):
         result.setdefault(a['kind'], a)
-    return sorted(result.values(), key=lambda a: a.get('effective_date') or '9999')
+    output = []
+    for action in result.values():
+        a = dict(action)
+        recent = bool(a.get('effective_date') and a['effective_date'] <= today)
+        a['stage'] = 'recent' if recent else 'upcoming'
+        a['label'] = ({'reverse_split': 'تقسيم جديد', 'merger': 'دمج جديد'} if recent else LABELS)[a['kind']]
+        if recent:
+            a['notice_expires_on'] = (datetime.fromisoformat(a['effective_date']).date() + timedelta(days=5)).isoformat()
+        output.append(a)
+    return sorted(output, key=lambda a: a.get('effective_date') or '9999')
 
 async def scan(client, universe, cache, state, batch=24):
     response = await client.get(FEED, timeout=20)
@@ -89,7 +102,7 @@ async def scan(client, universe, cache, state, batch=24):
         for symbol in symbols:
             key = url + '#' + symbol
             old = cache.get(key, {})
-            active = old.get('status', 'pending') == 'pending' and (not old.get('effective_date') or old['effective_date'] > market_today())
+            active = old.get('status', 'pending') == 'pending' and (not old.get('effective_date') or old['effective_date'] >= (datetime.fromisoformat(market_today()).date() - timedelta(days=4)).isoformat())
             if old.get('title') != title or (active and now - old.get('checked_epoch', 0) >= 3600):
                 candidates.append((key, title, url, symbol, published))
     semaphore = asyncio.Semaphore(2)

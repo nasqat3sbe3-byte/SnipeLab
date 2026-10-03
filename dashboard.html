@@ -1432,7 +1432,7 @@ function slActionNotice(x){
  const actions=Array.isArray(x.corporate_actions)?x.corporate_actions:[];
  const labels={reverse_split:'تقسيم مستقبلي',merger:'دمج مستقبلي'};
  const items=actions.filter(a=>labels[a.kind]);
- return items.length?items.map(a=>labels[a.kind]+' — '+(a.effective_date?a.effective_date.split('-').reverse().join('/'):'التاريخ غير معلن')).join(' · '):'';
+ return items.length?items.map(a=>(a.stage==='recent'?({reverse_split:'تقسيم جديد',merger:'دمج جديد'}[a.kind]):labels[a.kind])+' — '+(a.effective_date?a.effective_date.split('-').reverse().join('/'):'التاريخ غير معلن')).join(' · '):'';
 }
 card=function(x){
  const actionText=slActionNotice(x);

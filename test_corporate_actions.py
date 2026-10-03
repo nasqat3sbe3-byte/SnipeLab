@@ -9,13 +9,20 @@ class CorporateActionTests(unittest.TestCase):
                          'The reverse stock split will become effective on Friday, October 2, 2026.',
                          'https://www.nasdaqtrader.com/TraderNews.aspx?id=test', 'ZCMD')
         self.assertEqual(a['effective_date'], '2026-10-02')
-        self.assertEqual(upcoming({'a': a}, 'ZCMD', '2026-10-03'), [])
-        self.assertEqual(upcoming({'a': a}, 'ZCMD', '2026-10-02'), [])
+        self.assertEqual(upcoming({'a': a}, 'ZCMD', '2026-10-03')[0]['label'], 'تقسيم جديد')
+        self.assertEqual(upcoming({'a': a}, 'ZCMD', '2026-10-06')[0]['stage'], 'recent')
+        self.assertEqual(upcoming({'a': a}, 'ZCMD', '2026-10-07'), [])
+        self.assertEqual(upcoming({'a': a}, 'ZCMD', '2026-10-02')[0]['stage'], 'recent')
         self.assertEqual(len(upcoming({'a': a}, 'ZCMD', '2026-10-01')), 1)
 
     def test_consolidation_and_merger_are_distinct(self):
         self.assertEqual(parse_notice('Share consolidation', 'Shares will begin trading on October 6, 2026.', '', 'ABC')['kind'], 'reverse_split')
         self.assertEqual(parse_notice('Merger of ABC', 'The merger is expected to close on October 7, 2026.', '', 'ABC')['effective_date'], '2026-10-07')
+
+    def test_completed_merger_has_recent_label(self):
+        a = parse_notice('Merger of ABC (UPDATED: Merger closed)', 'The merger was completed on October 2, 2026.', '', 'ABC')
+        self.assertEqual(upcoming({'a': a}, 'ABC', '2026-10-03')[0]['label'], 'دمج جديد')
+        self.assertEqual(upcoming({'a': a}, 'ABC', '2026-10-07'), [])
 
     def test_missing_date_not_invented(self):
         a = parse_notice('Merger of ABC', 'Meeting on October 7, 2026. Closing date has not been announced.', '', 'ABC')
