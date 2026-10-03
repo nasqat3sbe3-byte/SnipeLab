@@ -58,6 +58,7 @@ RADAR_MEMORY = {}
 SHORT_ANALYSIS = {}
 FINNHUB_COUNTRIES = {}
 FUNDAMENTALS = {}
+FUNDAMENTALS_STATUS = {"fmp":"idle","fmp_last_error":None,"fmp_last_scan":None,"finnhub":"idle","finnhub_last_error":None,"finnhub_last_scan":None}
 STATE_FILE = Path(os.environ.get("SNIPELAB_STATE_FILE","/tmp/snipelab_state.json"))
 _LAST_SAVE = 0.0
 
@@ -1142,6 +1143,10 @@ async def ai_patterns():
         "excluded_recent_risk":excluded,"risk_pending":pending,"risk_gate":{"window_days":30,"source":"SEC EDGAR","rule":"recent offering/dilution blocks Top 5","mode":"top50_background_cache"},
         "note":"المحرك يطابق كل سهم حالي مع أقرب لقطة فعلية داخل مسار سهم سجله SnipeLab قبل حركة +100% أو أكثر. Available وRSI والبعد عن الدعم والثبات ونصف القمة تدخل المطابقة؛ Retest لا يدخل Snipe AI. قبل Top 5 توجد بوابة SEC مستقلة تستبعد الطرح/التمويل/التخفيف الحديث خلال 30 يومًا. الأحداث الأقدم لا تمنع السهم تلقائيًا."}
 
+@app.get("/api/fundamentals-status")
+async def fundamentals_status():
+    return {"market_cap_count":sum((v or {}).get("market_cap") is not None for v in FUNDAMENTALS.values()),"free_float_count":sum((v or {}).get("free_float") is not None for v in FUNDAMENTALS.values()),"tracked":len(FUNDAMENTALS)}
+
 @app.get("/api/dashboard")
 async def dashboard_data():
     # Dashboard must be read-only. Recomputing the entire universe inside
@@ -1530,7 +1535,10 @@ async def fmp_float_loop():
     """Fetch FMP-reported share float in the background; never derive float locally."""
     await asyncio.sleep(95)
     token=os.environ.get("FMP_API_KEY","").strip()
-    if not token:return
+    if not token:
+        FUNDAMENTALS_STATUS.update(fmp="disabled",fmp_last_error="FMP_API_KEY missing")
+        return
+    FUNDAMENTALS_STATUS.update(fmp="running",fmp_last_error=None)
     while True:
         changed=False
         try:
@@ -1584,7 +1592,8 @@ async def finnhub_country_loop():
             async with httpx.AsyncClient(timeout=10,follow_redirects=True) as client:
                 for sym in list(UNIVERSE):
                     cached=FINNHUB_COUNTRIES.get(sym) or {}
-                    if cached.get("country") or cached.get("checked"):
+                    fundamentals=FUNDAMENTALS.get(sym) or {}
+                    if (cached.get("country") or cached.get("checked")) and fundamentals.get("market_cap") is not None:
                         continue
                     try:
                         r=await client.get("https://finnhub.io/api/v1/stock/profile2",params={"symbol":sym,"token":token})
