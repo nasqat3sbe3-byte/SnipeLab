@@ -953,16 +953,28 @@ async function runAiPatterns(){
   const r=await fetch('/api/ai-patterns',{cache:'no-store',signal:AbortSignal.timeout(45000)});
   if(!r.ok)throw Error('HTTP '+r.status);
   let j=await r.json();
-  if((j.risk_pending||[]).length){
-   box.textContent='جارٍ فحص مخاطر SEC للمرشحين…';
-   await new Promise(resolve=>setTimeout(resolve,5000));
-   const rr=await fetch('/api/ai-patterns',{cache:'no-store',signal:AbortSignal.timeout(12000)});
-   if(rr.ok)j=await rr.json();
+  let picks=j.picks||[];
+  if(picks.length){
+   box.textContent='جارٍ التحقق من الطرح والمخاطر الحديثة لكل مرشح…';
+   const verified=[];
+   const excluded=[...(j.excluded_recent_risk||[])];
+   for(const x of picks){
+    try{
+     const rr=await fetch('/api/ai-risk/'+encodeURIComponent(x.symbol),{cache:'no-store',signal:AbortSignal.timeout(15000)});
+     if(!rr.ok)throw Error('HTTP '+rr.status);
+     const risk=await rr.json();
+     if(risk.blocked)excluded.push({symbol:x.symbol,reason:risk.latest,score_before_gate:x.score});
+     else if(risk.checked)verified.push(x);
+     // Fail closed: if SEC verification did not complete, do not present the
+     // stock as a clean Snipe AI candidate.
+    }catch(_e){}
+   }
+   picks=verified;
+   j.excluded_recent_risk=excluded;
   }
-  const picks=j.picks||[];
   const historical=j.method==='trajectory_similarity';
   meta.innerHTML='<div class="ai-pattern-pill"><small>حالات +100% الموثقة</small><b>'+esc(j.winner_samples||0)+'</b></div><div class="ai-pattern-pill"><small>حالة المحرك</small><b>'+(historical?'تشابه تاريخي + فلتر مخاطر':'ذاكرة غير كافية')+'</b></div>'+(j.excluded_recent_risk?.length?'<div class="ai-risk-gate"><b>🛡️ استبعدنا '+esc(j.excluded_recent_risk.length)+' بسبب خطر حديث</b><small>'+j.excluded_recent_risk.map(x=>esc(x.symbol)+' · '+esc(x.reason?.kind||'تمويل/تخفيف حديث')+' '+esc(x.reason?.date||'')).join(' · ')+'</small></div>':'');
-  if(!picks.length){box.className='research-empty';box.textContent='ما عندنا بيانات كافية لإخراج اختيارات الآن.';return}
+  if(!picks.length){box.className='research-empty';box.textContent='لم يكتمل تحقق SEC لمرشحين نظيفين الآن؛ لن يعرض Snipe AI سهمًا قبل اجتياز فلتر المخاطر.';return}
   box.className='ai-picks ai-picks-v2';
   box.innerHTML=picks.map((x,i)=>{
    const hist=x.historical_match||null;
