@@ -56,12 +56,13 @@ LIVE_RSI = {}
 BORROW_HISTORY = {}
 RADAR_MEMORY = {}
 SHORT_ANALYSIS = {}
+FINNHUB_COUNTRIES = {}
 STATE_FILE = Path(os.environ.get("SNIPELAB_STATE_FILE","/tmp/snipelab_state.json"))
 _LAST_SAVE = 0.0
 
 def load_persistent_state():
     try:
-        d=storage.load(("universe","quotes","analytics","borrow","history","events","halts","borrow_history","radar_memory"))
+        d=storage.load(("universe","quotes","analytics","borrow","history","events","halts","borrow_history","radar_memory","finnhub_countries"))
         STATE["restored_from_sqlite"]=bool(d)
         STATE["restored_at"]=utcnow().isoformat() if d else None
         if not d and STATE_FILE.exists():d=json.loads(STATE_FILE.read_text("utf-8"))
@@ -74,6 +75,7 @@ def load_persistent_state():
         EVENTS.extend((d.get("events") or [])[:100])
         BORROW_HISTORY.update(d.get("borrow_history") or {})
         RADAR_MEMORY.update(d.get("radar_memory") or {})
+        FINNHUB_COUNTRIES.update(d.get("finnhub_countries") or {})
     except Exception as exc:
         STATE["persistence_error"]=f"load {type(exc).__name__}: {str(exc)[:100]}"
 
@@ -82,7 +84,7 @@ def save_persistent_state(force=False):
     now=time.time()
     if not force and now-_LAST_SAVE<60:return
     try:
-        storage.save({"universe":UNIVERSE,"quotes":QUOTES,"analytics":ANALYTICS,"borrow":BORROW,"history":HISTORY,"events":EVENTS[:100],"halts":HALTS,"borrow_history":BORROW_HISTORY,"radar_memory":RADAR_MEMORY})
+        storage.save({"universe":UNIVERSE,"quotes":QUOTES,"analytics":ANALYTICS,"borrow":BORROW,"history":HISTORY,"events":EVENTS[:100],"halts":HALTS,"borrow_history":BORROW_HISTORY,"radar_memory":RADAR_MEMORY,"finnhub_countries":FINNHUB_COUNTRIES})
         _LAST_SAVE=now
         STATE["last_state_save"]=utcnow().isoformat(); STATE["persistence_error"]=None
     except Exception as exc:
@@ -731,7 +733,7 @@ async def legacy_news_loop_disabled():
 @app.on_event("startup")
 async def startup():
     load_persistent_state()
-    asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(live_daily_rsi_loop()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(short_analysis_loop()); asyncio.create_task(finnhub_live_loop()); asyncio.create_task(halt_loop()); asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
+    asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(live_daily_rsi_loop()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(short_analysis_loop()); asyncio.create_task(finnhub_live_loop()); asyncio.create_task(finnhub_country_loop()); asyncio.create_task(halt_loop()); asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
 
 @app.get("/")
 async def root():
@@ -1031,7 +1033,7 @@ async def dashboard_data():
                 signal["live_day_rise_provisional"]=True
         except (KeyError,TypeError,ValueError,OverflowError,ZeroDivisionError):
             pass
-        rows[sym]={"symbol":sym,"company_name":meta.get("company_name") or meta.get("name") or (QUOTES.get(sym) or {}).get("short_name"),"effective_date":meta.get("effective_date"),"price":QUOTES.get(sym),"borrow":BORROW.get(sym),"borrow_history":BORROW_HISTORY.get(sym,[])[-12:],"signal":signal}
+        rows[sym]={"symbol":sym,"company_name":meta.get("company_name") or meta.get("name") or (QUOTES.get(sym) or {}).get("short_name"),"effective_date":meta.get("effective_date"),"country":(FINNHUB_COUNTRIES.get(sym) or {}).get("country"),"country_source":(FINNHUB_COUNTRIES.get(sym) or {}).get("source"),"price":QUOTES.get(sym),"borrow":BORROW.get(sym),"borrow_history":BORROW_HISTORY.get(sym,[])[-12:],"signal":signal}
     relevant_kinds={"price_25","halt","available_10k","available_zero","ready"}
     important_events=[e for e in EVENTS if e.get("kind") in relevant_kinds]
     return {"server_time":utcnow().isoformat(),"uptime_seconds":int(time.time()-BOOTED_AT.timestamp()),"storage":storage.status(),"history_count":sum(bool(HISTORY.get(sym,{}).get("verified")) for sym in UNIVERSE),"history_pending":sum(1 for sym in UNIVERSE if not HISTORY.get(sym,{}).get("verified")),"health":{"ok":STATE.get("status")=="running","heartbeat":STATE.get("heartbeat"),"universe_count":len(UNIVERSE),"price_count":len(QUOTES),"borrow_count":len(BORROW),"analytics_count":len(ANALYTICS)},"rows":rows,"events":important_events[:40],"halts":HALTS,"news":NEWS}
@@ -1356,6 +1358,37 @@ def select_finnhub_live_symbols():
         if pct is not None and pct>=30 and sym not in ready:hot.append((pct,sym))
     hot=[sym for pct,sym in sorted(hot,reverse=True)[:15]]
     return ready,hot,ready+hot
+
+async def finnhub_country_loop():
+    """Finnhub is used here only to resolve issuer country for UI flags."""
+    await asyncio.sleep(75)
+    token=_finnhub_token()
+    if not token:return
+    while True:
+        changed=False
+        try:
+            async with httpx.AsyncClient(timeout=10,follow_redirects=True) as client:
+                for sym in list(UNIVERSE):
+                    cached=FINNHUB_COUNTRIES.get(sym) or {}
+                    if cached.get("country") or cached.get("checked"):
+                        continue
+                    try:
+                        r=await client.get("https://finnhub.io/api/v1/stock/profile2",params={"symbol":sym,"token":token})
+                        if r.status_code==429:
+                            await asyncio.sleep(65);break
+                        r.raise_for_status()
+                        profile=r.json() if r.content else {}
+                        country=str(profile.get("country") or "").strip()
+                        FINNHUB_COUNTRIES[sym]={"country":country,"checked":utcnow().isoformat(),"source":"finnhub_profile2"}
+                        changed=True
+                    except Exception:
+                        # Leave unresolved so a later pass can retry; never guess a country.
+                        pass
+                    await asyncio.sleep(1.1)
+            if changed:save_persistent_state(force=True)
+        except Exception:
+            pass
+        await asyncio.sleep(21600)
 
 async def finnhub_live_loop():
     await asyncio.sleep(55)
