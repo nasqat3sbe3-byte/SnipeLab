@@ -1554,7 +1554,8 @@ async def massive_float_loop():
                             params={"ticker":sym},headers={"Authorization":f"Bearer {token}"})
                         if r.status_code==429:
                             FUNDAMENTALS_STATUS.update(massive="rate_limited",massive_last_error="HTTP 429",massive_last_scan=utcnow().isoformat(),massive_last_symbol=sym)
-                            await asyncio.sleep(65);break
+                            if changed:save_persistent_state(force=True)
+                            await asyncio.sleep(75);break
                         if r.status_code in (401,402,403):
                             FUNDAMENTALS_STATUS.update(massive="access_error",massive_last_error="HTTP "+str(r.status_code),massive_last_scan=utcnow().isoformat(),massive_last_symbol=sym)
                             break
@@ -1577,11 +1578,13 @@ async def massive_float_loop():
                         changed=True
                     except Exception as exc:
                         FUNDAMENTALS_STATUS.update(massive="error",massive_last_error=f"{type(exc).__name__}: {str(exc)[:160]}",massive_last_scan=utcnow().isoformat(),massive_last_symbol=sym)
-                    await asyncio.sleep(1.1)
+                    # Massive Basic is deliberately paced to stay below the free-plan request ceiling.
+                    await asyncio.sleep(15)
             if changed:save_persistent_state(force=True)
         except Exception as exc:
             FUNDAMENTALS_STATUS.update(massive="error",massive_last_error=f"{type(exc).__name__}: {str(exc)[:160]}",massive_last_scan=utcnow().isoformat())
-        await asyncio.sleep(21600)
+        # Resume soon: completed symbols are cached for 24h, so each pass naturally continues the backlog.
+        await asyncio.sleep(90)
 
 
 async def finnhub_country_loop():
