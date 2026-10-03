@@ -237,6 +237,9 @@ async def fetch_quote(client, sem, symbol):
                 if reference is not None and reference<=0: reference=None
                 return symbol,{"symbol":symbol,"price":p,"day_high":hi,"day_low":lo,
                     "previous_close":reference,
+                    "short_name":meta.get("shortName") or meta.get("longName"),
+                    "sparkline":[valid[round(i*(len(valid)-1)/(min(36,len(valid))-1))][2] for i in range(min(36,len(valid)))] if len(valid)>1 else [p],
+                    "sparkline_interval":interval,
                     "market_timestamp":datetime.fromtimestamp(t,tz=timezone.utc).isoformat(),
                     "received_at":utcnow().isoformat(),"source":"yahoo_"+interval+("_prepost" if interval=="1m" else "_fallback")}
             except Exception:
