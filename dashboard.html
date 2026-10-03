@@ -578,6 +578,44 @@ body.black-gold .server-strip>div{border-left-color:#2d2a25!important}
 body.black-gold .summary button,body.black-gold #huntPage .stocks{background:#111214!important;border-color:#2d2a25!important}
 body.black-gold .summary button.selected{background:#1b160e!important;border-color:#8d6b31!important}
 body.black-gold #huntPage .sl-row+.sl-row,body.black-gold .sl-metrics,body.black-gold .sl-metric{border-color:#2a2926!important}
+
+/* === Crystal Pistachio luxury pass — header / counters / server / nav only === */
+:root{--sl-ivory:#f6f4ed;--sl-paper:#fbfaf6;--sl-pistachio:#dfe9dc;--sl-pistachio-deep:#8da58c;--sl-leather:#b89b76;--sl-navy:#12345a;--sl-line:#d9ded7}
+body:not(.black-gold){background:linear-gradient(180deg,#f4f2eb 0%,#f8f7f2 46%,#f1f3ee 100%)!important;color:var(--sl-navy)!important}
+body:not(.black-gold) .shell{background:transparent!important}
+body:not(.black-gold) .head,
+body:not(.black-gold) .screen-title{background:transparent!important}
+body:not(.black-gold) .theme-toggle{background:rgba(251,250,246,.88)!important;border-color:#cdd8cc!important;color:var(--sl-navy)!important}
+body:not(.black-gold) .summary button{background:rgba(251,250,246,.94)!important;border-color:#d8dfd7!important}
+body:not(.black-gold) .summary button.selected{background:linear-gradient(145deg,#e5eddf,#f7f4e9)!important;border-color:#b7c9b4!important;color:var(--sl-navy)!important}
+body:not(.black-gold) .summary button.selected b{color:#728f75!important}
+body:not(.black-gold) .summary b{color:var(--sl-navy)!important}
+body:not(.black-gold) .server-strip{background:linear-gradient(120deg,#0d2b4c,#173e66)!important;border-color:#173e66!important;box-shadow:0 8px 20px rgba(13,43,76,.14)!important}
+body:not(.black-gold) .server-strip small{color:#bfcddd!important}
+body:not(.black-gold) .server-strip b{color:#fff!important}
+body:not(.black-gold) .server-strip>div{border-left-color:rgba(255,255,255,.16)!important}
+body:not(.black-gold) .server-strip button{background:rgba(255,255,255,.08)!important;color:#e7efe8!important;border-color:rgba(255,255,255,.12)!important}
+body:not(.black-gold) .search,
+body:not(.black-gold) .approved-filter-btn,
+body:not(.black-gold) #huntPage .sort-row .sort-clone{background:rgba(251,250,246,.95)!important;border-color:#d5ddd5!important}
+body:not(.black-gold) #huntPage .stocks{background:#fbfaf6!important;border-color:#d8dfd8!important}
+body:not(.black-gold) .section-nav{background:rgba(249,248,242,.98)!important;border-color:#cad6cc!important;box-shadow:0 -6px 24px rgba(23,52,69,.10)!important}
+body:not(.black-gold) .section-nav button.active{background:linear-gradient(145deg,#dce8d9,#f0eadf)!important;color:#12345a!important;border-color:#b9cbb8!important}
+
+@media(max-width:600px){
+ .head{display:grid!important;grid-template-columns:auto 1fr!important;grid-template-rows:auto!important;align-items:center!important;padding:7px 1px 2px!important}
+ .head-primary{display:contents!important}
+ .brand-wrap{grid-column:2!important;grid-row:1!important;justify-self:end!important;display:flex!important;align-items:center!important}
+ .theme-toggle{grid-column:1!important;grid-row:1!important;justify-self:start!important}
+ .head .uptime{position:static!important;grid-column:1/-1!important;grid-row:2!important;justify-content:center!important;margin-top:5px!important;min-height:15px!important}
+ .screen-title{padding:2px 0 8px!important}
+ .screen-title h1{font-size:22px!important;line-height:1.15!important}
+ .screen-title p{margin-top:3px!important}
+ .summary b{color:#12345a!important;text-shadow:none!important;opacity:1!important}
+ .server-strip{margin-top:4px!important}
+ .section-nav{box-sizing:border-box!important;position:fixed!important;left:10px!important;right:10px!important;bottom:calc(8px + env(safe-area-inset-bottom))!important;width:calc(100% - 20px)!important;max-width:none!important;transform:none!important;margin:0!important;grid-template-columns:repeat(4,minmax(0,1fr))!important;overflow:hidden!important}
+ .section-nav button{min-width:0!important;max-width:100%!important;overflow:hidden!important}
+}
 </style></head><body><main class="shell"><header class="head"><div class="head-primary"><div class="brand-wrap"><div class="brand"><span class="brand-mark">◎</span>SnipeLab</div><div class="brand-sub">ماسح أسهم التقسيم العكسي</div></div><button type="button" id="themeToggle" class="theme-toggle">◐ Black Gold</button><div class="uptime offline" id="uptime"><small><span class="dot"></span>جارٍ فحص السيرفر</small><b>—</b></div></div><div class="head-market"><span class="market-heading">♧ حالة السوق</span><span class="market-state" id="marketState">جارٍ التحقق</span></div></header><div id="huntPage" class="section-page"><section class="screen-title"><h1>أسهم التقسيم</h1><p>جميع أسهم التقسيم من مايو إلى ديسمبر 2026</p></section><section class="events"><div class="event-head"><span>◉ مركز الأحداث <small id="eventCount" class="event-count"></small></span><button id="eventToggle" type="button">عرض الكل ⌄</button></div><div id="eventsList" aria-live="polite"><div class="event-line">جارٍ تحميل الأحداث...</div></div></section><div class="summary" aria-label="إحصائيات قابلة للضغط"><button data-filter="all" type="button"><b id="countAll">—</b>جميع الأسهم</button><button data-filter="borrow" type="button"><b id="countBorrow">—</b>Available &lt;15K</button><button data-filter="ready" type="button"><b id="countReady">—</b>الجاهز</button><button data-filter="near" type="button"><b id="countNear">—</b>تحت الجاهزية</button></div><section class="server-strip"><div><small>حالة السيرفر</small><b id="serverConn">جارٍ الاتصال</b></div><div><small>آخر تحديث</small><b id="lastRefresh">—</b></div><div><small>التحديث القادم</small><b id="nextRefresh">—</b></div><button type="button" id="manualRefresh">↻</button></section><div class="browse-tools prototype-tools">
 <div class="search-row"><input id="query" class="search" type="search" placeholder="ابحث عن السهم أو الرمز..." aria-label="البحث عن سهم"><button type="button" id="approvedFilterOpen" class="approved-filter-btn">فلتر <span id="approvedFilterCount" class="filter-count" hidden>0</span></button></div><div class="sort-row"><select id="approvedSort" class="sort-clone" aria-label="الترتيب"><option value="readiness">الترتيب: درجة الجاهزية</option><option value="available">Available الأقل</option><option value="rsi">RSI الأقل</option><option value="distance">الأقرب للدعم</option></select><span class="view-chip">▦</span><span class="view-chip">☷</span></div>
 </div><div id="legacyCompat" hidden><span id="radarCount"></span>
