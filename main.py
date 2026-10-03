@@ -943,13 +943,13 @@ def _state_similarity(cur,hist):
 _AI_RISK_CACHE={}
 
 async def _ai_recent_capital_risk(symbol):
-    """Recent SEC capital-risk gate for Snipe AI only. Does not alter readiness."""
+    """Recent SEC hard-risk gate for Snipe AI only. Reads filing + exhibits."""
     cached=_AI_RISK_CACHE.get(symbol)
     if cached and time.time()-cached["at"]<21600:return cached["result"]
     result={"blocked":False,"events":[],"checked":False,"window_days":30}
     try:
         headers={"User-Agent":os.environ.get("SEC_USER_AGENT","SnipeLab research contact@snipelab.app")}
-        async with httpx.AsyncClient(timeout=9,follow_redirects=True,headers=headers) as client:
+        async with httpx.AsyncClient(timeout=10,follow_redirects=True,headers=headers) as client:
             tr=await client.get("https://www.sec.gov/files/company_tickers.json");tr.raise_for_status()
             row=next((v for v in tr.json().values() if str(v.get("ticker","")).upper()==symbol),None)
             if not row:
@@ -959,40 +959,70 @@ async def _ai_recent_capital_risk(symbol):
             recent=((sr.json().get("filings") or {}).get("recent") or {})
             forms=recent.get("form") or [];dates=recent.get("filingDate") or [];accs=recent.get("accessionNumber") or [];docs=recent.get("primaryDocument") or []
             cutoff=utcnow().date()-timedelta(days=30)
+            direct_forms={"S-1","S-1/A","F-1","F-1/A","S-3","S-3/A","F-3","F-3/A",
+                          "424B1","424B2","424B3","424B4","424B5","424B7","EFFECT","FWP"}
             candidates=[]
-            direct_forms={"S-1","S-1/A","F-1","F-1/A","424B3","424B4","424B5","EFFECT"}
             for i,form in enumerate(forms):
                 try:d=date.fromisoformat(str(dates[i])[:10])
                 except Exception:continue
-                if d<cutoff:continue
-                if form in direct_forms or form in {"8-K","8-K/A","6-K"}:
+                if d>=cutoff and (form in direct_forms or form in {"8-K","8-K/A","6-K"}):
                     candidates.append((i,form,d))
-            sem=asyncio.Semaphore(4)
+            async def filing_text(i,form):
+                if i>=len(accs) or not accs[i]:return ""
+                acc=str(accs[i]).replace("-","");base=f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/"
+                names=[]
+                if i<len(docs) and docs[i]:names.append(str(docs[i]))
+                # 8-K/6-K frequently put the actual offering announcement in EX-99,
+                # so inspect filing exhibits too instead of only the cover document.
+                if form in {"8-K","8-K/A","6-K"}:
+                    try:
+                        ir=await client.get(base+"index.json",timeout=7);ir.raise_for_status()
+                        items=((ir.json().get("directory") or {}).get("item") or [])
+                        extras=[str(x.get("name") or "") for x in items
+                                if str(x.get("name") or "").lower().endswith((".htm",".html",".txt"))
+                                and str(x.get("name") or "") not in names]
+                        names.extend(extras[:5])
+                    except Exception:pass
+                chunks=[]
+                for name in names[:6]:
+                    try:
+                        rr=await client.get(base+name,timeout=7);rr.raise_for_status()
+                        chunks.append(BeautifulSoup(rr.text,"html.parser").get_text(" ",strip=True))
+                    except Exception:pass
+                return " ".join(chunks).lower()[:900000]
             async def inspect(item):
                 i,form,d=item
-                low=""
-                if form in {"8-K","8-K/A","6-K"} and i<len(accs) and i<len(docs) and accs[i] and docs[i]:
-                    try:
-                        acc=str(accs[i]).replace("-","")
-                        rr=await client.get(f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{docs[i]}",timeout=8)
-                        rr.raise_for_status();low=BeautifulSoup(rr.text,"html.parser").get_text(" ",strip=True).lower()[:500000]
-                    except Exception:return None
-                offering=(form in direct_forms or any(k in low for k in (
+                low=await filing_text(i,form)
+                registration=form in {"S-1","S-1/A","F-1","F-1/A","S-3","S-3/A","F-3","F-3/A","EFFECT"}
+                prospectus=form.startswith("424B") or form=="FWP"
+                offering=prospectus or any(k in low for k in (
                     "registered direct offering","public offering","at-the-market offering","at the market offering",
-                    "sales agreement","securities purchase agreement","pricing of its offering","offering price")))
+                    "sales agreement","securities purchase agreement","pricing of its offering","offering price",
+                    "purchase and sale of","private placement"))
                 dilution=any(k in low for k in (
                     "unregistered sales of equity securities","item 3.02","agreed to issue","issuance of shares",
-                    "convertible note","convertible preferred","exercise of warrants"))
-                if not (offering or dilution):return None
-                kind="طرح / تمويل حديث" if offering else "تخفيف / إصدار أسهم حديث"
+                    "convertible note","convertible preferred","exercise of warrants","warrants to purchase"))
+                severe=any(k in low for k in (
+                    "substantial doubt about our ability to continue as a going concern",
+                    "nasdaq staff determination letter","delisting determination","bankruptcy petition"))
+                # A bare shelf registration is a warning, not enough by itself to block.
+                # A prospectus/offering, dilution transaction, or severe fresh filing is a hard block.
+                if not (offering or dilution or severe):return None
+                kind="طرح / تمويل حديث" if offering else "تخفيف / إصدار أسهم حديث" if dilution else "خطر جوهري حديث"
                 if "at-the-market" in low or "at the market offering" in low or "sales agreement" in low:kind="ATM حديث"
                 elif "registered direct" in low:kind="Registered Direct حديث"
+                elif "private placement" in low:kind="Private Placement حديث"
                 elif "warrant" in low and dilution:kind="Warrants / إصدار محتمل حديث"
+                elif severe:kind="إفصاح سلبي جوهري حديث"
                 return {"date":d.isoformat(),"form":form,"kind":kind}
-            found=[x for x in await asyncio.gather(*(inspect(x) for x in candidates[:18])) if x]
+            found=[]
+            # Sequential bounded SEC reads are intentionally conservative with SEC rate limits.
+            for item in candidates[:14]:
+                x=await inspect(item)
+                if x:found.append(x)
             found.sort(key=lambda x:x["date"],reverse=True)
             result.update({"checked":True,"events":found[:5],"blocked":bool(found),
-                "latest":found[0] if found else None,"source":"SEC EDGAR"})
+                "latest":found[0] if found else None,"source":"SEC EDGAR filing + exhibits"})
     except Exception as exc:
         result["reason"]="sec_check_"+type(exc).__name__
     _AI_RISK_CACHE[symbol]={"at":time.time(),"result":result}
