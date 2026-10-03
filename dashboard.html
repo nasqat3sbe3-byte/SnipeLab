@@ -721,6 +721,7 @@ body.black-gold .sl-ready{color:#bda879!important;background:transparent!importa
 body.black-gold .section-nav{background:rgba(17,18,20,.96)!important;border-color:#44351f!important}
 body.black-gold .section-nav button.active{background:linear-gradient(145deg,#2a2114,#17140f)!important;border-color:#74572a!important;color:#d9c39a!important}
 
+.sl-new{font-size:7px;font-weight:900;padding:2px 5px;border-radius:999px;background:#e9f0df;color:#61734e;border:1px solid #cbd8bb;white-space:nowrap}.sl-fav{border:0;background:transparent;padding:2px 3px;color:#a2aaa7;font-size:16px;line-height:1}.sl-fav.on{color:#b88a32}.sl-favorites-filter{border:1px solid #d8dfd6;border-radius:10px;background:#fff;color:#65716c;padding:0 9px;font-size:9px;font-weight:800;white-space:nowrap}.sl-favorites-filter.on{background:#eee6d4;color:#80652f;border-color:#d7c59f}body.black-gold .sl-new{background:#252015;color:#d5b56f;border-color:#554525}body.black-gold .sl-fav.on{color:#e0b85f}body.black-gold .sl-favorites-filter{background:#151515;color:#b9ad94;border-color:#403722}body.black-gold .sl-favorites-filter.on{background:#2a2114;color:#e0b85f;border-color:#74572a}
 .sl-metric b.avail-drop{color:#a56a22!important;font-size:7.7px!important;letter-spacing:-.15px!important}
 body.black-gold .sl-metric b.avail-drop{color:#e0b85f!important}
 /* === Final luxury micro-polish: depth, state rails, glass nav === */
@@ -810,7 +811,7 @@ body.black-gold .retest-waiting-strip{background:#1d1911!important;border-color:
 .retest-waiting-strip.on i{transform:rotate(180deg)}
 body.black-gold .retest-waiting-strip.on{background:#2a2114!important;border-color:#a57b37!important}
 </style></head><body><main class="shell"><header class="head split-luxe-head"><div class="head-primary"><div class="brand-wrap"><div class="brand"><span class="brand-mark">◎</span>SnipeLab</div></div><button type="button" id="themeToggle" class="theme-toggle">◐ Black Gold</button><div class="uptime offline" id="uptime"><small><span class="dot"></span>جارٍ فحص السيرفر</small><b>—</b></div></div><div class="head-market"><span class="market-heading">♧ حالة السوق</span><span class="market-state" id="marketState">جارٍ التحقق</span></div></header><div id="huntPage" class="section-page"><section class="screen-title split-luxe-title"><h1>أسهم التقسيم</h1><div class="split-luxe-meta"><span>مايو — ديسمبر 2026</span><span class="split-meta-sep">•</span><span id="heroUptime">● السيرفر شغال</span></div></section><section class="events split-home-events"><div class="event-head"><span>◉ مركز الأحداث <small id="eventCount" class="event-count"></small></span><button id="eventToggle" type="button">عرض الكل ⌄</button></div><div id="eventsList" aria-live="polite"><div class="event-line">جارٍ تحميل الأحداث...</div></div></section><div class="summary split-luxe-summary" aria-label="إحصائيات قابلة للضغط"><button data-filter="all" type="button"><span class="sum-icon">◎</span><b id="countAll">—</b><small>جميع الأسهم</small></button><button data-filter="borrow" type="button"><span class="sum-icon">○</span><b id="countBorrow">—</b><small>Available &lt;15K</small></button><button data-filter="ready" type="button"><span class="sum-icon">✓</span><b id="countReady">—</b><small>جاهز 100%</small></button><button data-filter="near" type="button"><span class="sum-icon">◇</span><b id="countNear">—</b><small>تحت الجاهزية</small></button></div><button id="retestWaitingStrip" type="button" class="retest-waiting-strip" hidden aria-label="عرض الأسهم المنتظرة لإعادة اختبار الدعم"><span>◉</span><b id="countRetestWaiting">0</b><small>أسهم مكتملة الشروط وتنتظر Retest</small><i>←</i></button><section class="server-strip"><div><small>حالة السيرفر</small><b id="serverConn">جارٍ الاتصال</b></div><div><small>آخر تحديث</small><b id="lastRefresh">—</b></div><div><small>التحديث القادم</small><b id="nextRefresh">—</b></div><button type="button" id="manualRefresh">↻</button></section><div class="browse-tools prototype-tools">
-<div class="search-row"><input id="query" class="search" type="search" placeholder="ابحث عن السهم أو الرمز..." aria-label="البحث عن سهم"><button type="button" id="approvedFilterOpen" class="approved-filter-btn">فلتر <span id="approvedFilterCount" class="filter-count" hidden>0</span><span id="filteredResultCount" class="filtered-result-count" hidden></span></button></div><div class="sort-row"><select id="approvedSort" class="sort-clone" aria-label="الترتيب"><option value="readiness">الترتيب: درجة الجاهزية</option><option value="available">Available الأقل</option><option value="rsi">RSI الأقل</option><option value="distance">الأقرب للدعم</option></select><span class="view-chip">▦</span><span class="view-chip">☷</span></div>
+<div class="search-row"><input id="query" class="search" type="search" placeholder="ابحث عن السهم أو الرمز..." aria-label="البحث عن سهم"><button type="button" id="slFavoritesFilter" class="sl-favorites-filter">☆ المفضلة</button><button type="button" id="approvedFilterOpen" class="approved-filter-btn">فلتر <span id="approvedFilterCount" class="filter-count" hidden>0</span><span id="filteredResultCount" class="filtered-result-count" hidden></span></button></div><div class="sort-row"><select id="approvedSort" class="sort-clone" aria-label="الترتيب"><option value="readiness">الترتيب: درجة الجاهزية</option><option value="available">Available الأقل</option><option value="rsi">RSI الأقل</option><option value="distance">الأقرب للدعم</option></select><span class="view-chip">▦</span><span class="view-chip">☷</span></div>
 </div><div id="legacyCompat" hidden><span id="radarCount"></span>
 <select id="premiumSort"><option value="readiness">الجاهزية</option><option value="available">Available</option><option value="rsi">RSI</option><option value="distance">distance</option></select>
 <input type="checkbox" id="useRsi"><select id="premiumRsi"><option value="30">30</option><option value="35">35</option><option value="40">40</option></select>
@@ -1256,6 +1257,17 @@ function slFlag(x){
  const flags={US:'🇺🇸',USA:'🇺🇸',CN:'🇨🇳',CHN:'🇨🇳',CA:'🇨🇦',CAN:'🇨🇦',IL:'🇮🇱',ISR:'🇮🇱',GB:'🇬🇧',UK:'🇬🇧',GBR:'🇬🇧',SG:'🇸🇬',SGP:'🇸🇬',HK:'🇭🇰',HKG:'🇭🇰',AU:'🇦🇺',AUS:'🇦🇺',DE:'🇩🇪',DEU:'🇩🇪',FR:'🇫🇷',FRA:'🇫🇷',NL:'🇳🇱',NLD:'🇳🇱',IE:'🇮🇪',IRL:'🇮🇪',TW:'🇹🇼',TWN:'🇹🇼',JP:'🇯🇵',JPN:'🇯🇵',KR:'🇰🇷',KOR:'🇰🇷',IN:'🇮🇳',IND:'🇮🇳',BR:'🇧🇷',BRA:'🇧🇷'};
  return flags[c]||'';
 }
+function slIsNew(x){
+ const raw=x.effective_date||x.split_date;
+ if(!raw)return false;
+ const d=new Date(String(raw).slice(0,10)+'T12:00:00Z');
+ if(Number.isNaN(d.getTime()))return false;
+ let sessions=0,cur=new Date(d),today=new Date();
+ cur.setUTCDate(cur.getUTCDate()+1);
+ while(cur<=today&&sessions<3){const day=cur.getUTCDay();if(day!==0&&day!==6)sessions++;cur.setUTCDate(cur.getUTCDate()+1)}
+ return sessions<2;
+}
+function slToggleFavorite(sym){if(favorites.has(sym))favorites.delete(sym);else favorites.add(sym);localStorage.setItem('snipelab-favorites',JSON.stringify([...favorites]));render();}
 function slDailyAvailableDrop(x){
  const h=Array.isArray(x.borrow_history)?x.borrow_history:[];
  const now=Date.now(),cut=now-24*60*60*1000;
@@ -1278,7 +1290,7 @@ card=function(x){
  const m=(label,value,cls='')=>'<div class="sl-metric"><small>'+esc(label)+'</small><b class="'+cls+'">'+esc(value)+'</b></div>';
  const stateCls=score>=100?'state-ready':score>=80?'state-near':'state-watch';
  return '<article class="sl-row '+stateCls+'" role="button" tabindex="0" aria-label="فتح تفاصيل '+esc(x.symbol)+'" data-symbol="'+esc(x.symbol)+'">'+
- '<div class="sl-mainline"><span class="sl-flag">'+slFlag(x)+'</span><span class="sl-symbol">'+esc(x.symbol)+'</span><span class="sl-price">'+esc(money(valid?price:null))+'</span><span class="sl-change '+changeCls+'">'+esc(changeTxt)+'</span></div>'+
+ '<div class="sl-mainline"><span class="sl-flag">'+slFlag(x)+'</span><span class="sl-symbol">'+esc(x.symbol)+'</span>'+(slIsNew(x)?'<span class="sl-new">جديد</span>':'')+'<button type="button" class="sl-fav '+(favorites.has(x.symbol)?'on':'')+'" data-sl-favorite="'+esc(x.symbol)+'" aria-label="المفضلة">'+(favorites.has(x.symbol)?'★':'☆')+'</button><span class="sl-price">'+esc(money(valid?price:null))+'</span><span class="sl-change '+changeCls+'">'+esc(changeTxt)+'</span></div>'+
  '<div class="sl-subline"><span class="sl-ready">جاهزية '+esc(pct(score))+'</span><span class="sl-stability">ثبات '+esc(stability)+'</span></div>'+
  '<div class="sl-metrics">'+
  m('Available',fmt(av)+(avDrop?' ⚡ '+fmt(avDrop.from)+'→'+fmt(avDrop.to)+' اليوم (-'+fmt(avDrop.drop)+')':''),avDrop?'avail-drop':av!=null&&Number(av)<10000?'good':'')+
@@ -1299,8 +1311,10 @@ $('approvedSort')?.addEventListener('change',e=>{premiumSort=e.target.value;$('p
 const savedTheme=localStorage.getItem('snipelab-theme')||'crystal';if(savedTheme==='black-gold')document.body.classList.add('black-gold');
 function slThemeLabel(){$('themeToggle').textContent=document.body.classList.contains('black-gold')?'◐ Crystal':'◐ Black Gold'}slThemeLabel();
 $('themeToggle').addEventListener('click',()=>{document.body.classList.toggle('black-gold');localStorage.setItem('snipelab-theme',document.body.classList.contains('black-gold')?'black-gold':'crystal');slThemeLabel()});
+$('slFavoritesFilter')?.addEventListener('click',()=>{selected=selected==='favorites'?'all':'favorites';limit=24;$('slFavoritesFilter').classList.toggle('on',selected==='favorites');render();visibleNews()});
 
 document.addEventListener('click',e=>{
+ const fav=e.target.closest('[data-sl-favorite]');if(fav){e.preventDefault();e.stopPropagation();slToggleFavorite(fav.dataset.slFavorite);return}
  const chart=e.target.closest('[data-room-chart]');if(chart){openChart(chart.dataset.roomChart);return}
  const archive=e.target.closest('[data-room-archive]');if(archive){const sym=archive.dataset.roomArchive;closeStockRoom();openSection('archive');$('archiveQuery').value=sym;$('archiveResult').innerHTML=archiveCard(sym);return}
  if(e.target.id==='roomBack'||e.target.closest('#roomBack')){closeStockRoom();return}
