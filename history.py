@@ -40,6 +40,20 @@ def calculate(effective, candles):
                      "top_10_low_date":low["date"],"top_10_high_date":peak["date"],
                      "top_10_sessions_since_peak":sessions_since_peak,
                      "top_10_source":source}
+    # Independent readiness quarantine metric. Do not depend on TOP status:
+    # any completed session in the latest ten with >=70% low-to-high blocks
+    # readiness lists for ten completed sessions after that peak session.
+    surge70=None
+    for i,b in enumerate(completed):
+        rise=(b["high"]/b["low"]-1)*100
+        if rise>=70:
+            since=len(completed)-1-i
+            if surge70 is None or since<surge70["surge70_sessions_since_peak"]:
+                surge70={"surge70_gain_pct":round(rise,2),
+                         "surge70_low":b["low"],"surge70_high":b["high"],
+                         "surge70_peak_date":b["date"],
+                         "surge70_sessions_since_peak":since,
+                         "surge70_verified":True}
     def wilder_rsi(closes, period=14):
         vals=[float(x) for x in closes if x is not None and float(x)>0]
         if len(vals)<period+1:return None
@@ -99,7 +113,7 @@ def calculate(effective, candles):
         "first_bar":first["date"],"bar_count":len(bars),
         "top_10_verified":bool(top and verified and top["top_10_gain_pct"]>=40),
         "top_calculated_at":datetime.now(timezone.utc).isoformat(),
-        "top_calculator_version":4,**(top or {}),
+        "top_calculator_version":5,**(top or {}),**(surge70 or {}),
         "updated_at":datetime.now(timezone.utc).isoformat()}
 
 def stability_from_bars(result, candles):
@@ -347,7 +361,7 @@ async def worker(universe,history,yahoo,save):
                 age=(datetime.now(timezone.utc).date()-
                      date.fromisoformat(meta["effective_date"])).days
                 return (h.get("effective_date")==meta["effective_date"]
-                        and (h.get("stability_sessions") is None or h.get("top_calculator_version",0)<4 or h.get("half_rule_version",0)<2 or h.get("rsi_rule_version",0)<3)
+                        and (h.get("stability_sessions") is None or h.get("top_calculator_version",0)<5 or h.get("half_rule_version",0)<2 or h.get("rsi_rule_version",0)<3)
                         and (bool(h.get("top_10_verified"))
                              or (h.get("top_10_gain_pct") or 0)>=40
                              or age<=90))
@@ -375,7 +389,7 @@ async def worker(universe,history,yahoo,save):
                 h=history.get(sym,{})
                 age=(datetime.now(timezone.utc).date()-date.fromisoformat(meta["effective_date"])).days
                 return (h.get("verified") and
-                        (h.get("stability_sessions") is None or h.get("top_calculator_version",0)<4) and
+                        (h.get("stability_sessions") is None or h.get("top_calculator_version",0)<5) and
                         (bool(h.get("top_10_verified"))
                          or (h.get("top_10_gain_pct") or 0)>=40
                          or age<=90))
