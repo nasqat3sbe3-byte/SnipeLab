@@ -444,10 +444,47 @@ body.black-gold .head .brand,body.black-gold .screen-title h1,body.black-gold .s
 body.black-gold .theme-toggle,body.black-gold .summary button,body.black-gold .server-strip,body.black-gold .search,body.black-gold .approved-filter-btn,body.black-gold .sort-clone,body.black-gold .stocks{background:#111214!important;border-color:#2d2b28!important;color:#d7c6a7!important}
 body.black-gold .stock.compact-stock{border-bottom-color:#292824!important}body.black-gold .stock.compact-stock:active{background:#171512!important}body.black-gold .ref-price .price,body.black-gold .compact-metrics .number strong{color:#eee5d5!important}body.black-gold .compact-metrics,body.black-gold .compact-metrics .number{border-color:#292824!important}body.black-gold .compact-metrics .number small{color:#8f8a82!important}body.black-gold .ref-ready{background:#191712!important;color:#d5ad65!important;border-color:#3a3122!important}body.black-gold .section-nav{background:#0d0e10f2!important;border-color:#292824!important}body.black-gold .section-nav button.on{color:#d9b46d!important}body.black-gold .sl-filter-sheet{background:#111214;color:#eee5d5}body.black-gold .sl-filter-head,body.black-gold .sl-filter-foot,body.black-gold .sl-filter-group{border-color:#292824}body.black-gold .sl-filter-head strong{color:#e0b86e}body.black-gold .sl-filter-options span{background:#171719;border-color:#323033;color:#aaa39a}body.black-gold .sl-filter-options input:checked+span,body.black-gold .sl-filter-foot .done{background:#c89f57;color:#100e0a;border-color:#c89f57}body.black-gold .sl-filter-foot button{background:#171719;color:#d8bd8a;border-color:#34302a}
 @media(max-width:440px){.compact-metrics{grid-template-columns:repeat(3,minmax(0,1fr))!important}.stock.compact-stock{padding:12px 10px!important}.screen-title h1{font-size:22px}.sl-filter-dialog{width:100%;margin:auto 0 0;max-width:none}.sl-filter-sheet{border-radius:20px 20px 0 0}}
+
+/* === FINAL approved Split Stocks presentation === */
+body:not(.black-gold){background:#f4f7fb!important;color:#172b49!important}
+#huntPage{background:transparent!important}
+#huntPage .sort-row{display:flex!important;margin:8px 0!important}
+#huntPage .sort-row .sort-clone{width:100%!important;height:42px!important;border-radius:11px!important;padding:0 12px!important}
+#huntPage .stocks{display:block!important;background:#fff!important;border:1px solid #dbe3ed!important;border-radius:15px!important;overflow:hidden!important;box-shadow:0 8px 24px rgba(20,48,82,.08)!important}
+#huntPage .sl-row{display:block!important;padding:13px 12px 11px!important;border:0!important;border-bottom:1px solid #e5eaf0!important;background:transparent!important}
+#huntPage .sl-row:last-child{border-bottom:0!important}
+.sl-mainline{display:flex!important;align-items:center!important;gap:8px!important;min-width:0!important}
+.sl-mainline .sl-flag{font-size:19px!important;line-height:1!important}
+.sl-mainline .sl-symbol{font:700 18px Arial,sans-serif!important;color:#183456!important;letter-spacing:.2px!important}
+.sl-mainline .sl-price{margin-right:auto!important;font-size:17px!important;font-weight:800!important;direction:ltr!important;color:#1b2f49!important}
+.sl-mainline .sl-change{font-size:12px!important;font-weight:800!important;direction:ltr!important;white-space:nowrap!important}
+.sl-mainline .sl-change.up{color:#15945f!important}.sl-mainline .sl-change.down{color:#d84d57!important}.sl-mainline .sl-change.flat{color:#8b96a5!important}
+.sl-subline{display:flex!important;align-items:center!important;gap:7px!important;margin-top:7px!important}
+.sl-ready{display:inline-flex!important;align-items:center!important;border:1px solid #cdd9e6!important;background:#f0f5fa!important;color:#173b69!important;border-radius:999px!important;padding:4px 8px!important;font-size:10px!important;font-weight:700!important;white-space:nowrap!important}
+.sl-stability{font-size:10px!important;color:#748397!important;white-space:nowrap!important}
+.sl-metrics{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;margin-top:9px!important;border-top:1px solid #edf1f5!important}
+.sl-metric{min-width:0!important;text-align:center!important;padding:7px 3px 1px!important;border-left:1px solid #edf1f5!important}
+.sl-metric:nth-child(3n){border-left:0!important}.sl-metric small{display:block!important;color:#8a96a5!important;font-size:9px!important;margin-bottom:3px!important;white-space:nowrap!important}.sl-metric b{display:block!important;color:#263d58!important;font-size:11px!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important}.sl-metric b.good{color:#158b5d!important}.sl-metric b.bad{color:#d34f59!important}
+#huntPage .summary button{box-shadow:none!important}
+#huntPage .approved-filter-btn{min-width:92px!important;font-size:13px!important}
+body.black-gold{background:#08090b!important;color:#eee6d8!important}
+body.black-gold #huntPage .stocks{background:#0e0f11!important;border-color:#2b2925!important;box-shadow:0 10px 28px #0008!important}
+body.black-gold #huntPage .sl-row{border-bottom-color:#292722!important;background:#0e0f11!important}
+body.black-gold .sl-mainline .sl-symbol,body.black-gold .sl-mainline .sl-price{color:#f0e6d4!important}
+body.black-gold .sl-ready{background:#1d1810!important;border-color:#49391f!important;color:#ddb86e!important}
+body.black-gold .sl-stability{color:#918a80!important}
+body.black-gold .sl-metrics{border-top-color:#292722!important}
+body.black-gold .sl-metric{border-left-color:#292722!important}
+body.black-gold .sl-metric small{color:#8e887f!important}
+body.black-gold .sl-metric b{color:#e8dfd0!important}
+body.black-gold #huntPage .summary button,body.black-gold #huntPage .server-strip,body.black-gold #huntPage .search,body.black-gold #huntPage .approved-filter-btn,body.black-gold #huntPage .sort-clone{background:#101113!important;border-color:#2c2a26!important;color:#d8c49f!important}
+body.black-gold #huntPage .summary button b{color:#dcb66c!important}
+body.black-gold .screen-title h1,body.black-gold .head .brand{color:#ddb76d!important}
+body.black-gold .screen-title p,body.black-gold .head .brand-sub{color:#8f8980!important}
+@media(max-width:420px){.sl-mainline{gap:6px!important}.sl-mainline .sl-symbol{font-size:17px!important}.sl-mainline .sl-price{font-size:16px!important}.sl-mainline .sl-change{font-size:11px!important}.sl-metric small{font-size:8px!important}.sl-metric b{font-size:10.5px!important}}
 </style></head><body><main class="shell"><header class="head"><div class="head-primary"><div class="brand-wrap"><div class="brand"><span class="brand-mark">◎</span>SnipeLab</div><div class="brand-sub">ماسح أسهم التقسيم العكسي</div></div><button type="button" id="themeToggle" class="theme-toggle">◐ Black Gold</button><div class="uptime offline" id="uptime"><small><span class="dot"></span>جارٍ فحص السيرفر</small><b>—</b></div></div><div class="head-market"><span class="market-heading">♧ حالة السوق</span><span class="market-state" id="marketState">جارٍ التحقق</span></div></header><div id="huntPage" class="section-page"><section class="screen-title"><h1>أسهم التقسيم</h1><p>جميع أسهم التقسيم من مايو إلى ديسمبر 2026</p></section><section class="events"><div class="event-head"><span>◉ مركز الأحداث <small id="eventCount" class="event-count"></small></span><button id="eventToggle" type="button">عرض الكل ⌄</button></div><div id="eventsList" aria-live="polite"><div class="event-line">جارٍ تحميل الأحداث...</div></div></section><div class="summary" aria-label="إحصائيات قابلة للضغط"><button data-filter="all" type="button"><b id="countAll">—</b>جميع الأسهم</button><button data-filter="borrow" type="button"><b id="countBorrow">—</b>Available &lt;15K</button><button data-filter="ready" type="button"><b id="countReady">—</b>الجاهز</button><button data-filter="near" type="button"><b id="countNear">—</b>تحت الجاهزية</button></div><section class="server-strip"><div><small>حالة السيرفر</small><b id="serverConn">جارٍ الاتصال</b></div><div><small>آخر تحديث</small><b id="lastRefresh">—</b></div><div><small>التحديث القادم</small><b id="nextRefresh">—</b></div><button type="button" id="manualRefresh">↻</button></section><div class="browse-tools prototype-tools">
-<div class="search-row"><input id="query" class="search" type="search" placeholder="ابحث عن السهم أو الرمز..." aria-label="البحث عن سهم"><button type="button" id="approvedFilterOpen" class="approved-filter-btn">فلتر <span id="approvedFilterCount" class="filter-count" hidden>0</span></button><details class="filter-panel"><summary>⚙ الفلاتر <span>3</span></summary><div class="filter-sheet"><div class="quick-filter-row"><select id="premiumSort"><option value="readiness">الجاهزية</option><option value="available">Available الأقل</option><option value="rsi">RSI الأقل</option><option value="distance">الأقرب للقاع</option></select><label><input type="checkbox" id="useRsi"> RSI</label><select id="premiumRsi"><option value="30">Under 30</option><option value="35">Under 35</option><option value="40">Under 40</option></select><label><input type="checkbox" id="useBorrow"> Available</label><select id="premiumBorrow"><option value="15000">Under 15K</option><option value="10000">Under 10K</option><option value="5000">Under 5K</option><option value="1000">1K or less</option></select><label><input type="checkbox" id="useDistance"> عن الدعم</label><select id="premiumDistance"><option value="10">≤ 10%</option><option value="15">≤ 15%</option><option value="25">≤ 25%</option><option value="30">≤ 30%</option></select><label><input type="checkbox" id="useStability"> الثبات 4/4</label><label><input type="checkbox" id="useOneMissing"> باقي شرط واحد</label><input type="checkbox" id="useAvailDrop" hidden><select id="premiumDrop" hidden><option value="0">أي نزول</option></select></div></div></details></div>
-<div class="sort-row"><select class="sort-clone" aria-label="الترتيب"><option>الترتيب: درجة الجاهزية</option></select><span class="view-chip">▦</span><span class="view-chip">☷</span></div>
-<div class="filters" role="group" aria-label="فلترة الأسهم"><button class="on" data-filter="all">الكل</button><button data-filter="ready">الجاهز</button><button data-filter="radar">الرادار <span id="radarCount"></span></button><button data-filter="favorites">☆ قنصي</button><details class="filter-more"><summary>•••</summary><div class="filter-more-menu"><button data-filter="near">تحت الجاهزية</button><button data-filter="borrow">Available &lt;15K</button><button data-filter="top">♛ توب</button><button type="button" id="labOpen">⚗ المختبر</button></div></details></div></div><div id="status" class="status">جارٍ تحميل بيانات الأسهم...</div><section id="stocks" class="stocks" aria-live="polite"></section></div><dialog id="approvedFilterDialog" class="sl-filter-dialog"><div class="sl-filter-sheet"><div class="sl-filter-head"><strong>فلتر أسهم التقسيم</strong><button type="button" id="approvedFilterClose">✕</button></div><div class="sl-filter-body">
+<div class="search-row"><input id="query" class="search" type="search" placeholder="ابحث عن السهم أو الرمز..." aria-label="البحث عن سهم"><button type="button" id="approvedFilterOpen" class="approved-filter-btn">فلتر <span id="approvedFilterCount" class="filter-count" hidden>0</span></button></div><div class="sort-row"><select class="sort-clone" aria-label="الترتيب"><option>الترتيب: درجة الجاهزية</option></select><span class="view-chip">▦</span><span class="view-chip">☷</span></div>
+</div><div id="status" class="status">جارٍ تحميل بيانات الأسهم...</div><section id="stocks" class="stocks" aria-live="polite"></section></div><dialog id="approvedFilterDialog" class="sl-filter-dialog"><div class="sl-filter-sheet"><div class="sl-filter-head"><strong>فلتر أسهم التقسيم</strong><button type="button" id="approvedFilterClose">✕</button></div><div class="sl-filter-body">
 <div class="sl-filter-group"><h4>RSI</h4><div class="sl-filter-options"><label><input type="checkbox" data-sl-filter="rsi" value="40"><span>≤ 40</span></label><label><input type="checkbox" data-sl-filter="rsi" value="35"><span>≤ 35</span></label><label><input type="checkbox" data-sl-filter="rsi" value="30"><span>≤ 30</span></label><label><input type="checkbox" data-sl-filter="rsi" value="25"><span>≤ 25</span></label><label><input type="checkbox" data-sl-filter="rsi" value="20"><span>≤ 20</span></label><label><input type="checkbox" data-sl-filter="rsi" value="15"><span>أقل من 15</span></label></div></div>
 <div class="sl-filter-group"><h4>Available</h4><div class="sl-filter-options"><label><input type="checkbox" data-sl-filter="available" value="40000"><span>< 40K</span></label><label><input type="checkbox" data-sl-filter="available" value="30000"><span>< 30K</span></label><label><input type="checkbox" data-sl-filter="available" value="25000"><span>< 25K</span></label><label><input type="checkbox" data-sl-filter="available" value="20000"><span>< 20K</span></label><label><input type="checkbox" data-sl-filter="available" value="15000"><span>< 15K</span></label><label><input type="checkbox" data-sl-filter="available" value="10000"><span>< 10K</span></label><label><input type="checkbox" data-sl-filter="available" value="0"><span>0 🔥</span></label></div></div>
 <div class="sl-filter-group"><h4>الثبات</h4><div class="sl-filter-options"><label><input type="checkbox" data-sl-filter="stability" value="2"><span>2/4</span></label><label><input type="checkbox" data-sl-filter="stability" value="3"><span>3/4</span></label><label><input type="checkbox" data-sl-filter="stability" value="4"><span>4/4</span></label></div></div>
@@ -836,18 +873,24 @@ function slApplyRows(list){
 const _slFiltered=filtered;filtered=function(){return slApplyRows(_slFiltered())};
 function slFlag(x){const c=String(x.country||x.country_code||'US').toUpperCase();return c==='CN'?'🇨🇳':c==='CA'?'🇨🇦':c==='IL'?'🇮🇱':c==='GB'||c==='UK'?'🇬🇧':c==='SG'?'🇸🇬':c==='HK'?'🇭🇰':'🇺🇸'}
 card=function(x){
- const av=x.b.available,low=x.history_verified?x.post_split_low:null;
+ const av=x.b?.available,low=x.history_verified?x.post_split_low:null,score=displayedReadiness(x);
  const sessions=x.history_verified&&x.stability_sessions!=null&&Number.isFinite(Number(x.stability_sessions))?Math.max(0,Math.floor(Number(x.stability_sessions))):null;
- const stability=sessions==null?'—/4':Math.min(sessions,4)+'/4',score=displayedReadiness(x);
- return '<article class="stock compact-stock '+(x.ready?'ready':'')+'" data-symbol="'+esc(x.symbol)+'">'+
- '<div class="ref-card-top"><div class="ref-id"><span class="country-flag">'+slFlag(x)+'</span><span class="sym">'+esc(x.symbol)+'</span></div>'+
- '<div class="ref-price">'+quoteDisplay(x.q,x.quote_freshness)+'</div>'+
- '<div class="ref-ready '+(x.ready?'is-ready':'')+'">جاهزية '+esc(pct(score))+' · ثبات '+esc(stability)+'</div></div>'+
- '<div class="numbers compact-numbers compact-metrics"><button type="button" class="number borrow-metric" data-action="borrow-history" data-symbol="'+esc(x.symbol)+'"><small>Available</small><strong class="'+(av!=null&&av<10000?'good':'')+'">'+esc(fmt(av))+'</strong></button>'+
- metric('RSI',fmt(x.rsi_daily),x.rsi_daily!=null&&x.rsi_daily<=30?'good':'')+
- metric('الدعم التاريخي',money(low))+
- metric('عن الدعم',x.history_verified?pct(x.effective_distance_pct??x.distance_from_low_pct):'—',x.effective_distance_pct!=null&&x.effective_distance_pct<=20?'good':'')+
- metric('CTB',pct(x.b.ctb))+metric('Rebate',pct(x.b.rebate),x.b.rebate<0?'bad':'good')+'</div></article>'
+ const stability=sessions==null?'—/4':Math.min(sessions,4)+'/4';
+ const price=Number(x.q?.price),prev=Number(x.q?.previous_close);
+ const valid=Number.isFinite(price)&&price>0,hasPrev=Number.isFinite(prev)&&prev>0;
+ const change=valid&&hasPrev?(price-prev)/prev*100:null,changeCls=change==null?'flat':change>0?'up':change<0?'down':'flat';
+ const changeTxt=change==null?'—':(change>0?'+':'')+change.toFixed(2)+'%';
+ const m=(label,value,cls='')=>'<div class="sl-metric"><small>'+esc(label)+'</small><b class="'+cls+'">'+esc(value)+'</b></div>';
+ return '<article class="sl-row" data-symbol="'+esc(x.symbol)+'">'+
+ '<div class="sl-mainline"><span class="sl-flag">'+slFlag(x)+'</span><span class="sl-symbol">'+esc(x.symbol)+'</span><span class="sl-price">'+esc(money(valid?price:null))+'</span><span class="sl-change '+changeCls+'">'+esc(changeTxt)+'</span></div>'+
+ '<div class="sl-subline"><span class="sl-ready">جاهزية '+esc(pct(score))+'</span><span class="sl-stability">ثبات '+esc(stability)+'</span></div>'+
+ '<div class="sl-metrics">'+
+ m('Available',fmt(av),av!=null&&Number(av)<10000?'good':'')+
+ m('RSI',fmt(x.rsi_daily),x.rsi_daily!=null&&Number(x.rsi_daily)<=30?'good':'')+
+ m('الدعم التاريخي',money(low))+
+ m('عن الدعم',x.history_verified?pct(x.effective_distance_pct??x.distance_from_low_pct):'—',x.effective_distance_pct!=null&&Number(x.effective_distance_pct)<=20?'good':'')+
+ m('CTB',pct(x.b?.ctb))+m('Rebate',pct(x.b?.rebate),Number(x.b?.rebate)<0?'bad':'good')+
+ '</div></article>'
 };
 function slFilterCount(){const n=document.querySelectorAll('[data-sl-filter]:checked').length,c=$('approvedFilterCount');c.textContent=n;c.hidden=!n}
 document.querySelectorAll('[data-sl-filter]').forEach(el=>el.addEventListener('change',slFilterCount));
