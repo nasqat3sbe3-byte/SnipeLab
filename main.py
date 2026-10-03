@@ -940,6 +940,64 @@ def _state_similarity(cur,hist):
         sim=max(0.0,1.0-abs(cur[k]-hist[k])/scales[k]);parts[k]=round(sim*100,1);score+=w*sim
     return score,parts
 
+_AI_RISK_CACHE={}
+
+async def _ai_recent_capital_risk(symbol):
+    """Recent SEC capital-risk gate for Snipe AI only. Does not alter readiness."""
+    cached=_AI_RISK_CACHE.get(symbol)
+    if cached and time.time()-cached["at"]<21600:return cached["result"]
+    result={"blocked":False,"events":[],"checked":False,"window_days":30}
+    try:
+        headers={"User-Agent":os.environ.get("SEC_USER_AGENT","SnipeLab research contact@snipelab.app")}
+        async with httpx.AsyncClient(timeout=9,follow_redirects=True,headers=headers) as client:
+            tr=await client.get("https://www.sec.gov/files/company_tickers.json");tr.raise_for_status()
+            row=next((v for v in tr.json().values() if str(v.get("ticker","")).upper()==symbol),None)
+            if not row:
+                result["reason"]="sec_cik_not_found";_AI_RISK_CACHE[symbol]={"at":time.time(),"result":result};return result
+            cik=int(row["cik_str"])
+            sr=await client.get(f"https://data.sec.gov/submissions/CIK{cik:010d}.json");sr.raise_for_status()
+            recent=((sr.json().get("filings") or {}).get("recent") or {})
+            forms=recent.get("form") or [];dates=recent.get("filingDate") or [];accs=recent.get("accessionNumber") or [];docs=recent.get("primaryDocument") or []
+            cutoff=utcnow().date()-timedelta(days=30)
+            candidates=[]
+            direct_forms={"S-1","S-1/A","F-1","F-1/A","424B3","424B4","424B5","EFFECT"}
+            for i,form in enumerate(forms):
+                try:d=date.fromisoformat(str(dates[i])[:10])
+                except Exception:continue
+                if d<cutoff:continue
+                if form in direct_forms or form in {"8-K","8-K/A","6-K"}:
+                    candidates.append((i,form,d))
+            sem=asyncio.Semaphore(4)
+            async def inspect(item):
+                i,form,d=item
+                low=""
+                if form in {"8-K","8-K/A","6-K"} and i<len(accs) and i<len(docs) and accs[i] and docs[i]:
+                    try:
+                        acc=str(accs[i]).replace("-","")
+                        rr=await client.get(f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{docs[i]}",timeout=8)
+                        rr.raise_for_status();low=BeautifulSoup(rr.text,"html.parser").get_text(" ",strip=True).lower()[:500000]
+                    except Exception:return None
+                offering=(form in direct_forms or any(k in low for k in (
+                    "registered direct offering","public offering","at-the-market offering","at the market offering",
+                    "sales agreement","securities purchase agreement","pricing of its offering","offering price")))
+                dilution=any(k in low for k in (
+                    "unregistered sales of equity securities","item 3.02","agreed to issue","issuance of shares",
+                    "convertible note","convertible preferred","exercise of warrants"))
+                if not (offering or dilution):return None
+                kind="طرح / تمويل حديث" if offering else "تخفيف / إصدار أسهم حديث"
+                if "at-the-market" in low or "at the market offering" in low or "sales agreement" in low:kind="ATM حديث"
+                elif "registered direct" in low:kind="Registered Direct حديث"
+                elif "warrant" in low and dilution:kind="Warrants / إصدار محتمل حديث"
+                return {"date":d.isoformat(),"form":form,"kind":kind}
+            found=[x for x in await asyncio.gather(*(inspect(x) for x in candidates[:18])) if x]
+            found.sort(key=lambda x:x["date"],reverse=True)
+            result.update({"checked":True,"events":found[:5],"blocked":bool(found),
+                "latest":found[0] if found else None,"source":"SEC EDGAR"})
+    except Exception as exc:
+        result["reason"]="sec_check_"+type(exc).__name__
+    _AI_RISK_CACHE[symbol]={"at":time.time(),"result":result}
+    return result
+
 @app.get("/api/ai-patterns")
 async def ai_patterns():
     """Top 5 current stocks matched to the closest real pre-100% historical state."""
@@ -988,9 +1046,21 @@ async def ai_patterns():
                 **cur,"reasons":reasons,"comparison":["لا توجد بعد حالة +100% موثقة كافية للمطابقة."],
                 "method":"provisional_rules","historical_match":None})
     picks.sort(key=lambda x:(x["method"]!="trajectory_similarity",-x["score"],x["available"],x["rsi"]))
+    # Capital-risk gate runs AFTER technical similarity and BEFORE Top 5.
+    # Scan a bounded shortlist so a blocked name is replaced by the next clean match.
+    shortlist=picks[:10]
+    risks=await asyncio.gather(*(_ai_recent_capital_risk(x["symbol"]) for x in shortlist))
+    clean=[];excluded=[]
+    for x,risk in zip(shortlist,risks):
+        x["capital_risk"]=risk
+        if risk.get("blocked"):
+            excluded.append({"symbol":x["symbol"],"reason":risk.get("latest"),"score_before_gate":x["score"]})
+        else:
+            clean.append(x)
     return {"generated_at":utcnow().isoformat(),"winner_samples":len(winners),
-        "method":"trajectory_similarity" if winners else "provisional_rules","picks":picks[:5],
-        "note":"المحرك يطابق كل سهم حالي مع أقرب لقطة فعلية داخل مسار سهم سجله SnipeLab قبل حركة +100% أو أكثر. Available وRSI والبعد عن الدعم والثبات هي أساس المطابقة، مع مكافأة صغيرة فقط لهبوط Available وتحقيق نصف القمة. لا تُنشأ نسبة تشابه تاريخية إذا لم توجد ذاكرة فائز حقيقية."}
+        "method":"trajectory_similarity" if winners else "provisional_rules","picks":clean[:5],
+        "excluded_recent_risk":excluded,"risk_gate":{"window_days":30,"source":"SEC EDGAR","rule":"recent offering/dilution blocks Top 5"},
+        "note":"المحرك يطابق كل سهم حالي مع أقرب لقطة فعلية داخل مسار سهم سجله SnipeLab قبل حركة +100% أو أكثر. Available وRSI والبعد عن الدعم والثبات ونصف القمة تدخل المطابقة؛ Retest لا يدخل Snipe AI. قبل Top 5 توجد بوابة SEC مستقلة تستبعد الطرح/التمويل/التخفيف الحديث خلال 30 يومًا. الأحداث الأقدم لا تمنع السهم تلقائيًا."}
 
 @app.get("/api/dashboard")
 async def dashboard_data():
