@@ -56,7 +56,6 @@ LIVE_RSI = {}
 BORROW_HISTORY = {}
 RADAR_MEMORY = {}
 SHORT_ANALYSIS = {}
-SPARKLINES = {}
 STATE_FILE = Path(os.environ.get("SNIPELAB_STATE_FILE","/tmp/snipelab_state.json"))
 _LAST_SAVE = 0.0
 
@@ -233,11 +232,6 @@ async def fetch_quote(client, sem, symbol):
                 if reference is not None and reference<=0: reference=None
                 return symbol,{"symbol":symbol,"price":p,"day_high":hi,"day_low":lo,
                     "previous_close":reference,
-                    "change_pct":round(((p-reference)/reference)*100,2) if reference else None,
-                    "exchange":meta.get("fullExchangeName") or meta.get("exchangeName"),
-                    "exchange_code":meta.get("exchangeName"),
-                    "currency":meta.get("currency"),
-                    "has_prepost":meta.get("hasPrePostMarketData"),
                     "market_timestamp":datetime.fromtimestamp(t,tz=timezone.utc).isoformat(),
                     "received_at":utcnow().isoformat(),"source":"yahoo_"+interval+("_prepost" if interval=="1m" else "_fallback")}
             except Exception:
@@ -287,28 +281,6 @@ async def live_daily_rsi_loop():
                 await asyncio.sleep(1)
             save_persistent_state()
             await asyncio.sleep(120)
-
-async def sparkline_loop():
-    """Low-priority real Yahoo mini-chart cache; isolated from the quote worker."""
-    await asyncio.sleep(45)
-    headers={"User-Agent":"Mozilla/5.0 SnipeLab/0.8"}
-    limits=httpx.Limits(max_connections=2,max_keepalive_connections=2)
-    async with httpx.AsyncClient(timeout=10,follow_redirects=True,headers=headers,limits=limits) as client:
-        while True:
-            for symbol in sorted(UNIVERSE):
-                try:
-                    r=await client.get(YAHOO.format(symbol=symbol),params={"range":"1d","interval":"15m","includePrePost":"true","events":"history"})
-                    r.raise_for_status()
-                    result=(r.json().get("chart",{}).get("result") or [None])[0]
-                    q=(((result or {}).get("indicators") or {}).get("quote") or [{}])[0]
-                    closes=q.get("close") or []
-                    pts=[round(float(v),6) for v in closes if v is not None and float(v)>0]
-                    if len(pts)>=2:
-                        SPARKLINES[symbol]=pts[-32:]
-                except Exception:
-                    pass
-                await asyncio.sleep(1)
-            await asyncio.sleep(300)
 
 async def delayed_market_start():
     await asyncio.sleep(5)
@@ -759,7 +731,7 @@ async def legacy_news_loop_disabled():
 @app.on_event("startup")
 async def startup():
     load_persistent_state()
-    asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(sparkline_loop()); asyncio.create_task(live_daily_rsi_loop()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(short_analysis_loop()); asyncio.create_task(finnhub_live_loop()); asyncio.create_task(halt_loop()); asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
+    asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(live_daily_rsi_loop()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(short_analysis_loop()); asyncio.create_task(finnhub_live_loop()); asyncio.create_task(halt_loop()); asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
 
 @app.get("/")
 async def root():
@@ -1059,7 +1031,7 @@ async def dashboard_data():
                 signal["live_day_rise_provisional"]=True
         except (KeyError,TypeError,ValueError,OverflowError,ZeroDivisionError):
             pass
-        rows[sym]={"symbol":sym,"company_name":meta.get("company") or meta.get("company_name") or meta.get("name") or (QUOTES.get(sym) or {}).get("short_name"),"effective_date":meta.get("effective_date"),"ratio":meta.get("ratio"),"exchange":q.get("exchange"),"exchange_code":q.get("exchange_code"),"currency":q.get("currency"),"sparkline":SPARKLINES.get(sym,[]),"price":QUOTES.get(sym),"borrow":BORROW.get(sym),"borrow_history":BORROW_HISTORY.get(sym,[])[-12:],"signal":signal}
+        rows[sym]={"symbol":sym,"company_name":meta.get("company_name") or meta.get("name") or (QUOTES.get(sym) or {}).get("short_name"),"effective_date":meta.get("effective_date"),"price":QUOTES.get(sym),"borrow":BORROW.get(sym),"borrow_history":BORROW_HISTORY.get(sym,[])[-12:],"signal":signal}
     relevant_kinds={"price_25","halt","available_10k","available_zero","ready"}
     important_events=[e for e in EVENTS if e.get("kind") in relevant_kinds]
     return {"server_time":utcnow().isoformat(),"uptime_seconds":int(time.time()-BOOTED_AT.timestamp()),"storage":storage.status(),"history_count":sum(bool(HISTORY.get(sym,{}).get("verified")) for sym in UNIVERSE),"history_pending":sum(1 for sym in UNIVERSE if not HISTORY.get(sym,{}).get("verified")),"health":{"ok":STATE.get("status")=="running","heartbeat":STATE.get("heartbeat"),"universe_count":len(UNIVERSE),"price_count":len(QUOTES),"borrow_count":len(BORROW),"analytics_count":len(ANALYTICS)},"rows":rows,"events":important_events[:40],"halts":HALTS,"news":NEWS}
