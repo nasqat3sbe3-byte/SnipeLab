@@ -1359,17 +1359,21 @@ async function runArchive(){
   const loading=$('deepArchiveLoading');if(loading)loading.textContent='تعذر إكمال النبش العميق الآن: '+e.message+' · بيانات الأرشيف السريعة بقيت ظاهرة.';
  }finally{btn.disabled=false}
 }
-async function runAiPatterns(){
+let aiPatternPoll=null,aiPatternLoading=false;
+async function runAiPatterns(silent=false){
+ if(aiPatternLoading)return;aiPatternLoading=true;clearTimeout(aiPatternPoll);
  const box=$('aiResult'),btn=$('aiPatternRun'),meta=$('aiPatternMeta');
- btn.disabled=true;box.className='research-empty';box.textContent='جارٍ مقارنة الأسهم الحالية بذاكرة SnipeLab التاريخية…';meta.innerHTML='';
+ btn.disabled=true;if(!silent){box.className='research-empty';box.textContent='جارٍ قراءة الاختيارات المحفوظة…';meta.innerHTML=''}
  try{
-  const r=await fetch('/api/ai-patterns',{cache:'no-store',signal:AbortSignal.timeout(45000)});
+  const r=await fetch('/api/ai-patterns',{cache:'no-store',signal:AbortSignal.timeout(12000)});
   if(!r.ok)throw Error('HTTP '+r.status);
   const j=await r.json();
   const picks=j.picks||[];
+  if(j.status==='screening'||(j.risk_pending||[]).length)aiPatternPoll=setTimeout(()=>{if(activeSection==='ai'&&!document.hidden)runAiPatterns(true)},15000);
   const historical=j.method==='trajectory_similarity';
   meta.innerHTML='<div class="ai-pattern-pill"><small>حالات +100% الموثقة</small><b>'+esc(j.winner_samples||0)+'</b></div><div class="ai-pattern-pill"><small>حالة المحرك</small><b>'+(historical?'تشابه تاريخي + فلتر مخاطر':'ذاكرة غير كافية')+'</b></div>'+(j.excluded_recent_risk?.length?'<div class="ai-risk-gate"><b>🛡️ استبعدنا '+esc(j.excluded_recent_risk.length)+' بسبب خطر حديث</b><small>'+j.excluded_recent_risk.map(x=>esc(x.symbol)+' · '+esc(x.reason?.kind||'تمويل/تخفيف حديث')+' '+esc(x.reason?.date||'')).join(' · ')+'</small></div>':'');
-  if(!picks.length){box.className='research-empty';box.textContent=(j.risk_pending||[]).length?'ماسح المخاطر الخلفي يجهز أعلى 50 سهم في الجاهزية؛ أعد المحاولة بعد قليل.':'ما عندنا مرشح نظيف كافٍ الآن.';return}
+  meta.insertAdjacentHTML('beforeend','<div class="ai-risk-gate"><b>فحص آخر 30 يومًا · SEC والأخبار المؤثرة</b><small>'+esc(j.risk_gate?.checked_count||0)+' اجتاز الفحص · '+esc((j.risk_pending||[]).length)+' قيد الفحص · تحديث تلقائي بالخلفية. لا يدخل السهم ناقص الفحص ضمن الاختيارات.</small></div>');
+  if(!picks.length){box.className='research-empty';box.textContent=j.status==='screening'?'الفحص يجري بالخلفية؛ تظهر الاختيارات تلقائيًا بعد اجتيازها الفحص، بدون إعادة المحاولة.':'لا يوجد الآن مرشح اجتاز فحص المخاطر المتاح.';return}
   box.className='ai-picks ai-picks-v2';
   box.innerHTML=picks.map((x,i)=>{
    const hist=x.historical_match||null;
@@ -1382,10 +1386,10 @@ async function runAiPatterns(){
    '<details class="ai-differences"><summary>أين يتشابهان ويختلفان؟</summary><div>'+(x.comparison||[]).map(v=>'<p>'+esc(v)+'</p>').join('')+'</div></details></article>';
   }).join('')+'<div class="ai-method-note">'+esc(j.note||'')+'</div>';
  }catch(e){box.className='research-empty';box.textContent='تعذر تشغيل المقارنة الآن: '+e.message}
- finally{btn.disabled=false}
+ finally{btn.disabled=false;aiPatternLoading=false}
 }
 $('archiveSearch').addEventListener('click',runArchive);$('archiveQuery').addEventListener('keydown',e=>{if(e.key==='Enter')runArchive()});
-$('aiPatternRun').addEventListener('click',runAiPatterns);
+$('aiPatternRun').addEventListener('click',()=>runAiPatterns());
 
 
 function marketState(){const parts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',weekday:'short',hour:'2-digit',minute:'2-digit',hour12:false}).formatToParts(new Date()).map(p=>[p.type,p.value]));const weekday=parts.weekday,mins=Number(parts.hour)*60+Number(parts.minute);const open=!['Sat','Sun'].includes(weekday)&&mins>=570&&mins<960;$('referenceMarket').textContent=open?'● ضمن ساعات التداول':'○ خارج ساعات التداول';$('marketState').textContent=open?'السوق الأمريكي: ضمن ساعات التداول':'السوق الأمريكي: خارج ساعات التداول (لا يشمل العطل)';}
