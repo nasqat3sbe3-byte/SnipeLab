@@ -950,7 +950,7 @@ async function runAiPatterns(){
  const box=$('aiResult'),btn=$('aiPatternRun'),meta=$('aiPatternMeta');
  btn.disabled=true;box.className='research-empty';box.textContent='جارٍ مقارنة الأسهم الحالية بذاكرة SnipeLab التاريخية…';meta.innerHTML='';
  try{
-  const r=await fetch('/api/ai-patterns',{cache:'no-store',signal:AbortSignal.timeout(20000)});
+  const r=await fetch('/api/ai-patterns',{cache:'no-store',signal:AbortSignal.timeout(45000)});
   if(!r.ok)throw Error('HTTP '+r.status);
   const j=await r.json(),picks=j.picks||[];
   const historical=j.method==='trajectory_similarity';
