@@ -11,6 +11,7 @@ import storage
 NY = ZoneInfo('America/New_York')
 CACHE = {}
 PRIORITY = {}
+OBSERVATIONS = {}
 WAKE = asyncio.Event()
 REFRESH_SECONDS = 21600
 
@@ -61,9 +62,9 @@ def aggregate_hourly(result, now=None):
     return candles
 
 def describe(candles, support, support_date, today=None):
-    """Supplementary observations only; never sets the readiness Retest signal."""
+    """Closed-candle Retest against unchanged core support; no core mutations."""
     today = today or datetime.now(NY).date().isoformat()
-    out = {'support': support, 'support_date': support_date, 'touch_tolerance_pct': .5,
+    out = {'support': support, 'support_date': support_date, 'touch_tolerance_pct': 5,
            'basis': '4h_available_extended_data', 'formation_time': None,
            'age_sessions': None, 'retest': {'status': 'unavailable'}}
     if not candles or not support or not support_date:
@@ -77,21 +78,65 @@ def describe(candles, support, support_date, today=None):
         out['formation_time'] = formed['local_time']
     later = [b for b in candles if b['closed'] and
              (b['time'] > formed['time'] if formed else b['date'] > support_date)]
-    hits = [b for b in later if b['low'] <= support * 1.005]
-    out['touch_count'] = len([b for b in hits if b['high'] >= support * .995])
-    if not later:
-        return out
-    if not hits:
-        out['retest'] = {'status': 'not_tested'}
-        return out
-    latest = hits[-1]
-    # A wick below support and a closed candle below it are different observations.
-    status = ('close_breach' if latest['close'] < support else
-              'wick_reclaim' if latest['low'] < support else 'touch_held')
-    out['retest'] = {'status': status, 'time': latest['local_time'], 'low': latest['low'],
-                     'close': latest['close'], 'extended': latest['extended'],
-                     'partial': latest['samples'] < 3, 'candle_time': latest['time']}
+    # Return must follow a completed candle that left the 5% support zone.
+    # A close below support invalidates success until the core support changes.
+    out['touch_tolerance_pct'] = 5
+    out['touch_count'] = 0
+    escaped = False
+    out['retest'] = {'status': 'not_tested'}
+    for bar in later:
+        if bar['close'] < support:
+            status = 'close_breach'
+        elif escaped and bar['low'] <= support * 1.05 and bar['high'] >= support:
+            status = 'wick_reclaim' if bar['low'] < support else 'touch_held'
+            out['touch_count'] += 1
+        else:
+            if bar['close'] > support * 1.05:
+                escaped = True
+            continue
+        out['retest'] = {'status': status, 'time': bar['local_time'], 'low': bar['low'],
+                         'close': bar['close'], 'extended': bar['extended'],
+                         'partial': bar['samples'] < 3, 'candle_time': bar['time']}
+        if status == 'close_breach':
+            break
+
     return out
+
+def observation(symbol, history):
+    """Memoized cache-only reading: no network, queueing or core writes."""
+    h = history.get(symbol) or {}
+    stored = CACHE.get(symbol) or {}
+    key = (stored.get('fetched_epoch'), stored.get('split_date'), h.get('effective_date'),
+           h.get('verified'), h.get('post_split_low'), h.get('post_split_low_date'),
+           datetime.now(NY).date().isoformat())
+    previous = OBSERVATIONS.get(symbol)
+    if previous and previous[0] == key:
+        return previous[1]
+    support = h.get('post_split_low') if h.get('verified') else None
+    try:
+        support = float(support)
+        if not math.isfinite(support) or support <= 0:
+            support = None
+    except (TypeError, ValueError):
+        support = None
+    bars = stored.get('candles') or []
+    if stored.get('split_date') != h.get('effective_date'):
+        bars = []
+    result = describe(bars, support, h.get('post_split_low_date'))
+    OBSERVATIONS[symbol] = (key, result)
+    return result
+
+def retest_signal(symbol, history):
+    details = observation(symbol, history)
+    result = details['retest']
+    status = result['status']
+    return {'support_retest_status': 'success' if status in ('touch_held', 'wick_reclaim') else
+            'failed' if status == 'close_breach' else 'waiting',
+            'support_retest_time': result.get('time'),
+            'support_retest_observation': status,
+            'support_retest_tolerance_pct': 5,
+            'support_retest_basis': 'closed_4h_extended',
+            'support_retest_updated_at': (CACHE.get(symbol) or {}).get('updated_at')}
 
 def get(symbol, history):
     h = history.get(symbol) or {}
@@ -117,7 +162,7 @@ def get(symbol, history):
             'refresh_error': stored.get('error'), 'stale': now - stored.get('fetched_epoch', 0) > REFRESH_SECONDS,
             'extended_observed': any(b.get('extended') for b in bars),
             'coverage_note': 'الشموع مبنية من بيانات الساعة المتاحة، بما فيها الساعات الممتدة التي يوفرها المصدر. بعض الفترات قد تكون ناقصة.',
-            'details': describe(bars, support, support_date),
+            'details': observation(symbol, history),
             'split_date': h.get('effective_date')}
 
 async def fetch(client, symbol, h):
