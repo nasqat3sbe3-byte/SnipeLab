@@ -736,7 +736,7 @@ async def legacy_news_loop_disabled():
 @app.on_event("startup")
 async def startup():
     load_persistent_state()
-    asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(live_daily_rsi_loop()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(short_analysis_loop()); asyncio.create_task(finnhub_live_loop()); asyncio.create_task(finnhub_country_loop()); asyncio.create_task(fmp_float_loop()); asyncio.create_task(halt_loop()); asyncio.create_task(ai_risk_background_loop()); asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
+    asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(live_daily_rsi_loop()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(short_analysis_loop()); asyncio.create_task(finnhub_live_loop()); asyncio.create_task(finnhub_country_loop()); asyncio.create_task(massive_float_loop()); asyncio.create_task(halt_loop()); asyncio.create_task(ai_risk_background_loop()); asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
 
 @app.get("/")
 async def root():
@@ -1145,7 +1145,7 @@ async def ai_patterns():
 
 @app.get("/api/fundamentals-status")
 async def fundamentals_status():
-    return {"market_cap_count":sum((v or {}).get("market_cap") is not None for v in FUNDAMENTALS.values()),"free_float_count":sum((v or {}).get("free_float") is not None for v in FUNDAMENTALS.values()),"tracked":len(FUNDAMENTALS),"fmp":{k:v for k,v in FUNDAMENTALS_STATUS.items() if k.startswith("fmp")}}
+    return {"market_cap_count":sum((v or {}).get("market_cap") is not None for v in FUNDAMENTALS.values()),"free_float_count":sum((v or {}).get("free_float") is not None for v in FUNDAMENTALS.values()),"tracked":len(FUNDAMENTALS),"massive":{k:v for k,v in FUNDAMENTALS_STATUS.items() if k.startswith("massive")}}
 
 @app.get("/api/dashboard")
 async def dashboard_data():
@@ -1531,58 +1531,58 @@ def select_finnhub_live_symbols():
     hot=[sym for pct,sym in sorted(hot,reverse=True)[:15]]
     return ready,hot,ready+hot
 
-async def fmp_float_loop():
-    """Fetch FMP-reported share float in the background; never derive float locally."""
+async def massive_float_loop():
+    """Fetch provider-reported free float from Massive in the background."""
     await asyncio.sleep(95)
-    token=os.environ.get("FMP_API_KEY","").strip()
+    token=os.environ.get("MASSIVE_API_KEY","").strip()
     if not token:
-        FUNDAMENTALS_STATUS.update(fmp="disabled",fmp_last_error="FMP_API_KEY missing")
+        FUNDAMENTALS_STATUS.update(massive="disabled",massive_last_error="MASSIVE_API_KEY missing")
         return
-    FUNDAMENTALS_STATUS.update(fmp="running",fmp_last_error=None)
+    FUNDAMENTALS_STATUS.update(massive="running",massive_last_error=None)
     while True:
         changed=False
         try:
             async with httpx.AsyncClient(timeout=12,follow_redirects=True) as client:
                 for sym in list(UNIVERSE):
                     cached=FUNDAMENTALS.get(sym) or {}
-                    stamp=cached.get("free_float_checked_at")
-                    if stamp:
+                    if cached.get("free_float_source")=="massive_float" and cached.get("free_float_checked_at"):
                         try:
-                            if (utcnow()-datetime.fromisoformat(stamp)).total_seconds()<86400:continue
+                            if (utcnow()-datetime.fromisoformat(cached["free_float_checked_at"])).total_seconds()<86400:continue
                         except (TypeError,ValueError):pass
                     try:
-                        r=await client.get("https://financialmodelingprep.com/stable/shares-float",
-                            params={"symbol":sym,"apikey":token})
+                        r=await client.get("https://api.massive.com/stocks/vX/float",
+                            params={"ticker":sym},headers={"Authorization":f"Bearer {token}"})
                         if r.status_code==429:
-                            FUNDAMENTALS_STATUS.update(fmp="rate_limited",fmp_last_error="HTTP 429",fmp_last_scan=utcnow().isoformat())
+                            FUNDAMENTALS_STATUS.update(massive="rate_limited",massive_last_error="HTTP 429",massive_last_scan=utcnow().isoformat(),massive_last_symbol=sym)
                             await asyncio.sleep(65);break
                         if r.status_code in (401,402,403):
-                            FUNDAMENTALS[sym]={**cached,"free_float_checked_at":utcnow().isoformat(),
-                                "free_float_error":"FMP plan/key does not allow shares-float"}
-                            FUNDAMENTALS_STATUS.update(fmp="plan_blocked",fmp_last_error="HTTP "+str(r.status_code),fmp_last_scan=utcnow().isoformat())
-                            changed=True
+                            FUNDAMENTALS_STATUS.update(massive="access_error",massive_last_error="HTTP "+str(r.status_code),massive_last_scan=utcnow().isoformat(),massive_last_symbol=sym)
                             break
                         r.raise_for_status()
-                        payload=r.json() if r.content else []
-                        row=(payload[0] if isinstance(payload,list) and payload else payload) or {}
-                        try:float_shares=float(row.get("floatShares"))
+                        payload=r.json() if r.content else {}
+                        results=payload.get("results") if isinstance(payload,dict) else None
+                        row=(results[0] if isinstance(results,list) and results else results) or {}
+                        raw=row.get("free_float")
+                        if raw is None:raw=row.get("freeFloat")
+                        if raw is None:raw=row.get("float")
+                        if raw is None:raw=row.get("float_shares")
+                        if raw is None:raw=row.get("floatShares")
+                        try:float_shares=float(raw)
                         except (TypeError,ValueError):float_shares=None
-                        try:free_float_pct=float(row.get("freeFloat"))
-                        except (TypeError,ValueError):free_float_pct=None
                         FUNDAMENTALS[sym]={**cached,
                             "free_float":float_shares,
-                            "free_float_pct":free_float_pct,
-                            "free_float_source":"fmp_shares_float" if float_shares is not None else None,
+                            "free_float_source":"massive_float" if float_shares is not None else None,
                             "free_float_checked_at":utcnow().isoformat()}
-                        FUNDAMENTALS_STATUS.update(fmp="working" if float_shares is not None else "no_data",fmp_last_error=None,fmp_last_scan=utcnow().isoformat(),fmp_last_symbol=sym,fmp_http_status=r.status_code)
+                        FUNDAMENTALS_STATUS.update(massive="working" if float_shares is not None else "no_data",massive_last_error=None,massive_last_scan=utcnow().isoformat(),massive_last_symbol=sym,massive_http_status=r.status_code)
                         changed=True
                     except Exception as exc:
-                        FUNDAMENTALS_STATUS.update(fmp="error",fmp_last_error=f"{type(exc).__name__}: {str(exc)[:160]}",fmp_last_scan=utcnow().isoformat(),fmp_last_symbol=sym)
+                        FUNDAMENTALS_STATUS.update(massive="error",massive_last_error=f"{type(exc).__name__}: {str(exc)[:160]}",massive_last_scan=utcnow().isoformat(),massive_last_symbol=sym)
                     await asyncio.sleep(1.1)
             if changed:save_persistent_state(force=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            FUNDAMENTALS_STATUS.update(massive="error",massive_last_error=f"{type(exc).__name__}: {str(exc)[:160]}",massive_last_scan=utcnow().isoformat())
         await asyncio.sleep(21600)
+
 
 async def finnhub_country_loop():
     """Finnhub is used here only to resolve issuer country for UI flags."""
