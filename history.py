@@ -383,11 +383,13 @@ async def worker(universe,history,yahoo,save):
             # whose TOP metrics predate the current calculator. Process recent
             # TOP-missing splits before other historical refreshes.
             todo.sort(key=lambda item:(
+                # Calculator migrations must run before ordinary refreshes.
+                not needs_top_migration(item[0],item[1]),
                 not top_recalc_due(item[0],item[1]),
                 -(history.get(item[0],{}).get("top_10_gain_pct") or 0)
                     if top_recalc_due(item[0],item[1]) else 0,
                 -date.fromisoformat(item[1]["effective_date"]).toordinal()
-                    if top_recalc_due(item[0],item[1]) else 0,
+                    if (needs_top_migration(item[0],item[1]) or top_recalc_due(item[0],item[1])) else 0,
                 complete(history.get(item[0],{}),item[1]),
                 history.get(item[0],{}).get("attempted_at","")))
             for sym,meta in todo[:16]:
