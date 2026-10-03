@@ -1193,7 +1193,8 @@ card=function(x){
  const change=valid&&hasPrev?(price-prev)/prev*100:null,changeCls=change==null?'flat':change>0?'up':change<0?'down':'flat';
  const changeTxt=change==null?'—':(change>0?'+':'')+change.toFixed(2)+'%';
  const m=(label,value,cls='')=>'<div class="sl-metric"><small>'+esc(label)+'</small><b class="'+cls+'">'+esc(value)+'</b></div>';
- const stateCls=score>=100?'state-ready':score>=80?'state-near':'state-watch';\n return '<article class="sl-row '+stateCls+'" role="button" tabindex="0" aria-label="فتح تفاصيل '+esc(x.symbol)+'" data-symbol="'+esc(x.symbol)+'">'+
+ const stateCls=score>=100?'state-ready':score>=80?'state-near':'state-watch';
+ return '<article class="sl-row '+stateCls+'" role="button" tabindex="0" aria-label="فتح تفاصيل '+esc(x.symbol)+'" data-symbol="'+esc(x.symbol)+'">'+
  '<div class="sl-mainline"><span class="sl-flag">'+slFlag(x)+'</span><span class="sl-symbol">'+esc(x.symbol)+'</span><span class="sl-price">'+esc(money(valid?price:null))+'</span><span class="sl-change '+changeCls+'">'+esc(changeTxt)+'</span></div>'+
  '<div class="sl-subline"><span class="sl-ready">جاهزية '+esc(pct(score))+'</span><span class="sl-stability">ثبات '+esc(stability)+'</span></div>'+
  '<div class="sl-metrics">'+
