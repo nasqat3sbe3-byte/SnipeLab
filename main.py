@@ -1086,7 +1086,9 @@ async def ai_patterns():
     # Never make the mobile request wait on SEC. Only cached risk results may
     # affect this response; uncached names are returned as pending and refreshed
     # asynchronously for the next run.
-    shortlist=picks[:10]
+    # Return a ranked candidate pool. The UI verifies candidates one by one
+    # against SEC and keeps walking down this list until five clean names pass.
+    shortlist=picks[:25]
     clean=[];excluded=[];pending=[]
     now=time.time()
     for x in shortlist:
@@ -1099,11 +1101,10 @@ async def ai_patterns():
             excluded.append({"symbol":x["symbol"],"reason":risk.get("latest"),"score_before_gate":x["score"]})
         else:
             clean.append(x)
-        if len(clean)>=5:break
-    for sym in pending:
+    for sym in pending[:10]:
         asyncio.create_task(_ai_recent_capital_risk(sym))
     return {"generated_at":utcnow().isoformat(),"winner_samples":len(winners),
-        "method":"trajectory_similarity" if winners else "provisional_rules","picks":clean[:5],
+        "method":"trajectory_similarity" if winners else "provisional_rules","picks":clean[:25],
         "excluded_recent_risk":excluded,"risk_pending":pending,"risk_gate":{"window_days":30,"source":"SEC EDGAR","rule":"recent offering/dilution blocks Top 5","mode":"background_cache"},
         "note":"المحرك يطابق كل سهم حالي مع أقرب لقطة فعلية داخل مسار سهم سجله SnipeLab قبل حركة +100% أو أكثر. Available وRSI والبعد عن الدعم والثبات ونصف القمة تدخل المطابقة؛ Retest لا يدخل Snipe AI. قبل Top 5 توجد بوابة SEC مستقلة تستبعد الطرح/التمويل/التخفيف الحديث خلال 30 يومًا. الأحداث الأقدم لا تمنع السهم تلقائيًا."}
 
