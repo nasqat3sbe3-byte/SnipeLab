@@ -1314,8 +1314,8 @@ card=function(x){
  m('RSI',fmt(x.rsi_daily),x.rsi_daily!=null&&Number(x.rsi_daily)<=30?'good':'')+
  m('الدعم التاريخي',money(low))+
  m('عن الدعم',x.history_verified?pct(x.effective_distance_pct??x.distance_from_low_pct):'—',x.effective_distance_pct!=null&&Number(x.effective_distance_pct)<=20?'good':'')+
- m('Market Cap',x.market_cap!=null?fmt(x.market_cap):'—')+
- m('Free Float',x.free_float!=null?fmt(x.free_float):'—')+
+
+
  m('CTB',pct(x.b?.ctb))+m('Rebate',pct(x.b?.rebate),Number(x.b?.rebate)<0?'bad':'good')+
  '</div></article>'
 };
