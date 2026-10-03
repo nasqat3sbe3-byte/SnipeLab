@@ -545,6 +545,39 @@ body.black-gold .server-strip>div{border-left-color:#2d2a25!important}
  #stocks>.empty{min-height:90px!important;display:grid!important;place-items:center!important;border:0!important;color:#718096!important;background:transparent!important;font-size:11px!important}
  #stocks>.empty button{border:1px solid #cbd7e4!important;background:#fff!important;color:#173b69!important;border-radius:9px!important;padding:8px 12px!important}
 }
+
+/* === Approved compact reference direction: summary tiles + one continuous stock strip === */
+@media(max-width:600px){
+ .screen-title{padding:4px 0 7px!important}
+ .summary{gap:4px!important;margin:3px 0 6px!important}
+ .summary button{height:48px!important;min-height:48px!important;border-radius:9px!important;padding:4px 2px!important;background:#fff!important;box-shadow:0 3px 12px rgba(19,55,91,.045)!important}
+ .summary b{font-size:15px!important;margin-bottom:2px!important}
+ .summary span,.summary small{font-size:7.5px!important}
+ .summary button.selected{background:#fffaf0!important;border-color:#e8c77f!important;color:#173b69!important}
+ .summary button.selected b{color:#b98625!important}
+ .server-strip{min-height:48px!important;border-radius:10px!important;padding:4px!important}
+ .search-row{height:38px!important}.search{height:38px!important}.approved-filter-btn{height:38px!important}
+ #huntPage .sort-row .sort-clone{height:35px!important}
+ #huntPage .stocks{display:block!important;border:1px solid #dce5ee!important;border-radius:11px!important;background:#fff!important;overflow:hidden!important;margin-top:5px!important;box-shadow:0 5px 18px rgba(22,51,82,.045)!important}
+ #huntPage .sl-row{display:block!important;margin:0!important;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important;padding:8px 8px 7px!important}
+ #huntPage .sl-row+.sl-row{border-top:1px solid #e5ebf1!important}
+ .sl-mainline{display:flex!important;align-items:center!important;gap:5px!important;min-width:0!important}
+ .sl-mainline .sl-flag{order:1!important;font-size:14px!important}
+ .sl-mainline .sl-symbol{order:2!important;font-size:14px!important;line-height:1!important}
+ .sl-mainline .sl-price{order:3!important;margin-inline-start:auto!important;font-size:14px!important;line-height:1!important}
+ .sl-mainline .sl-change{order:4!important;font-size:9px!important;line-height:1!important}
+ .sl-subline{display:flex!important;justify-content:flex-end!important;align-items:center!important;gap:5px!important;margin:3px 0 0!important}
+ .sl-ready{font-size:8px!important;padding:2px 6px!important;border-radius:7px!important}
+ .sl-stability{font-size:8px!important}
+ .sl-metrics{display:grid!important;grid-template-columns:repeat(6,minmax(0,1fr))!important;margin-top:5px!important;border-top:1px solid #edf1f5!important}
+ .sl-metric{min-width:0!important;padding:4px 1px 1px!important;border-inline-start:1px solid #edf1f5!important;text-align:center!important}
+ .sl-metric:first-child{border-inline-start:0!important}
+ .sl-metric small{display:block!important;font-size:6.5px!important;line-height:1.15!important;white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important;margin:0 0 2px!important}
+ .sl-metric b{display:block!important;font-size:8.5px!important;line-height:1.15!important;white-space:nowrap!important}
+}
+body.black-gold .summary button,body.black-gold #huntPage .stocks{background:#111214!important;border-color:#2d2a25!important}
+body.black-gold .summary button.selected{background:#1b160e!important;border-color:#8d6b31!important}
+body.black-gold #huntPage .sl-row+.sl-row,body.black-gold .sl-metrics,body.black-gold .sl-metric{border-color:#2a2926!important}
 </style></head><body><main class="shell"><header class="head"><div class="head-primary"><div class="brand-wrap"><div class="brand"><span class="brand-mark">◎</span>SnipeLab</div><div class="brand-sub">ماسح أسهم التقسيم العكسي</div></div><button type="button" id="themeToggle" class="theme-toggle">◐ Black Gold</button><div class="uptime offline" id="uptime"><small><span class="dot"></span>جارٍ فحص السيرفر</small><b>—</b></div></div><div class="head-market"><span class="market-heading">♧ حالة السوق</span><span class="market-state" id="marketState">جارٍ التحقق</span></div></header><div id="huntPage" class="section-page"><section class="screen-title"><h1>أسهم التقسيم</h1><p>جميع أسهم التقسيم من مايو إلى ديسمبر 2026</p></section><section class="events"><div class="event-head"><span>◉ مركز الأحداث <small id="eventCount" class="event-count"></small></span><button id="eventToggle" type="button">عرض الكل ⌄</button></div><div id="eventsList" aria-live="polite"><div class="event-line">جارٍ تحميل الأحداث...</div></div></section><div class="summary" aria-label="إحصائيات قابلة للضغط"><button data-filter="all" type="button"><b id="countAll">—</b>جميع الأسهم</button><button data-filter="borrow" type="button"><b id="countBorrow">—</b>Available &lt;15K</button><button data-filter="ready" type="button"><b id="countReady">—</b>الجاهز</button><button data-filter="near" type="button"><b id="countNear">—</b>تحت الجاهزية</button></div><section class="server-strip"><div><small>حالة السيرفر</small><b id="serverConn">جارٍ الاتصال</b></div><div><small>آخر تحديث</small><b id="lastRefresh">—</b></div><div><small>التحديث القادم</small><b id="nextRefresh">—</b></div><button type="button" id="manualRefresh">↻</button></section><div class="browse-tools prototype-tools">
 <div class="search-row"><input id="query" class="search" type="search" placeholder="ابحث عن السهم أو الرمز..." aria-label="البحث عن سهم"><button type="button" id="approvedFilterOpen" class="approved-filter-btn">فلتر <span id="approvedFilterCount" class="filter-count" hidden>0</span></button></div><div class="sort-row"><select id="approvedSort" class="sort-clone" aria-label="الترتيب"><option value="readiness">الترتيب: درجة الجاهزية</option><option value="available">Available الأقل</option><option value="rsi">RSI الأقل</option><option value="distance">الأقرب للدعم</option></select><span class="view-chip">▦</span><span class="view-chip">☷</span></div>
 </div><div id="legacyCompat" hidden><span id="radarCount"></span>
