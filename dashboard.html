@@ -721,6 +721,8 @@ body.black-gold .sl-ready{color:#bda879!important;background:transparent!importa
 body.black-gold .section-nav{background:rgba(17,18,20,.96)!important;border-color:#44351f!important}
 body.black-gold .section-nav button.active{background:linear-gradient(145deg,#2a2114,#17140f)!important;border-color:#74572a!important;color:#d9c39a!important}
 
+.sl-metric b.avail-drop{color:#a56a22!important;font-size:7.7px!important;letter-spacing:-.15px!important}
+body.black-gold .sl-metric b.avail-drop{color:#e0b85f!important}
 /* === Final luxury micro-polish: depth, state rails, glass nav === */
 body:not(.black-gold){background:radial-gradient(circle at 84% 8%,rgba(218,230,215,.42),transparent 28%),radial-gradient(circle at 12% 45%,rgba(231,220,198,.25),transparent 30%),linear-gradient(180deg,#f8f6f0 0%,#f5f5ef 58%,#f1f4ef 100%)!important}
 body:not(.black-gold) .shell{background:linear-gradient(180deg,rgba(250,249,244,.78),rgba(246,247,242,.88))!important}
@@ -1254,8 +1256,19 @@ function slFlag(x){
  const flags={US:'🇺🇸',USA:'🇺🇸',CN:'🇨🇳',CHN:'🇨🇳',CA:'🇨🇦',CAN:'🇨🇦',IL:'🇮🇱',ISR:'🇮🇱',GB:'🇬🇧',UK:'🇬🇧',GBR:'🇬🇧',SG:'🇸🇬',SGP:'🇸🇬',HK:'🇭🇰',HKG:'🇭🇰',AU:'🇦🇺',AUS:'🇦🇺',DE:'🇩🇪',DEU:'🇩🇪',FR:'🇫🇷',FRA:'🇫🇷',NL:'🇳🇱',NLD:'🇳🇱',IE:'🇮🇪',IRL:'🇮🇪',TW:'🇹🇼',TWN:'🇹🇼',JP:'🇯🇵',JPN:'🇯🇵',KR:'🇰🇷',KOR:'🇰🇷',IN:'🇮🇳',IND:'🇮🇳',BR:'🇧🇷',BRA:'🇧🇷'};
  return flags[c]||'';
 }
+function slDailyAvailableDrop(x){
+ const h=Array.isArray(x.borrow_history)?x.borrow_history:[];
+ const now=Date.now(),cut=now-24*60*60*1000;
+ const pts=h.map(s=>({v:Number(s?.available),t:Date.parse(s?.received_at||s?.at||s?.timestamp||'')})).filter(p=>Number.isFinite(p.v)&&Number.isFinite(p.t)&&p.t>=cut&&p.t<=now).sort((a,b)=>a.t-b.t);
+ if(pts.length<2)return null;
+ const cur=pts[pts.length-1].v,peak=Math.max(...pts.slice(0,-1).map(p=>p.v));
+ if(!(peak>cur)||peak<=0)return null;
+ const drop=peak-cur,pct=drop/peak*100;
+ if(drop<30000&&pct<50)return null;
+ return {from:peak,to:cur,drop,pct};
+}
 card=function(x){
- const av=x.b?.available,low=x.history_verified?x.post_split_low:null,score=displayedReadiness(x);
+ const av=x.b?.available,low=x.history_verified?x.post_split_low:null,score=displayedReadiness(x),avDrop=slDailyAvailableDrop(x);
  const sessions=x.history_verified&&x.stability_sessions!=null&&Number.isFinite(Number(x.stability_sessions))?Math.max(0,Math.floor(Number(x.stability_sessions))):null;
  const stability=sessions==null?'—/4':Math.min(sessions,4)+'/4';
  const price=Number(x.q?.price),prev=Number(x.q?.previous_close);
@@ -1268,7 +1281,7 @@ card=function(x){
  '<div class="sl-mainline"><span class="sl-flag">'+slFlag(x)+'</span><span class="sl-symbol">'+esc(x.symbol)+'</span><span class="sl-price">'+esc(money(valid?price:null))+'</span><span class="sl-change '+changeCls+'">'+esc(changeTxt)+'</span></div>'+
  '<div class="sl-subline"><span class="sl-ready">جاهزية '+esc(pct(score))+'</span><span class="sl-stability">ثبات '+esc(stability)+'</span></div>'+
  '<div class="sl-metrics">'+
- m('Available',fmt(av),av!=null&&Number(av)<10000?'good':'')+
+ m('Available',fmt(av)+(avDrop?' ⚡ '+fmt(avDrop.from)+'→'+fmt(avDrop.to)+' اليوم (-'+fmt(avDrop.drop)+')':''),avDrop?'avail-drop':av!=null&&Number(av)<10000?'good':'')+
  m('RSI',fmt(x.rsi_daily),x.rsi_daily!=null&&Number(x.rsi_daily)<=30?'good':'')+
  m('الدعم التاريخي',money(low))+
  m('عن الدعم',x.history_verified?pct(x.effective_distance_pct??x.distance_from_low_pct):'—',x.effective_distance_pct!=null&&Number(x.effective_distance_pct)<=20?'good':'')+
