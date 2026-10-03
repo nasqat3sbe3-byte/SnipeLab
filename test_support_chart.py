@@ -31,12 +31,57 @@ class SupportChartTests(unittest.TestCase):
             return {'time': t, 'date': day, 'local_time': day+' 16:00', 'low': low, 'high': 2,
                     'open': 1.6, 'close': close, 'closed': closed, 'samples': 4, 'extended': True}
         formed = bar(1, '2026-10-01', 1.4, 1.5)
-        wick = bar(2, '2026-10-02', 1.3, 1.45)
-        self.assertEqual(chart.describe([formed, wick], 1.4, '2026-10-01')['retest']['status'], 'wick_reclaim')
+        rise = bar(2, '2026-10-01', 1.5, 1.6)
+        wick = bar(3, '2026-10-02', 1.3, 1.45)
+        self.assertEqual(chart.describe([formed, rise, wick], 1.4, '2026-10-01')['retest']['status'], 'wick_reclaim')
         broken = bar(3, '2026-10-02', 1.2, 1.3)
-        self.assertEqual(chart.describe([formed, wick, broken], 1.4, '2026-10-01')['retest']['status'], 'close_breach')
+        self.assertEqual(chart.describe([formed, rise, wick, broken], 1.4, '2026-10-01')['retest']['status'], 'close_breach')
         live = bar(4, '2026-10-03', 1.1, 1.2, False)
-        self.assertEqual(chart.describe([formed, wick, live], 1.4, '2026-10-01')['retest']['status'], 'wick_reclaim')
+        self.assertEqual(chart.describe([formed, rise, wick, live], 1.4, '2026-10-01')['retest']['status'], 'wick_reclaim')
+
+    def test_five_percent_retest_requires_prior_escape_and_closed_return(self):
+        def bar(t, low, close, closed=True):
+            return {'time': t, 'date': '2026-10-01', 'local_time': f'2026-10-01 {t:02}:00',
+                    'low': low, 'high': max(close, low, 1.07), 'open': close,
+                    'close': close, 'closed': closed, 'samples': 4, 'extended': True}
+        formed = bar(1, 1, 1.01)
+        near = bar(2, 1.03, 1.04)
+        rise = bar(3, 1.02, 1.10)
+        returned = bar(4, 1.05, 1.06)
+        def retest(bars, support=1, date='2026-10-01'):
+            return chart.describe(bars, support, date)['retest']
+        self.assertEqual(retest([formed, near])['status'], 'not_tested')
+        self.assertEqual(retest([formed, rise])['status'], 'not_tested')
+        self.assertEqual(retest([formed, rise, bar(4,1.0501,1.06)])['status'], 'not_tested')
+        self.assertEqual(retest([formed, rise, bar(4,1.04,1.06,False)])['status'], 'not_tested')
+        success = retest([formed, rise, returned])
+        self.assertEqual(success['status'], 'touch_held')
+        self.assertEqual(success['time'], returned['local_time'])
+        self.assertEqual(retest([formed,rise,returned,bar(5,.99,.995)])['status'], 'close_breach')
+        self.assertEqual(retest([formed,rise,returned],.95,'2026-10-02')['status'], 'not_tested')
+
+    def test_signal_uses_cache_only_and_resets_when_support_changes(self):
+        sym = 'RETEST_FIXTURE'
+        h = {sym: {'verified': True,'effective_date':'2026-09-01',
+                   'post_split_low': 1,'post_split_low_date':'2026-10-01'}}
+        def bar(t, low, close):
+            return {'time':t,'date':'2026-10-01','local_time':f'2026-10-01 {t:02}:00',
+                    'low':low,'high':1.2,'close':close,'closed':True,'samples':4,'extended':True}
+        chart.CACHE[sym] = {'split_date':'2026-09-01','fetched_epoch':1,
+                            'candles':[bar(1,1,1.02),bar(2,1.08,1.1),bar(3,1.04,1.06)]}
+        original = copy.deepcopy(h)
+        try:
+            self.assertEqual(chart.retest_signal(sym,h)['support_retest_status'],'success')
+            self.assertEqual(h,original)
+            self.assertNotIn(sym,chart.PRIORITY)
+            h[sym]['post_split_low'] = .95
+            h[sym]['post_split_low_date'] = '2026-10-02'
+            self.assertEqual(chart.retest_signal(sym,h)['support_retest_status'],'waiting')
+            h[sym]['effective_date'] = '2026-10-03'
+            self.assertEqual(chart.retest_signal(sym,h)['support_retest_status'],'waiting')
+        finally:
+            chart.CACHE.pop(sym,None)
+            chart.OBSERVATIONS.pop(sym,None)
 
     def test_cached_response_never_changes_core_history(self):
         h = {'ABC': {'verified': True, 'effective_date': '2026-09-01', 'post_split_low': 1.4, 'post_split_low_date': '2026-10-01'}}
