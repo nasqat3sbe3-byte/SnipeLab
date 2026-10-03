@@ -951,15 +951,15 @@ async function runAiPatterns(){
  try{
   const r=await fetch('/api/ai-patterns',{cache:'no-store',signal:AbortSignal.timeout(8000)});
   if(!r.ok)throw Error('HTTP '+r.status);
-  const j=await r.json(),picks=j.picks||[],examples=j.winner_examples||[];
-  const historical=j.method==='historical_similarity';
+  const j=await r.json(),picks=j.picks||[];
+  const historical=j.method==='trajectory_similarity';
   meta.innerHTML='<div class="ai-pattern-pill"><small>حالات +100% الموثقة</small><b>'+esc(j.winner_samples||0)+'</b></div><div class="ai-pattern-pill"><small>حالة المحرك</small><b>'+(historical?'تشابه تاريخي':'ذاكرة غير كافية')+'</b></div>';
   if(!picks.length){box.className='research-empty';box.textContent='ما عندنا بيانات كافية لإخراج اختيارات الآن.';return}
   box.className='ai-picks ai-picks-v2';
   box.innerHTML=picks.map((x,i)=>{
-   const hist=historical&&examples.length?examples[i%examples.length]:null;
+   const hist=x.historical_match||null;
    const stage=[Number(x.available)<15000,Number(x.rsi)<=35,Number(x.distance_pct)<=25,Number(x.sessions)>=2].filter(Boolean).length;
-   const after=hist?'<div class="ai-history-outcome"><small>ماذا حدث بعدها تاريخيًا؟</small><b>'+esc(hist.symbol)+' سجل +'+esc(fmt(hist.gain_pct))+'%</b></div>':'<div class="ai-history-outcome pending"><small>المقارنة التاريخية</small><b>تحتاج عينات +100% إضافية قبل ربطه بحالة بعينها</b></div>';
+   const after=hist?'<div class="ai-history-outcome"><small>أقرب حالة تاريخية فعلية</small><b>'+esc(hist.symbol)+' · سجل بعدها +'+esc(fmt(hist.gain_pct))+'% · نقطة المسار '+esc(hist.path_position)+'/'+esc(hist.path_states)+'</b></div>':'<div class="ai-history-outcome pending"><small>المقارنة التاريخية</small><b>تحتاج عينات +100% إضافية قبل ربطه بحالة بعينها</b></div>';
    return '<article class="ai-pick ai-pick-v2"><div class="ai-rank">'+(i+1)+'</div><div class="ai-pick-top"><div><div class="ai-pick-symbol">'+esc(x.symbol)+'</div><small>'+esc(money(x.price))+'</small></div><span class="ai-match">'+(historical?esc(fmt(x.score))+'% تشابه':'ترتيب مؤقت')+'</span></div>'+
    '<div class="ai-stage"><div><span style="width:'+Math.min(100,stage/4*100)+'%"></span></div><b>مرحلة النمط '+stage+'/4</b></div>'+
    '<div class="ai-pick-grid"><div><small>Available</small><b>'+esc(fmt(x.available))+'</b></div><div><small>RSI</small><b>'+esc(fmt(x.rsi))+'</b></div><div><small>عن الدعم</small><b>'+esc(fmt(x.distance_pct))+'%</b></div><div><small>الثبات</small><b>'+esc(x.sessions)+'/4</b></div></div>'+
