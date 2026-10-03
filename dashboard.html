@@ -1015,8 +1015,13 @@ function conditionState(x){
  if(retest==='waiting')missing.push('إعادة اختبار الدعم');
  return {missing,av,rsi,dist,sessions,retest,retestFailed:retest==='failed'};
 }
+function recentTenSessionSurge70(x){
+ const gain=Number(x.top_10_gain_pct);
+ const since=Number(x.top_10_sessions_since_peak);
+ return x.top_10_verified===true&&Number.isFinite(gain)&&gain>=70&&Number.isFinite(since)&&since>=0&&since<10;
+}
 function radarCandidate(x){
- if(isTop(x)||x.ready||!x.history_verified)return false;
+ if(recentTenSessionSurge70(x)||isTop(x)||x.ready||!x.history_verified)return false;
  const c=conditionState(x);
  return !!c&&!c.retestFailed&&c.missing.length>=1&&c.missing.length<=2&&c.av<=20000&&c.rsi<=40&&c.dist<=35;
 }
@@ -1055,7 +1060,7 @@ function availableTrend(x){const h=Array.isArray(x.borrow_history)?x.borrow_hist
 function savePreset(){const p={rsi:$('useRsi')?.checked?$('premiumRsi').value:null,borrow:$('useBorrow')?.checked?$('premiumBorrow').value:null,distance:$('useDistance')?.checked?$('premiumDistance').value:null,stability:!!$('useStability')?.checked,one:!!$('useOneMissing')?.checked,drop:$('useAvailDrop')?.checked?$('premiumDrop').value:null,sort:premiumSort};localStorage.setItem('snipelab-filter-preset',JSON.stringify(p))}
 function loadPreset(){try{const p=JSON.parse(localStorage.getItem('snipelab-filter-preset')||'null');if(!p)return;if(p.rsi){$('useRsi').checked=true;$('premiumRsi').value=p.rsi}if(p.borrow){$('useBorrow').checked=true;$('premiumBorrow').value=p.borrow}if(p.distance){$('useDistance').checked=true;$('premiumDistance').value=p.distance}$('useStability').checked=!!p.stability;$('useOneMissing').checked=!!p.one;if(p.drop!=null){$('useAvailDrop').checked=true;$('premiumDrop').value=p.drop}if(p.sort){premiumSort=p.sort;$('premiumSort').value=p.sort}}catch(e){}}
 function filtered(){let a=rows(),q=$('query').value.trim().toUpperCase();if(q)a=a.filter(x=>x.symbol.toUpperCase().includes(q)||String(x.company_name||x.name||'').toUpperCase().includes(q));if(selected==='ready')a=a.filter(x=>{
-  if(!x.history_verified)return false;
+  if(recentTenSessionSurge70(x)||!x.history_verified)return false;
   if(x.ready&&conditionState(x)?.missing.length===0)return true;
   const av=x.b.available==null?NaN:Number(x.b.available);
   const rsi=x.rsi_daily==null?NaN:Number(x.rsi_daily);
@@ -1068,7 +1073,7 @@ function filtered(){let a=rows(),q=$('query').value.trim().toUpperCase();if(q)a=
     &&x.half_reached===true
     &&Number.isFinite(sessions)&&sessions>=0
     &&Number.isFinite(dist)&&dist>=0&&dist<=30;
-});if(selected==='retest')a=a.filter(x=>displayedReadiness(x)===90&&conditionState(x)?.retest==='waiting');if(selected==='near')a=a.filter(x=>!isTop(x)&&x.near_ready&&x.history_verified&&!x.ready);if(selected==='borrow')a=a.filter(x=>x.b.available!=null&&x.b.available<15000);if(selected==='top')a=a.filter(isTop);if(selected==='radar')a=a.filter(radarCandidate);if(selected==='favorites')a=a.filter(x=>favorites.has(x.symbol));if($('useRsi')?.checked){const cap=Number($('premiumRsi').value);a=a.filter(x=>x.rsi_daily!=null&&Number(x.rsi_daily)<cap)}if($('useBorrow')?.checked){const cap=Number($('premiumBorrow').value);a=a.filter(x=>x.b.available!=null&&Number(x.b.available)<cap)}if($('useDistance')?.checked){const cap=Number($('premiumDistance').value);a=a.filter(x=>x.effective_distance_pct!=null&&Number(x.effective_distance_pct)<=cap)}if($('useStability')?.checked)a=a.filter(x=>Number(x.stability_sessions)>=4);if($('useOneMissing')?.checked)a=a.filter(x=>conditionState(x)?.missing.length===1);if($('useAvailDrop')?.checked){const min=Number($('premiumDrop').value);a=a.filter(x=>{const t=availableTrend(x);return t&&t.pct>0&&t.pct>=min})}a.sort((x,y)=>{if(selected==='all'){const av=z=>z.b.available==null?Infinity:Number(z.b.available),rr=z=>z.rsi_daily==null?Infinity:Number(z.rsi_daily),dd=z=>z.effective_distance_pct==null?Infinity:Number(z.effective_distance_pct);if(premiumSort==='available')return av(x)-av(y)||x.symbol.localeCompare(y.symbol);if(premiumSort==='rsi')return rr(x)-rr(y)||x.symbol.localeCompare(y.symbol);if(premiumSort==='distance')return dd(x)-dd(y)||x.symbol.localeCompare(y.symbol);}
+});if(selected==='retest')a=a.filter(x=>displayedReadiness(x)===90&&conditionState(x)?.retest==='waiting');if(selected==='near')a=a.filter(x=>!recentTenSessionSurge70(x)&&!isTop(x)&&x.near_ready&&x.history_verified&&!x.ready);if(selected==='borrow')a=a.filter(x=>x.b.available!=null&&x.b.available<15000);if(selected==='top')a=a.filter(isTop);if(selected==='radar')a=a.filter(radarCandidate);if(selected==='favorites')a=a.filter(x=>favorites.has(x.symbol));if($('useRsi')?.checked){const cap=Number($('premiumRsi').value);a=a.filter(x=>x.rsi_daily!=null&&Number(x.rsi_daily)<cap)}if($('useBorrow')?.checked){const cap=Number($('premiumBorrow').value);a=a.filter(x=>x.b.available!=null&&Number(x.b.available)<cap)}if($('useDistance')?.checked){const cap=Number($('premiumDistance').value);a=a.filter(x=>x.effective_distance_pct!=null&&Number(x.effective_distance_pct)<=cap)}if($('useStability')?.checked)a=a.filter(x=>Number(x.stability_sessions)>=4);if($('useOneMissing')?.checked)a=a.filter(x=>conditionState(x)?.missing.length===1);if($('useAvailDrop')?.checked){const min=Number($('premiumDrop').value);a=a.filter(x=>{const t=availableTrend(x);return t&&t.pct>0&&t.pct>=min})}a.sort((x,y)=>{if(selected==='all'){const av=z=>z.b.available==null?Infinity:Number(z.b.available),rr=z=>z.rsi_daily==null?Infinity:Number(z.rsi_daily),dd=z=>z.effective_distance_pct==null?Infinity:Number(z.effective_distance_pct);if(premiumSort==='available')return av(x)-av(y)||x.symbol.localeCompare(y.symbol);if(premiumSort==='rsi')return rr(x)-rr(y)||x.symbol.localeCompare(y.symbol);if(premiumSort==='distance')return dd(x)-dd(y)||x.symbol.localeCompare(y.symbol);}
   if(selected==='top')return topStats(y).gain-topStats(x).gain;
   if(selected==='radar'){
     const cx=conditionState(x),cy=conditionState(y);
