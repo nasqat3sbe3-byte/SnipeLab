@@ -135,6 +135,35 @@ class CalendarTests(unittest.TestCase):
     def test_half_near_not_completed_until_touched(self):
         r=self.row(4);r['signal'].update(half_reached=False,half_level=1.8)
         v=evaluate(r);self.assertEqual(v['state'],'waiting');self.assertIsNone(v['completed_at'])
+    def test_ready_membership_matches_fallback_and_tracks_exit(self):
+        from opportunities import ready_list_status
+        r=self.row(4);r['signal'].update(support_retest_status='waiting',effective_distance_pct=29)
+        self.assertTrue(ready_list_status(r)[0])
+        r['signal']['effective_distance_pct']=31
+        self.assertFalse(ready_list_status(r)[0])
+        r['signal']['effective_distance_pct']=11
+        now=datetime(2026,10,4,14,tzinfo=timezone.utc);v=evaluate(r,now=now)
+        self.assertTrue(v['ready_current']);self.assertEqual(v['ready_entered_at'],now.isoformat())
+        r['signal']['rsi_daily']=36
+        out=evaluate(r,v,now)
+        self.assertFalse(out['ready_current']);self.assertIn('RSI عند 35 أو أقل',out['ready_missing'])
+        self.assertEqual(out['ready_changes'][-1]['kind'],'exited')
+    def test_stale_reading_cannot_record_ready_transition(self):
+        r=self.row(4);now=datetime(2026,10,4,14,tzinfo=timezone.utc);v=evaluate(r,now=now)
+        r['signal'].update(rsi_daily=60,quote_freshness={'status':'missing'})
+        out=evaluate(r,v,now)
+        self.assertFalse(out['ready_data_current']);self.assertEqual(out['ready_changes'],v['ready_changes'])
+    def test_completion_snapshot_and_current_gain_separate(self):
+        import opportunities as o
+        r=self.row(4);now=datetime(2026,10,4,14,tzinfo=timezone.utc);v=evaluate(r,now=now)
+        r['price']['price']=2.1;r['signal']['effective_distance_pct']=16.7
+        updated=evaluate(r,v,now);old=o.ROWS.copy()
+        try:
+            o.ROWS.clear();o.ROWS['AAA']=updated
+            c=o.payload()['completed'][0]
+            self.assertEqual(c['price'],2);self.assertEqual(c['current_price'],2.1)
+            self.assertEqual(c['change_since_completion_pct'],5);self.assertTrue(c['held_low'])
+        finally:o.ROWS.clear();o.ROWS.update(old)
     def test_today_changes_and_break(self):
         import opportunities as o
         now=datetime(2026,10,4,14,tzinfo=timezone.utc);r=self.row(3)

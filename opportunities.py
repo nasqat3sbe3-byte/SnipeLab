@@ -63,6 +63,27 @@ def usable_reading(freshness, now):
         return stamp.date()>=last and stamp<=local
     except (KeyError,TypeError,ValueError):return False
 
+def ready_list_status(row):
+    """Mirror dashboard.html readyListCandidate, including its fallback gate."""
+    s=row.get('signal') or {};b=row.get('borrow') or {}
+    av=number(b.get('available'));rsi=number(s.get('rsi_daily'))
+    dist=number(s.get('effective_distance_pct'));sessions=number(s.get('stability_sessions'))
+    missing=[]
+    if not s.get('history_verified'):missing.append('بيانات القاع غير مؤكدة')
+    if av is None:missing.append('قراءة Available غير متوفرة')
+    elif av>=15000:missing.append('Available أقل من 15 ألف')
+    if rsi is None:missing.append('قراءة RSI غير متوفرة')
+    elif rsi>35:missing.append('RSI عند 35 أو أقل')
+    if s.get('half_reached') is not True:missing.append('لمس نصف القمة')
+    if sessions is None or sessions<2:missing.append('الثبات جلستين على الأقل')
+    # Main list explicitly admits its near-low fallback up to 30%.
+    if dist is None or not 0<=dist<=30:missing.append('البعد عن القاع 30% أو أقل')
+    for prefix in ('surge70','top_10'):
+        gain=number(s.get(prefix+'_gain_pct'));since=number(s.get(prefix+'_sessions_since_peak'))
+        if s.get(prefix+'_verified') and gain is not None and gain>=70 and since is not None and 0<=since<10:
+            missing.append('انتهاء متابعة حركة +70%');break
+    return not missing,missing
+
 def evaluate(row,previous=None,now=None):
     now=now or datetime.now(timezone.utc);today=now.astimezone(NY).date()
     previous=previous or {};s=row.get('signal') or {};q=row.get('price') or {};b=row.get('borrow') or {}
@@ -150,12 +171,22 @@ def evaluate(row,previous=None,now=None):
     if last_change:
         old,new=last_change.get('old_date'),last_change.get('new_date')
         change_kind='تأجل' if old and new and new>old else 'تقدّم' if old and new and new<old else 'عُلّق الموعد' if old and not new else 'حُدد الموعد' if new and not old else 'تغيّرت الحالة'
+    list_ready,list_missing=ready_list_status(row)
+    last_ready=previous.get('ready_current')
+    ready_changes=list(previous.get('ready_changes') or [])
+    entered_at=previous.get('ready_entered_at');exited_at=previous.get('ready_exited_at')
+    if fresh and (last_ready is None or list_ready!=last_ready):
+        if list_ready:entered_at=now.isoformat()
+        elif last_ready is True:exited_at=now.isoformat()
+        if list_ready or last_ready is True:
+            ready_changes.append({'at':now.isoformat(),'kind':'entered' if list_ready else 'exited','reason':'دخل الأجهز' if list_ready else 'خرج من الأجهز: '+ '، '.join(list_missing)})
+    current_ready=list_ready if fresh else last_ready
     completions=list(previous.get('completions') or [])
     completed_at=previous.get('completed_at') if previous.get('completed_low_date')==(anchor.isoformat() if anchor else None) else None
     if state=='ready' and not completed_at:
         completed_at=now.isoformat()
         completions.append({'symbol':row['symbol'],'company':row.get('company_name'),'price':q.get('price'),'available':av,'support':support,'sessions':sessions,'low_date':anchor.isoformat(),'completed_at':completed_at,'expected_date':expected})
-    return {'completions':completions[-50:],'completed_at':completed_at,'completed_low_date':anchor.isoformat() if completed_at else None,'half_near':half_near,'near_low':near_low,'half_met':half_met,'recent_move':recent_move,'recent_gain_pct':gain,'sessions_since_peak':since,'active':active,'low_date':anchor.isoformat() if anchor else None,'stage':stage,'next_goal':next_goal,'early_date':early_date,'early_state':early_state,'retest_status':s.get('support_retest_status'),'plan':plan,'invalidators':invalidators,'retest_zone':{'low':support,'high':round(support*1.05,6)} if support is not None and support>0 else None,'borrow_read_at':(s.get('borrow_freshness') or {}).get('timestamp'),'using_last_session':fresh and any((s.get(k) or {}).get('status')!='fresh' for k in ('quote_freshness','borrow_freshness')),'next_review_date':review_date(now),'support_distance_pct':dist,'waiting_label':waiting_label,'data_issue':data_issue,'last_change':last_change,'change_kind':change_kind,'symbol':row['symbol'],'company':row.get('company_name'),'price':q.get('price'),'available':av,'rsi':rsi,'support':support,'sessions':sessions,'target_sessions':target,'remaining_sessions':remaining,'expected_date':expected,'state':state,'reason':reason,'missing':missing,'history':events[-20:],'rescheduled':changed or bool(previous.get('rescheduled')),'added_at':previous.get('added_at') or now.isoformat(),'reviewed_at':now.isoformat(),'four_session_date':advance(date.fromisoformat(expected),max(0,4-max(target,sessions))).isoformat() if expected else None}
+    return {'ready_current':current_ready,'ready_observed_at':now.isoformat() if fresh else previous.get('ready_observed_at'),'ready_data_current':fresh,'ready_missing':list_missing,'ready_entered_at':entered_at,'ready_exited_at':exited_at,'ready_changes':ready_changes[-20:],'completions':completions[-50:],'completed_at':completed_at,'completed_low_date':anchor.isoformat() if completed_at else None,'half_near':half_near,'near_low':near_low,'half_met':half_met,'recent_move':recent_move,'recent_gain_pct':gain,'sessions_since_peak':since,'active':active,'low_date':anchor.isoformat() if anchor else None,'stage':stage,'next_goal':next_goal,'early_date':early_date,'early_state':early_state,'retest_status':s.get('support_retest_status'),'plan':plan,'invalidators':invalidators,'retest_zone':{'low':support,'high':round(support*1.05,6)} if support is not None and support>0 else None,'borrow_read_at':(s.get('borrow_freshness') or {}).get('timestamp'),'using_last_session':fresh and any((s.get(k) or {}).get('status')!='fresh' for k in ('quote_freshness','borrow_freshness')),'next_review_date':review_date(now),'support_distance_pct':dist,'waiting_label':waiting_label,'data_issue':data_issue,'last_change':last_change,'change_kind':change_kind,'symbol':row['symbol'],'company':row.get('company_name'),'price':q.get('price'),'available':av,'rsi':rsi,'support':support,'sessions':sessions,'target_sessions':target,'remaining_sessions':remaining,'expected_date':expected,'state':state,'reason':reason,'missing':missing,'history':events[-20:],'rescheduled':changed or bool(previous.get('rescheduled')),'added_at':previous.get('added_at') or now.isoformat(),'reviewed_at':now.isoformat(),'four_session_date':advance(date.fromisoformat(expected),max(0,4-max(target,sessions))).isoformat() if expected else None}
 
 async def worker(snapshot):
     try:ROWS.update(storage.load(['opportunity_diary']).get('opportunity_diary') or {})
@@ -189,5 +220,11 @@ def daily_changes(now=None):
 
 def payload():
     upcoming=[r for r in ROWS.values() if r.get('active',False) and r.get('state')=='scheduled' and r.get('expected_date') and number(r.get('available')) is not None and 0<=r['available']<20000]
-    completed=[c for r in ROWS.values() for c in r.get('completions') or []]
-    return {**META,'daily_changes':daily_changes(),'rows':sorted(upcoming,key=lambda x:(x['expected_date'],x['remaining_sessions'],x['available'])),'completed':sorted(completed,key=lambda x:x['completed_at'],reverse=True),'target_sessions':4,'next_session_date':advance(datetime.now(NY).date(),1).isoformat()}
+    completed=[]
+    for r in ROWS.values():
+        for c in r.get('completions') or []:
+            current=number(r.get('price'));start=number(c.get('price'));low=number(c.get('support'))
+            latest_low=number(r.get('support'))
+            held=None if not r.get('ready_data_current') or latest_low is None or low is None else latest_low>=low and (current is None or current>=low)
+            completed.append({**c,**{k:r.get(k) for k in ('ready_current','ready_data_current','ready_observed_at','ready_missing','ready_entered_at','ready_exited_at','ready_changes')},'current_price':current,'current_available':r.get('available'),'held_low':held,'change_since_completion_pct':round((current/start-1)*100,2) if current is not None and start and start>0 else None})
+    return {**META,'daily_changes':daily_changes(),'rows':sorted(upcoming,key=lambda x:(x['expected_date'],x['remaining_sessions'],x['available'])),'completed':sorted(completed,key=lambda x:(0 if x.get('ready_current') is True else 1 if len(x.get('ready_missing') or [])==1 else 2, -(datetime.fromisoformat(x.get('ready_entered_at') or x['completed_at']).timestamp()))),'target_sessions':4,'next_session_date':advance(datetime.now(NY).date(),1).isoformat()}
