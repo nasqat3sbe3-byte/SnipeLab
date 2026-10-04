@@ -33,4 +33,18 @@ class CalendarTests(unittest.TestCase):
     def test_ready_date_stable(self):
         r=self.row(4);old=evaluate(r,now=datetime(2026,10,5,22,tzinfo=timezone.utc))
         v=evaluate(r,old,datetime(2026,10,6,22,tzinfo=timezone.utc));self.assertEqual(v['expected_date'],old['expected_date'])
+    def test_review_weekend_and_after_close(self):
+        from opportunities import review_date
+        self.assertEqual(review_date(datetime(2026,10,4,12,tzinfo=timezone.utc)),'2026-10-05')
+        self.assertEqual(review_date(datetime(2026,10,5,18,tzinfo=timezone.utc)),'2026-10-05')
+        self.assertEqual(review_date(datetime(2026,10,5,22,tzinfo=timezone.utc)),'2026-10-06')
+    def test_data_issue_separate_from_condition(self):
+        r=self.row();r['signal']['borrow_freshness']['status']='stale'
+        v=evaluate(r)
+        self.assertEqual(v['state'],'data_pending');self.assertIn('Available',v['data_issue'])
+        self.assertIn('الثبات',v['waiting_label'])
+    def test_change_labels(self):
+        r=self.row();now=datetime(2026,10,4,12,tzinfo=timezone.utc)
+        old=evaluate(r,now=now);r['signal']['new_low_today']=True
+        v=evaluate(r,old,now);self.assertEqual(v['change_kind'],'عُلّق الموعد')
 if __name__=='__main__':unittest.main()

@@ -770,8 +770,17 @@ async def support_chart_data(symbol: str):
     return support_chart_get(symbol,HISTORY)
 
 @app.get("/dashboard",response_class=HTMLResponse)
-async def dashboard():
-    return HTMLResponse(DASHBOARD)
+async def dashboard(symbol: str = ""):
+    # Deep links from Opportunities only; ordinary dashboard remains identical.
+    symbol = re.sub(r"[^A-Z0-9.-]", "", symbol.upper())[:12]
+    if not symbol:
+        return HTMLResponse(DASHBOARD)
+    ticker = json.dumps(symbol)
+    script = """<script>(()=>{const symbol=TICKER;let observer;
+function open(){try{if(typeof rows!=='function'||typeof openStockRoom!=='function'||!rows().some(x=>x.symbol===symbol))return false;
+if(observer)observer.disconnect();openStockRoom(symbol);return true}catch(e){return false}}
+if(!open()){observer=new MutationObserver(open);observer.observe(document.body,{childList:true,subtree:true});setTimeout(()=>observer.disconnect(),120000)}})();</script>""".replace("TICKER", ticker)
+    return HTMLResponse(DASHBOARD.replace("</body>", script + "</body>"))
 
 @app.get("/health")
 async def health():

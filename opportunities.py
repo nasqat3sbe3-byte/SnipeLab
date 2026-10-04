@@ -43,6 +43,12 @@ def number(v):
         return n if math.isfinite(n) else None
     except (ValueError,TypeError):return None
 
+def review_date(now):
+    local=now.astimezone(NY)
+    if trading(local.date()) and local.hour<16:
+        return local.date().isoformat()
+    return advance(local.date(),1).isoformat()
+
 def evaluate(row,previous=None,now=None):
     now=now or datetime.now(timezone.utc);today=now.astimezone(NY).date()
     previous=previous or {};s=row.get('signal') or {};q=row.get('price') or {};b=row.get('borrow') or {}
@@ -59,14 +65,21 @@ def evaluate(row,previous=None,now=None):
     if s.get('support_retest_status')!='success':missing.append('إعادة اختبار الدعم')
     if s.get('surge70_verified') and (number(s.get('surge70_sessions_since_peak')) or 0)<10:
         missing.append('انتهاء فترة متابعة الحركة السابقة')
-    if s.get('new_low_today'):sessions=0
+    if s.get('new_low_today'):
+        sessions=0
+        missing.append('تأكيد الدعم الجديد')
     if sessions<target:missing.append('الثبات')
-    candidate=(len(missing)<=2 and av is not None and av<15000 and rsi is not None and rsi<=35 and s.get('half_reached') is True and dist is not None and 0<=dist<=25)
+    candidate=(len(missing)<=(3 if s.get('new_low_today') else 2) and av is not None and av<15000 and rsi is not None and rsi<=35 and s.get('half_reached') is True and dist is not None and 0<=dist<=25)
     if not candidate and not previous:return None
     remaining=max(0,target-sessions)
     state='waiting';expected=None;reason='بانتظار '+ '، '.join(missing)
+    waiting_label='بانتظار '+ '، '.join(missing)
+    data_issue=None
     fresh=all((s.get(key) or {}).get('status')=='fresh' for key in ('quote_freshness','borrow_freshness'))
-    if s.get('support_retest_status')=='failed':reason='كُسر الدعم — بانتظار إعادة التقييم'
+    if s.get('new_low_today'):
+        reason='قاع جديد — بانتظار تأكيد الدعم وإعادة حساب الثبات'
+        waiting_label='بانتظار تأكيد الدعم الجديد'
+    elif s.get('support_retest_status')=='failed':reason='كُسر الدعم — بانتظار إعادة التقييم'
     elif fresh and all(x=='الثبات' for x in missing):
         try:anchor=date.fromisoformat(str(s.get('post_split_low_date'))[:10])
         except ValueError:anchor=None
@@ -82,14 +95,24 @@ def evaluate(row,previous=None,now=None):
                 state='ready';reason='اكتملت الشروط الحالية'
             else:state='scheduled';reason='إذا استمرت الشروط وحافظ على الدعم'
             expected=expected.isoformat()
-    elif not fresh:reason='بانتظار تحديث البيانات — الموعد معلّق'
+    elif not fresh:
+        state='data_pending';reason='المراجعة معلّقة: بيانات غير محدثة'
+        stale=[]
+        if (s.get('quote_freshness') or {}).get('status')!='fresh':stale.append('السعر')
+        if (s.get('borrow_freshness') or {}).get('status')!='fresh':stale.append('Available')
+        data_issue='بانتظار تحديث '+ ' و'.join(stale)
     events=list(previous.get('history') or [])
     changed=False
     if previous and (previous.get('expected_date')!=expected or previous.get('state')!=state or previous.get('support')!=support):
         changed=True
         change_reason='قاع جديد — أُعيد حساب الثبات' if previous.get('support') is not None and support is not None and support<previous['support'] else reason
         events.append({'at':now.isoformat(),'old_date':previous.get('expected_date'),'new_date':expected,'reason':change_reason})
-    return {'symbol':row['symbol'],'company':row.get('company_name'),'price':q.get('price'),'available':av,'rsi':rsi,'support':support,'sessions':sessions,'target_sessions':target,'remaining_sessions':remaining,'expected_date':expected,'state':state,'reason':reason,'missing':missing,'history':events[-20:],'rescheduled':changed or bool(previous.get('rescheduled')),'added_at':previous.get('added_at') or now.isoformat(),'reviewed_at':now.isoformat(),'four_session_date':advance(date.fromisoformat(expected),max(0,4-max(target,sessions))).isoformat() if expected else None}
+    last_change=events[-1] if events else None
+    change_kind=None
+    if last_change:
+        old,new=last_change.get('old_date'),last_change.get('new_date')
+        change_kind='تأجل' if old and new and new>old else 'تقدّم' if old and new and new<old else 'عُلّق الموعد' if old and not new else 'حُدد الموعد' if new and not old else 'تغيّرت الحالة'
+    return {'next_review_date':review_date(now),'support_distance_pct':dist,'waiting_label':waiting_label,'data_issue':data_issue,'last_change':last_change,'change_kind':change_kind,'symbol':row['symbol'],'company':row.get('company_name'),'price':q.get('price'),'available':av,'rsi':rsi,'support':support,'sessions':sessions,'target_sessions':target,'remaining_sessions':remaining,'expected_date':expected,'state':state,'reason':reason,'missing':missing,'history':events[-20:],'rescheduled':changed or bool(previous.get('rescheduled')),'added_at':previous.get('added_at') or now.isoformat(),'reviewed_at':now.isoformat(),'four_session_date':advance(date.fromisoformat(expected),max(0,4-max(target,sessions))).isoformat() if expected else None}
 
 async def worker(snapshot):
     try:ROWS.update(storage.load(['opportunity_diary']).get('opportunity_diary') or {})
