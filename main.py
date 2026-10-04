@@ -16,6 +16,7 @@ import httpx
 import websockets
 from history import worker as historical_worker
 import storage
+import opportunities
 from support_chart import worker as support_chart_worker, get as support_chart_get, retest_signal as support_retest_signal
 from corporate_actions import worker as corporate_actions_worker, upcoming as upcoming_actions
 from event_rules import borrow_events, ready_event, worker_health
@@ -747,6 +748,7 @@ async def legacy_news_loop_disabled():
 @app.on_event("startup")
 async def startup():
     load_persistent_state()
+    asyncio.create_task(opportunities.worker(dashboard_data))
     asyncio.create_task(support_chart_worker(UNIVERSE,HISTORY))
     asyncio.create_task(corporate_actions_worker(UNIVERSE, CORPORATE_ACTIONS, STATE, save_persistent_state))
     asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(live_daily_rsi_loop()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(short_analysis_loop()); asyncio.create_task(finnhub_live_loop()); asyncio.create_task(finnhub_country_loop()); asyncio.create_task(massive_float_loop()); asyncio.create_task(halt_loop()); asyncio.create_task(ai_risk_background_loop()); asyncio.create_task(ai_patterns_background_loop()); asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
@@ -1941,3 +1943,12 @@ async def ticker_diagnostics(symbol: str):
             "quote":QUOTES.get(symbol),"borrow":BORROW.get(symbol),
             "signal":ANALYTICS.get(symbol),
             "note":"A rally alone does not establish a qualifying reverse split."}
+
+
+@app.get("/opportunities", response_class=HTMLResponse)
+async def opportunities_page():
+    return HTMLResponse((Path(__file__).parent / "opportunities.html").read_text("utf-8"))
+
+@app.get("/api/opportunities")
+async def opportunities_data():
+    return opportunities.payload()
