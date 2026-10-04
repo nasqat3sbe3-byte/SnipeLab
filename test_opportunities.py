@@ -68,7 +68,7 @@ class CalendarTests(unittest.TestCase):
         self.assertIsNotNone(evaluate(r,now=datetime(2026,10,4,14,tzinfo=timezone.utc))['early_date'])
     def test_diary_independent_of_rsi_half_and_distance(self):
         r=self.row();r['borrow']['available']=19999
-        r['signal'].update(rsi_daily=90,half_reached=False,effective_distance_pct=80,support_retest_status='waiting')
+        r['signal'].update(rsi_daily=90,half_reached=False,half_level=1.8,effective_distance_pct=11,support_retest_status='waiting')
         v=evaluate(r,now=datetime(2026,10,4,14,tzinfo=timezone.utc))
         self.assertTrue(v['active']);self.assertEqual(v['expected_date'],'2026-10-05')
         r['borrow']['available']=20000
@@ -108,6 +108,33 @@ class CalendarTests(unittest.TestCase):
     def test_same_session_surge_excluded_even_without_top(self):
         r=self.row();r['signal'].update(surge70_verified=True,surge70_sessions_since_peak=2)
         self.assertIsNone(evaluate(r))
+    def test_far_stock_not_a_dated_opportunity(self):
+        r=self.row();r['signal']['effective_distance_pct']=25.01
+        self.assertIsNone(evaluate(r))
+        r=self.row();r['signal'].update(half_reached=False,half_level=1)
+        self.assertIsNone(evaluate(r))
+    def test_completed_entry_timestamp_persists_and_new_low_reopens(self):
+        import opportunities as o
+        now=datetime(2026,10,4,14,tzinfo=timezone.utc);r=self.row(3)
+        before=evaluate(r,now=now);r['signal']['stability_sessions']=4
+        done=evaluate(r,before,now)
+        self.assertEqual(done['completed_at'],now.isoformat())
+        again=evaluate(r,done,datetime(2026,10,5,14,tzinfo=timezone.utc))
+        self.assertEqual(len(again['completions']),1)
+        old=o.ROWS.copy()
+        try:
+            o.ROWS.clear();o.ROWS['AAA']=again
+            self.assertEqual(o.payload()['rows'],[])
+            self.assertEqual(o.payload()['completed'][0]['completed_at'],now.isoformat())
+            r['signal'].update(new_low_today=True,effective_low=1.7)
+            reset=evaluate(r,again,datetime(2026,10,5,14,tzinfo=timezone.utc))
+            o.ROWS['AAA']=reset
+            self.assertEqual(len(o.payload()['rows']),1)
+            self.assertEqual(len(o.payload()['completed']),1)
+        finally:o.ROWS.clear();o.ROWS.update(old)
+    def test_half_near_not_completed_until_touched(self):
+        r=self.row(4);r['signal'].update(half_reached=False,half_level=1.8)
+        v=evaluate(r);self.assertEqual(v['state'],'waiting');self.assertIsNone(v['completed_at'])
     def test_today_changes_and_break(self):
         import opportunities as o
         now=datetime(2026,10,4,14,tzinfo=timezone.utc);r=self.row(3)
