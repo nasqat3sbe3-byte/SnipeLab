@@ -166,4 +166,4 @@ def daily_changes(now=None):
     return {'date':local_day.isoformat(),'counts':counts,'events':result[:50]}
 
 def payload():
-    return {**META,'daily_changes':daily_changes(),'rows':sorted((r for r in ROWS.values() if r.get('active',False) and number(r.get('available')) is not None and 0<=r['available']<20000),key=lambda x:(x['expected_date'] is None,x['expected_date'] or '9999',x['available'] if x['available'] is not None else math.inf)),'target_sessions':4,'next_session_date':advance(datetime.now(NY).date(),1).isoformat()}
+    return {**META,'daily_changes':daily_changes(),'rows':sorted((r for r in ROWS.values() if r.get('active',False) and number(r.get('available')) is not None and 0<=r['available']<20000),key=lambda x:(0 if x['state']=='scheduled' else 1 if x['state']=='ready' else 2,x['expected_date'] or '9999',x['available'] if x['available'] is not None else math.inf)),'target_sessions':4,'next_session_date':advance(datetime.now(NY).date(),1).isoformat()}
