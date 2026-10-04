@@ -115,18 +115,42 @@ def evaluate(row,previous=None,now=None):
         if not usable_reading(s.get('quote_freshness') or {},now):stale.append('السعر')
         if not usable_reading(s.get('borrow_freshness') or {},now):stale.append('Available')
         data_issue='بانتظار تحديث '+ ' و'.join(stale)
+    # Earlier 2/4 window is separate from the diary's 4/4 maturity.
+    early_date=None;early_state='waiting'
+    if fresh and all(x=='الثبات' for x in missing) and not s.get('new_low_today'):
+        try:
+            anchor=date.fromisoformat(str(s.get('post_split_low_date'))[:10])
+            early=advance(anchor,2)
+            early_remaining=max(0,2-sessions)
+            if early_remaining and early<=today:
+                early=advance(date.fromisoformat(review_date(now)),early_remaining-1)
+            early_date=early.isoformat()
+            early_state='ready' if sessions>=2 else 'scheduled'
+        except ValueError:pass
+    plan=[{'label':f'المحافظة على الدعم ${support:.4f}' if support is not None else 'تأكيد مستوى الدعم','met':support is not None and not s.get('new_low_today') and s.get('support_retest_status')!='failed'},
+          {'label':'Available أقل من 15,000','met':av is not None and av<15000},
+          {'label':'RSI اليومي 35 أو أقل','met':rsi is not None and rsi<=35},
+          {'label':'تحقق نصف القمة','met':s.get('half_reached') is True},
+          {'label':'البعد عن الدعم 25% أو أقل','met':dist is not None and 0<=dist<=25},
+          {'label':'إعادة اختبار ناجحة ضمن 5% فوق الدعم','met':s.get('support_retest_status')=='success' and not s.get('new_low_today')},
+          {'label':'جاهزية 2/4','met':sessions>=2 and not s.get('new_low_today')},
+          {'label':'اكتمال الثبات 4/4','met':sessions>=4 and not s.get('new_low_today')}]
+    invalidators=['كسر الدعم أو تكوين قاع جديد','ارتفاع Available إلى 15,000 أو أكثر','ارتفاع RSI اليومي فوق 35','ابتعاد السعر عن الدعم بأكثر من 25%','فشل إعادة اختبار الدعم','غياب قراءة حديثة كافية لحساب الموعد']
     events=list(previous.get('history') or [])
     changed=False
-    if previous and (previous.get('expected_date')!=expected or previous.get('state')!=state or previous.get('support')!=support):
+    if previous and (previous.get('expected_date')!=expected or previous.get('state')!=state or previous.get('support')!=support or ('retest_status' in previous and previous.get('retest_status')!=s.get('support_retest_status'))):
         changed=True
         change_reason='قاع جديد — أُعيد حساب الثبات' if previous.get('support') is not None and support is not None and support<previous['support'] else reason
-        events.append({'at':now.isoformat(),'old_date':previous.get('expected_date'),'new_date':expected,'reason':change_reason})
+        kind='completed' if state=='ready' and previous.get('state')!='ready' else 'support_broken' if s.get('support_retest_status')=='failed' and previous.get('retest_status')!='failed' else 'advanced' if previous.get('expected_date') and expected and expected<previous['expected_date'] else 'delayed' if previous.get('expected_date') and expected and expected>previous['expected_date'] else 'suspended' if previous.get('expected_date') and not expected else 'changed'
+        events.append({'at':now.isoformat(),'kind':kind,'old_date':previous.get('expected_date'),'new_date':expected,'reason':change_reason})
+    if previous and 'early_state' in previous and early_state=='ready' and previous.get('early_state')!='ready':
+        events.append({'at':now.isoformat(),'kind':'early_ready','old_date':previous.get('early_date'),'new_date':early_date,'reason':'اكتملت شروط جاهزية 2/4'})
     last_change=events[-1] if events else None
     change_kind=None
     if last_change:
         old,new=last_change.get('old_date'),last_change.get('new_date')
         change_kind='تأجل' if old and new and new>old else 'تقدّم' if old and new and new<old else 'عُلّق الموعد' if old and not new else 'حُدد الموعد' if new and not old else 'تغيّرت الحالة'
-    return {'borrow_read_at':(s.get('borrow_freshness') or {}).get('timestamp'),'using_last_session':fresh and any((s.get(k) or {}).get('status')!='fresh' for k in ('quote_freshness','borrow_freshness')),'next_review_date':review_date(now),'support_distance_pct':dist,'waiting_label':waiting_label,'data_issue':data_issue,'last_change':last_change,'change_kind':change_kind,'symbol':row['symbol'],'company':row.get('company_name'),'price':q.get('price'),'available':av,'rsi':rsi,'support':support,'sessions':sessions,'target_sessions':target,'remaining_sessions':remaining,'expected_date':expected,'state':state,'reason':reason,'missing':missing,'history':events[-20:],'rescheduled':changed or bool(previous.get('rescheduled')),'added_at':previous.get('added_at') or now.isoformat(),'reviewed_at':now.isoformat(),'four_session_date':advance(date.fromisoformat(expected),max(0,4-max(target,sessions))).isoformat() if expected else None}
+    return {'early_date':early_date,'early_state':early_state,'retest_status':s.get('support_retest_status'),'plan':plan,'invalidators':invalidators,'retest_zone':{'low':support,'high':round(support*1.05,6)} if support is not None and support>0 else None,'borrow_read_at':(s.get('borrow_freshness') or {}).get('timestamp'),'using_last_session':fresh and any((s.get(k) or {}).get('status')!='fresh' for k in ('quote_freshness','borrow_freshness')),'next_review_date':review_date(now),'support_distance_pct':dist,'waiting_label':waiting_label,'data_issue':data_issue,'last_change':last_change,'change_kind':change_kind,'symbol':row['symbol'],'company':row.get('company_name'),'price':q.get('price'),'available':av,'rsi':rsi,'support':support,'sessions':sessions,'target_sessions':target,'remaining_sessions':remaining,'expected_date':expected,'state':state,'reason':reason,'missing':missing,'history':events[-20:],'rescheduled':changed or bool(previous.get('rescheduled')),'added_at':previous.get('added_at') or now.isoformat(),'reviewed_at':now.isoformat(),'four_session_date':advance(date.fromisoformat(expected),max(0,4-max(target,sessions))).isoformat() if expected else None}
 
 async def worker(snapshot):
     try:ROWS.update(storage.load(['opportunity_diary']).get('opportunity_diary') or {})
@@ -143,5 +167,19 @@ async def worker(snapshot):
         except Exception as exc:META['error']=type(exc).__name__
         await asyncio.sleep(60)
 
+def daily_changes(now=None):
+    now=now or datetime.now(timezone.utc)
+    local_day=now.astimezone(ZoneInfo('Asia/Riyadh')).date()
+    result=[]
+    for row in ROWS.values():
+        for event in row.get('history') or []:
+            try:
+                if datetime.fromisoformat(event['at']).astimezone(ZoneInfo('Asia/Riyadh')).date()!=local_day:continue
+            except (KeyError,ValueError):continue
+            result.append({**event,'symbol':row['symbol']})
+    result.sort(key=lambda x:x['at'],reverse=True)
+    counts={k:len({e['symbol'] for e in result if e.get('kind')==k}) for k in ('completed','early_ready','advanced','delayed','support_broken','suspended','changed')}
+    return {'date':local_day.isoformat(),'counts':counts,'events':result[:50]}
+
 def payload():
-    return {**META,'rows':sorted(ROWS.values(),key=lambda x:(x['expected_date'] is None,x['expected_date'] or '9999',x['available'] if x['available'] is not None else math.inf)),'target_sessions':4,'next_session_date':advance(datetime.now(NY).date(),1).isoformat()}
+    return {**META,'daily_changes':daily_changes(),'rows':sorted(ROWS.values(),key=lambda x:(x['expected_date'] is None,x['expected_date'] or '9999',x['available'] if x['available'] is not None else math.inf)),'target_sessions':4,'next_session_date':advance(datetime.now(NY).date(),1).isoformat()}

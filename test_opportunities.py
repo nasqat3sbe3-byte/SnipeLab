@@ -56,4 +56,25 @@ class CalendarTests(unittest.TestCase):
     def test_old_reading_not_used_in_live_session(self):
         from opportunities import usable_reading
         self.assertFalse(usable_reading({'status':'stale','timestamp':'2026-10-02T20:56:56+00:00'},datetime(2026,10,5,15,tzinfo=timezone.utc)))
+    def test_two_windows_and_support_plan(self):
+        r=self.row(1);r['signal']['post_split_low_date']='2026-10-01'
+        v=evaluate(r,now=datetime(2026,10,4,14,tzinfo=timezone.utc))
+        self.assertEqual(v['early_date'],'2026-10-05')
+        self.assertEqual(v['expected_date'],'2026-10-07')
+        self.assertAlmostEqual(v['retest_zone']['high'],1.89)
+        self.assertFalse(v['plan'][-1]['met'])
+    def test_waiting_retest_has_no_early_date(self):
+        r=self.row(3);r['signal']['support_retest_status']='waiting'
+        self.assertIsNone(evaluate(r)['early_date'])
+    def test_today_changes_and_break(self):
+        import opportunities as o
+        now=datetime(2026,10,4,14,tzinfo=timezone.utc);r=self.row(3)
+        old=evaluate(r,now=now);r['signal']['support_retest_status']='failed'
+        v=evaluate(r,old,now);self.assertEqual(v['history'][-1]['kind'],'support_broken')
+        previous=o.ROWS.copy()
+        try:
+            o.ROWS.clear();o.ROWS['AAA']=v
+            self.assertEqual(o.daily_changes(now)['counts']['support_broken'],1)
+            self.assertEqual(o.daily_changes(datetime(2026,10,5,14,tzinfo=timezone.utc))['events'],[])
+        finally:o.ROWS.clear();o.ROWS.update(previous)
 if __name__=='__main__':unittest.main()
