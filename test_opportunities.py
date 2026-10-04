@@ -17,7 +17,7 @@ class CalendarTests(unittest.TestCase):
         self.assertEqual(r['signal']['stability_sessions'],3)
     def test_unknown_condition_no_date(self):
         r=self.row();r['signal']['support_retest_status']='waiting'
-        v=evaluate(r,now=datetime(2026,10,4,12,tzinfo=timezone.utc));self.assertIsNone(v['expected_date'])
+        v=evaluate(r,now=datetime(2026,10,4,12,tzinfo=timezone.utc));self.assertEqual(v['expected_date'],'2026-10-05')
     def test_failure_retained(self):
         r=self.row();now=datetime(2026,10,4,12,tzinfo=timezone.utc);old=evaluate(r,now=now)
         r['borrow']['available']=50000;v=evaluate(r,old,now)
@@ -25,7 +25,7 @@ class CalendarTests(unittest.TestCase):
     def test_new_low_restarts(self):
         r=self.row();now=datetime(2026,10,4,12,tzinfo=timezone.utc);old=evaluate(r,now=now)
         r['signal'].update(new_low_today=True,post_split_low=1.7,support_retest_status='waiting')
-        v=evaluate(r,old,now);self.assertEqual(v['sessions'],0);self.assertIsNone(v['expected_date'])
+        v=evaluate(r,old,now);self.assertEqual(v['sessions'],0);self.assertEqual(v['expected_date'],'2026-10-08')
         self.assertIn('قاع جديد',v['history'][-1]['reason'])
     def test_stale_blocks(self):
         r=self.row();r['signal']['borrow_freshness']['status']='stale'
@@ -46,7 +46,7 @@ class CalendarTests(unittest.TestCase):
     def test_change_labels(self):
         r=self.row();now=datetime(2026,10,4,12,tzinfo=timezone.utc)
         old=evaluate(r,now=now);r['signal']['new_low_today']=True
-        v=evaluate(r,old,now);self.assertEqual(v['change_kind'],'عُلّق الموعد')
+        v=evaluate(r,old,now);self.assertEqual(v['change_kind'],'تأجل')
     def test_last_session_available_during_weekend(self):
         from opportunities import usable_reading
         now=datetime(2026,10,4,14,tzinfo=timezone.utc)
@@ -65,7 +65,34 @@ class CalendarTests(unittest.TestCase):
         self.assertFalse(v['plan'][-1]['met'])
     def test_waiting_retest_has_no_early_date(self):
         r=self.row(3);r['signal']['support_retest_status']='waiting'
-        self.assertIsNone(evaluate(r)['early_date'])
+        self.assertIsNotNone(evaluate(r,now=datetime(2026,10,4,14,tzinfo=timezone.utc))['early_date'])
+    def test_diary_independent_of_rsi_half_and_distance(self):
+        r=self.row();r['borrow']['available']=19999
+        r['signal'].update(rsi_daily=90,half_reached=False,effective_distance_pct=80,support_retest_status='waiting')
+        v=evaluate(r,now=datetime(2026,10,4,14,tzinfo=timezone.utc))
+        self.assertTrue(v['active']);self.assertEqual(v['expected_date'],'2026-10-05')
+        r['borrow']['available']=20000
+        self.assertIsNone(evaluate(r))
+    def test_filter_preserves_history_and_returns(self):
+        import opportunities as o
+        now=datetime(2026,10,4,14,tzinfo=timezone.utc);r=self.row();v=evaluate(r,now=now)
+        r['borrow']['available']=20000;hidden=evaluate(r,v,now)
+        old=o.ROWS.copy()
+        try:
+            o.ROWS.clear();o.ROWS['AAA']=hidden
+            self.assertEqual(o.payload()['rows'],[])
+            r['borrow']['available']=19000
+            o.ROWS['AAA']=evaluate(r,hidden,now)
+            self.assertEqual(len(o.payload()['rows']),1)
+            self.assertTrue(o.ROWS['AAA']['history'])
+        finally:o.ROWS.clear();o.ROWS.update(old)
+    def test_live_low_kept_until_history_catches_up(self):
+        r=self.row();r['signal'].update(new_low_today=True,effective_low=1.7)
+        now=datetime(2026,10,4,14,tzinfo=timezone.utc)
+        v=evaluate(r,now=now);self.assertEqual(v['support'],1.7)
+        r['signal'].update(new_low_today=False,effective_low=1.8)
+        again=evaluate(r,v,now)
+        self.assertEqual(again['support'],1.7);self.assertEqual(again['sessions'],0)
     def test_today_changes_and_break(self):
         import opportunities as o
         now=datetime(2026,10,4,14,tzinfo=timezone.utc);r=self.row(3)
