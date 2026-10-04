@@ -70,7 +70,13 @@ def evaluate(row,previous=None,now=None):
     sessions=int(number(s.get('stability_sessions')) or 0);support=number(s.get('post_split_low'))
     # This diary monitors the low independently of the main screener.
     target=4
-    active=av is not None and 0<=av<20000
+    gain=number(s.get('top_10_gain_pct'))
+    since=number(s.get('top_10_sessions_since_peak'))
+    recent_move=bool(s.get('top_10_verified') and gain is not None and gain>=60 and since is not None and 0<=since<10)
+    surge_since=number(s.get('surge70_sessions_since_peak'))
+    recent_move=recent_move or bool(s.get('surge70_verified') and surge_since is not None and 0<=surge_since<10)
+    eligible_available=av is not None and 0<=av<20000
+    active=eligible_available and not recent_move
     if not active and not previous:return None
     support=number(s.get('effective_low')) or support
     fresh=all(usable_reading(s.get(key) or {},now) for key in ('quote_freshness','borrow_freshness'))
@@ -92,7 +98,8 @@ def evaluate(row,previous=None,now=None):
     valid_low=bool(s.get('history_verified') and support is not None and support>0 and anchor and anchor<=today)
     missing=[]
     if not valid_low:missing.append('تحديد القاع — بيانات ناقصة')
-    if not active:missing.append('Available أقل من 20,000')
+    if not eligible_available:missing.append('Available أقل من 20,000')
+    if recent_move:missing.append('انتهاء 10 جلسات منذ قمة حركة +60% أو أكثر')
     if sessions<4:missing.append('الثبات')
     remaining=max(0,4-sessions)
     state='waiting';expected=None;early_date=None;early_state='waiting';data_issue=None
@@ -115,10 +122,11 @@ def evaluate(row,previous=None,now=None):
     stage='قاع جديد' if sessions==0 else 'تأكيد القاع' if sessions<2 else 'قاع ثابت 2/4' if sessions<4 else 'اكتمل الثبات 4/4'
     next_goal='تأكيد أول جلسة فوق القاع' if sessions==0 else 'اكتمال ثبات القاع 2/4' if sessions<2 else 'اكتمال ثبات القاع 4/4' if sessions<4 else 'استمرار المحافظة على القاع'
     plan=[{'label':f'المحافظة على القاع ${support:.4f}' if support is not None else 'تحديد القاع','met':valid_low},
-          {'label':'Available أقل من 20,000','met':active},
+          {'label':'Available أقل من 20,000','met':eligible_available},
+          {'label':'لم يصعد 60% أو أكثر خلال آخر 10 جلسات','met':not recent_move},
           {'label':'ثبات القاع 2/4','met':sessions>=2},
           {'label':'اكتمال الثبات 4/4','met':sessions>=4}]
-    invalidators=['قاع أقل يعيد الثبات من الصفر','Available عند 20,000 أو أكثر يخفي السهم من القائمة ويحفظ سجله','غياب قراءة حديثة يوقف حساب الموعد حتى التحديث']
+    invalidators=['صعود 60% أو أكثر يخفي السهم حتى انتهاء 10 جلسات من القمة','قاع أقل يعيد الثبات من الصفر','Available عند 20,000 أو أكثر يخفي السهم من القائمة ويحفظ سجله','غياب قراءة حديثة يوقف حساب الموعد حتى التحديث']
     events=list(previous.get('history') or [])
     changed=False
     if previous and (previous.get('expected_date')!=expected or previous.get('state')!=state or previous.get('support')!=support or ('retest_status' in previous and previous.get('retest_status')!=s.get('support_retest_status'))):
@@ -133,7 +141,7 @@ def evaluate(row,previous=None,now=None):
     if last_change:
         old,new=last_change.get('old_date'),last_change.get('new_date')
         change_kind='تأجل' if old and new and new>old else 'تقدّم' if old and new and new<old else 'عُلّق الموعد' if old and not new else 'حُدد الموعد' if new and not old else 'تغيّرت الحالة'
-    return {'active':active,'low_date':anchor.isoformat() if anchor else None,'stage':stage,'next_goal':next_goal,'early_date':early_date,'early_state':early_state,'retest_status':s.get('support_retest_status'),'plan':plan,'invalidators':invalidators,'retest_zone':{'low':support,'high':round(support*1.05,6)} if support is not None and support>0 else None,'borrow_read_at':(s.get('borrow_freshness') or {}).get('timestamp'),'using_last_session':fresh and any((s.get(k) or {}).get('status')!='fresh' for k in ('quote_freshness','borrow_freshness')),'next_review_date':review_date(now),'support_distance_pct':dist,'waiting_label':waiting_label,'data_issue':data_issue,'last_change':last_change,'change_kind':change_kind,'symbol':row['symbol'],'company':row.get('company_name'),'price':q.get('price'),'available':av,'rsi':rsi,'support':support,'sessions':sessions,'target_sessions':target,'remaining_sessions':remaining,'expected_date':expected,'state':state,'reason':reason,'missing':missing,'history':events[-20:],'rescheduled':changed or bool(previous.get('rescheduled')),'added_at':previous.get('added_at') or now.isoformat(),'reviewed_at':now.isoformat(),'four_session_date':advance(date.fromisoformat(expected),max(0,4-max(target,sessions))).isoformat() if expected else None}
+    return {'recent_move':recent_move,'recent_gain_pct':gain,'sessions_since_peak':since,'active':active,'low_date':anchor.isoformat() if anchor else None,'stage':stage,'next_goal':next_goal,'early_date':early_date,'early_state':early_state,'retest_status':s.get('support_retest_status'),'plan':plan,'invalidators':invalidators,'retest_zone':{'low':support,'high':round(support*1.05,6)} if support is not None and support>0 else None,'borrow_read_at':(s.get('borrow_freshness') or {}).get('timestamp'),'using_last_session':fresh and any((s.get(k) or {}).get('status')!='fresh' for k in ('quote_freshness','borrow_freshness')),'next_review_date':review_date(now),'support_distance_pct':dist,'waiting_label':waiting_label,'data_issue':data_issue,'last_change':last_change,'change_kind':change_kind,'symbol':row['symbol'],'company':row.get('company_name'),'price':q.get('price'),'available':av,'rsi':rsi,'support':support,'sessions':sessions,'target_sessions':target,'remaining_sessions':remaining,'expected_date':expected,'state':state,'reason':reason,'missing':missing,'history':events[-20:],'rescheduled':changed or bool(previous.get('rescheduled')),'added_at':previous.get('added_at') or now.isoformat(),'reviewed_at':now.isoformat(),'four_session_date':advance(date.fromisoformat(expected),max(0,4-max(target,sessions))).isoformat() if expected else None}
 
 async def worker(snapshot):
     try:ROWS.update(storage.load(['opportunity_diary']).get('opportunity_diary') or {})

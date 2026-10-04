@@ -93,6 +93,21 @@ class CalendarTests(unittest.TestCase):
         r['signal'].update(new_low_today=False,effective_low=1.8)
         again=evaluate(r,v,now)
         self.assertEqual(again['support'],1.7);self.assertEqual(again['sessions'],0)
+    def test_recent_move_excluded_and_returns_after_ten_sessions(self):
+        r=self.row();now=datetime(2026,10,4,14,tzinfo=timezone.utc)
+        old=evaluate(r,now=now)
+        r['signal'].update(top_10_verified=True,top_10_gain_pct=60,top_10_sessions_since_peak=9)
+        self.assertIsNone(evaluate(r,now=now))
+        hidden=evaluate(r,old,now)
+        self.assertFalse(hidden['active']);self.assertIsNone(hidden['expected_date'])
+        r['signal']['top_10_sessions_since_peak']=10
+        self.assertTrue(evaluate(r,hidden,now)['active'])
+    def test_sub_sixty_move_does_not_exclude(self):
+        r=self.row();r['signal'].update(top_10_verified=True,top_10_gain_pct=59.99,top_10_sessions_since_peak=0)
+        self.assertTrue(evaluate(r)['active'])
+    def test_same_session_surge_excluded_even_without_top(self):
+        r=self.row();r['signal'].update(surge70_verified=True,surge70_sessions_since_peak=2)
+        self.assertIsNone(evaluate(r))
     def test_today_changes_and_break(self):
         import opportunities as o
         now=datetime(2026,10,4,14,tzinfo=timezone.utc);r=self.row(3)
