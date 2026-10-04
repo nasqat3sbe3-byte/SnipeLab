@@ -49,6 +49,20 @@ def review_date(now):
         return local.date().isoformat()
     return advance(local.date(),1).isoformat()
 
+def usable_reading(freshness, now):
+    if freshness.get('status')=='fresh':return True
+    local=now.astimezone(NY)
+    # Keep last-session readings usable while the exchange is closed.
+    # Older sessions never become current just because today is a weekend.
+    if trading(local.date()) and 4<=local.hour<20:return False
+    last=local.date()-timedelta(days=1)
+    while not trading(last):last-=timedelta(days=1)
+    if trading(local.date()) and local.hour>=20:last=local.date()
+    try:
+        stamp=datetime.fromisoformat(freshness['timestamp'].replace('Z','+00:00')).astimezone(NY)
+        return stamp.date()>=last and stamp<=local
+    except (KeyError,TypeError,ValueError):return False
+
 def evaluate(row,previous=None,now=None):
     now=now or datetime.now(timezone.utc);today=now.astimezone(NY).date()
     previous=previous or {};s=row.get('signal') or {};q=row.get('price') or {};b=row.get('borrow') or {}
@@ -75,7 +89,7 @@ def evaluate(row,previous=None,now=None):
     state='waiting';expected=None;reason='بانتظار '+ '، '.join(missing)
     waiting_label='بانتظار '+ '، '.join(missing)
     data_issue=None
-    fresh=all((s.get(key) or {}).get('status')=='fresh' for key in ('quote_freshness','borrow_freshness'))
+    fresh=all(usable_reading(s.get(key) or {},now) for key in ('quote_freshness','borrow_freshness'))
     if s.get('new_low_today'):
         reason='قاع جديد — بانتظار تأكيد الدعم وإعادة حساب الثبات'
         waiting_label='بانتظار تأكيد الدعم الجديد'
@@ -96,10 +110,10 @@ def evaluate(row,previous=None,now=None):
             else:state='scheduled';reason='إذا استمرت الشروط وحافظ على الدعم'
             expected=expected.isoformat()
     elif not fresh:
-        state='data_pending';reason='المراجعة معلّقة: بيانات غير محدثة'
+        state='data_pending';reason='المتابعة مستمرة — بانتظار تحديث القراءة القديمة'
         stale=[]
-        if (s.get('quote_freshness') or {}).get('status')!='fresh':stale.append('السعر')
-        if (s.get('borrow_freshness') or {}).get('status')!='fresh':stale.append('Available')
+        if not usable_reading(s.get('quote_freshness') or {},now):stale.append('السعر')
+        if not usable_reading(s.get('borrow_freshness') or {},now):stale.append('Available')
         data_issue='بانتظار تحديث '+ ' و'.join(stale)
     events=list(previous.get('history') or [])
     changed=False
@@ -112,7 +126,7 @@ def evaluate(row,previous=None,now=None):
     if last_change:
         old,new=last_change.get('old_date'),last_change.get('new_date')
         change_kind='تأجل' if old and new and new>old else 'تقدّم' if old and new and new<old else 'عُلّق الموعد' if old and not new else 'حُدد الموعد' if new and not old else 'تغيّرت الحالة'
-    return {'next_review_date':review_date(now),'support_distance_pct':dist,'waiting_label':waiting_label,'data_issue':data_issue,'last_change':last_change,'change_kind':change_kind,'symbol':row['symbol'],'company':row.get('company_name'),'price':q.get('price'),'available':av,'rsi':rsi,'support':support,'sessions':sessions,'target_sessions':target,'remaining_sessions':remaining,'expected_date':expected,'state':state,'reason':reason,'missing':missing,'history':events[-20:],'rescheduled':changed or bool(previous.get('rescheduled')),'added_at':previous.get('added_at') or now.isoformat(),'reviewed_at':now.isoformat(),'four_session_date':advance(date.fromisoformat(expected),max(0,4-max(target,sessions))).isoformat() if expected else None}
+    return {'borrow_read_at':(s.get('borrow_freshness') or {}).get('timestamp'),'using_last_session':fresh and any((s.get(k) or {}).get('status')!='fresh' for k in ('quote_freshness','borrow_freshness')),'next_review_date':review_date(now),'support_distance_pct':dist,'waiting_label':waiting_label,'data_issue':data_issue,'last_change':last_change,'change_kind':change_kind,'symbol':row['symbol'],'company':row.get('company_name'),'price':q.get('price'),'available':av,'rsi':rsi,'support':support,'sessions':sessions,'target_sessions':target,'remaining_sessions':remaining,'expected_date':expected,'state':state,'reason':reason,'missing':missing,'history':events[-20:],'rescheduled':changed or bool(previous.get('rescheduled')),'added_at':previous.get('added_at') or now.isoformat(),'reviewed_at':now.isoformat(),'four_session_date':advance(date.fromisoformat(expected),max(0,4-max(target,sessions))).isoformat() if expected else None}
 
 async def worker(snapshot):
     try:ROWS.update(storage.load(['opportunity_diary']).get('opportunity_diary') or {})

@@ -47,4 +47,13 @@ class CalendarTests(unittest.TestCase):
         r=self.row();now=datetime(2026,10,4,12,tzinfo=timezone.utc)
         old=evaluate(r,now=now);r['signal']['new_low_today']=True
         v=evaluate(r,old,now);self.assertEqual(v['change_kind'],'عُلّق الموعد')
+    def test_last_session_available_during_weekend(self):
+        from opportunities import usable_reading
+        now=datetime(2026,10,4,14,tzinfo=timezone.utc)
+        self.assertTrue(usable_reading({'status':'stale','timestamp':'2026-10-03T00:56:56+00:00'},now))
+        self.assertFalse(usable_reading({'status':'stale','timestamp':'2026-09-30T05:03:46+00:00'},now))
+        self.assertFalse(usable_reading({'status':'missing'},now))
+    def test_old_reading_not_used_in_live_session(self):
+        from opportunities import usable_reading
+        self.assertFalse(usable_reading({'status':'stale','timestamp':'2026-10-02T20:56:56+00:00'},datetime(2026,10,5,15,tzinfo=timezone.utc)))
 if __name__=='__main__':unittest.main()
