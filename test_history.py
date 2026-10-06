@@ -1,13 +1,33 @@
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date
 from unittest.mock import patch
-from history import calculate, split_day_4h_high
+from history import calculate, split_day_4h_high, daily_history_start, stability_from_bars
 
 def bars(n=15,start="2026-09-01"):
     d=datetime.fromisoformat(start)
     return [{"date":(d+timedelta(days=i)).date().isoformat(),"open":2,"high":3,"low":1,"close":2} for i in range(n)]
 
 class HistoryTests(unittest.TestCase):
+    def test_old_split_refresh_keeps_split_session_in_request(self):
+        today=date(2026,10,6)
+        start=daily_history_start("2026-05-11",today)
+        # Reproduce the old rolling window losing May's first split bar.
+        x=[{"date":"2026-05-11","open":5.22,"high":5.75,"low":4.52,"close":5.63},
+           {"date":"2026-10-01","open":1.35,"high":1.39,"low":1.10,"close":1.12},
+           {"date":"2026-10-02","open":1.12,"high":1.34,"low":1.12,"close":1.34},
+           {"date":"2026-10-05","open":1.34,"high":1.55,"low":1.30,"close":1.55},
+           {"date":"2026-10-06","open":1.50,"high":1.56,"low":1.33,"close":1.36}]
+        old_start=today-timedelta(days=120)
+        self.assertFalse(calculate("2026-05-11",[b for b in x if b['date']>=old_start.isoformat()])["verified"])
+        with patch("history.datetime") as mock:
+            mock.now.return_value=datetime(2026,10,6,19,57,tzinfo=timezone.utc)
+            result=calculate("2026-05-11",[b for b in x if b['date']>=start.isoformat()])
+            stability_from_bars(result,x)
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["post_split_low"],1.10)
+        self.assertEqual(result["post_split_low_date"],"2026-10-01")
+        self.assertEqual(result["stability_sessions"],2)
+
     def test_post_split_extrema(self):
         x=bars()
         x[0]["high"]=5

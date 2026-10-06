@@ -5,6 +5,10 @@ import time
 import os
 import httpx
 
+def daily_history_start(effective, today):
+    """Include the split session and pre-split RSI warmup on every refresh."""
+    return min(date.fromisoformat(effective), today)-timedelta(days=120)
+
 def calculate(effective, candles):
     """Daily Yahoo OHLC; high must occur on/after low for ten-session TOP."""
     bars=sorted((b for b in candles if b["date"]>=effective and b["low"]>0 and b["high"]>=b["low"]),key=lambda b:b["date"])
@@ -413,7 +417,7 @@ async def worker(universe,history,yahoo,save):
                     # Post-split extrema are still filtered by effective date inside calculate().
                     # RSI(14) needs prior closes for Wilder initialization; this history is
                     # calculation input only. The displayed value is today's Daily RSI.
-                    rsi_start=datetime.now(timezone.utc).date()-timedelta(days=120)
+                    rsi_start=daily_history_start(eff,datetime.now(timezone.utc).date())
                     start=int(datetime.combine(rsi_start,datetime.min.time(),timezone.utc).timestamp())
                     r=await client.get(yahoo.format(symbol=sym),params={"period1":start,"period2":int(time.time())+86400,"interval":"1d","events":"history"})
                     r.raise_for_status()
