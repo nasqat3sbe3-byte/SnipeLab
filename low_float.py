@@ -125,13 +125,33 @@ def update_borrow(parsed, received_at):
             row["borrow"] = {**parsed[sym], "received_at": received_at}
 
 
+def rejection_reason(row, split_symbols):
+    if row.get("symbol") in split_symbols: return "split"
+    if row.get("active") is not True: return "inactive"
+    if row.get("type") not in {"CS", "ADRC"}: return "security_type"
+    if row.get("locale") != "us": return "locale"
+    if row.get("primary_exchange") not in {"XNAS", "XNYS", "XASE", "ARCX", "BATS"}: return "exchange"
+    ff, cap = number(row.get("free_float")), number(row.get("market_cap"))
+    if ff is None or not 0 < ff <= MAX_FLOAT: return "float"
+    if cap is None: return "missing_cap"
+    if not 0 < cap < MAX_CAP: return "cap"
+    return "eligible"
+
+
 def snapshot(split_symbols):
     rows = {}
     for sym, row in ROWS.items():
         # Unknown/stale fundamental records never silently pass the screen.
         if eligible(row, split_symbols) and fresh(row.get("details_checked_at"), 7 * 86400) and fresh(row.get("float_checked_at"), 7 * 86400):
             rows[sym] = dict(row)
-    return {"rows": rows, "status": dict(STATUS), "server_time": now(),
+    reasons = {}
+    samples = []
+    for row in ROWS.values():
+        reason = rejection_reason(row, split_symbols)
+        reasons[reason] = reasons.get(reason, 0) + 1
+        if len(samples) < 8:
+            samples.append({k: row.get(k) for k in ("symbol", "active", "type", "locale", "primary_exchange", "market_cap", "free_float")})
+    return {"rows": rows, "status": {**STATUS, "verification": {"checked": len(ROWS), "reasons": reasons, "samples": samples}}, "server_time": now(),
             "criteria": {"free_float_max": MAX_FLOAT, "market_cap_max": MAX_CAP,
                          "default_market_cap_max": DEFAULT_CAP, "rsi_required": False}}
 

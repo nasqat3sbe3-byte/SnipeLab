@@ -55,16 +55,17 @@ function updateFilterCount(){
 }
 function render(){
   const base=allRows().filter(row=>matches(row,filterValues())), list=rows();
-  $('countAll').textContent=fmt(base.length);
+  const pending=!allRows().length && payload.status?.status!=='ready' && !payload.status?.error;
+  $('countAll').textContent=pending?'—':fmt(base.length);
   $('countBorrow').textContent=fmt(base.filter(row=>num(row.borrow?.available)!=null&&Number(row.borrow.available)<10000).length);
   $('countReady').textContent=fmt(base.filter(row=>num(row.rsi_daily)!=null&&Number(row.rsi_daily)<30).length);
   $('countNear').textContent=fmt(base.filter(row=>Number(row.free_float)<=1000000).length);
   document.querySelectorAll('[data-filter]').forEach(button=>{const active=button.dataset.filter===selected;button.classList.toggle('on',active);button.setAttribute('aria-pressed',String(active));button.querySelector('.sum-action').textContent=active?'القائمة الحالية':'عرض القائمة ←';});
-  $('filteredResultCount').textContent=fmt(list.length)+' سهم مطابق';
+  $('filteredResultCount').textContent=pending?'جاري التحقق من الأسهم':fmt(list.length)+' سهم مطابق';
   const caps=filterValues().cap || [300000000];$('referenceMarket').textContent='Market Cap < $'+compact(Math.max(...caps));
   const status=payload.status || {}, complete=status.last_complete_scan?new Date(status.last_complete_scan).toLocaleString('ar-SA'):null;
-  $('status').textContent=(status.error || (status.status==='ready'?'القائمة محدثة':'جاري اكتشاف الأسهم وتحديثها في الخلفية'))+' · '+fmt(status.scanned || 0)+' سهم فُحص'+(complete?' · آخر مسح: '+complete:'');
-  $('stocks').innerHTML=list.length?list.slice(0,limit).map(card).join('')+(list.length>limit?'<button id="more" type="button" class="loadmore">عرض المزيد</button>':''):'<div class="empty">'+esc(allRows().length?'لا توجد أسهم مطابقة للفلاتر الحالية.':status.error || 'القائمة قيد التجهيز من المصدر؛ ستظهر الأسهم تلقائيًا بعد التحقق من بياناتها.')+'</div>';
+  $('status').textContent=(status.error || (status.status==='ready'?'القائمة محدثة':'جاري اكتشاف الأسهم وتحديثها في الخلفية'))+' · '+fmt(status.scanned || 0)+' سهم فُحص · تم التحقق من '+fmt(status.verification?.checked || status.checked || 0)+' من '+fmt(status.candidates || 0)+' مرشحًا'+(complete?' · آخر مسح: '+complete:'');
+  $('stocks').innerHTML=list.length?list.slice(0,limit).map(card).join('')+(list.length>limit?'<button id="more" type="button" class="loadmore">عرض المزيد</button>':''):'<div class="empty">'+esc(allRows().length?'لا توجد أسهم مطابقة للفلاتر الحالية.':status.error || 'جاري التحقق من '+fmt(status.verification?.checked || status.checked || 0)+' من '+fmt(status.candidates || 0)+' مرشحًا. ستظهر الأسهم المؤهلة تلقائيًا؛ القائمة لم تكتمل بعد.')+'</div>';
   updateFilterCount();
 }
 function detail(sym, scroll=true){
