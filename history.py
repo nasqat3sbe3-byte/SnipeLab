@@ -4,12 +4,13 @@ import asyncio
 import time
 import os
 import httpx
+from rsi import normalized_closes, wilder_rsi
 
 def daily_history_start(effective, today):
     """Include the split session and pre-split RSI warmup on every refresh."""
     return min(date.fromisoformat(effective), today)-timedelta(days=120)
 
-def calculate(effective, candles):
+def calculate(effective, candles, symbol=None):
     """Daily Yahoo OHLC; high must occur on/after low for ten-session TOP."""
     bars=sorted((b for b in candles if b["date"]>=effective and b["low"]>0 and b["high"]>=b["low"]),key=lambda b:b["date"])
     if not bars:return {"verified":False,"error":"Missing post-split bars"}
@@ -58,23 +59,14 @@ def calculate(effective, candles):
                          "surge70_peak_date":b["date"],
                          "surge70_sessions_since_peak":since,
                          "surge70_verified":True}
-    def wilder_rsi(closes, period=14):
-        vals=[float(x) for x in closes if x is not None and float(x)>0]
-        if len(vals)<period+1:return None
-        changes=[vals[i]-vals[i-1] for i in range(1,len(vals))]
-        gains=[max(x,0.0) for x in changes];losses=[max(-x,0.0) for x in changes]
-        avg_gain=sum(gains[:period])/period;avg_loss=sum(losses[:period])/period
-        for i in range(period,len(changes)):
-            avg_gain=((avg_gain*(period-1))+gains[i])/period
-            avg_loss=((avg_loss*(period-1))+losses[i])/period
-        return 100.0 if avg_loss==0 else 100.0-(100.0/(1.0+avg_gain/avg_loss))
     # Live daily RSI includes today's in-progress daily candle, matching chart RSI during the session.
     # Closed RSI is retained separately for audit/comparison.
     # RSI must use the full pre-split daily history too. Split-filtered bars are valid
     # for post-split extrema, but starting RSI on the split date resets Wilder and is wrong.
     all_daily=sorted((b for b in candles if b["low"]>0 and b["high"]>=b["low"]),key=lambda b:b["date"])
-    live_closes=[b.get("rsi_close",b["close"]) for b in all_daily]
-    closed_closes=[b.get("rsi_close",b["close"]) for b in all_daily if b["date"]<ny_today]
+    rsi_series,rsi_repairs=normalized_closes(symbol,[(b["date"],b.get("rsi_close",b["close"])) for b in all_daily])
+    live_closes=[v for _,v in rsi_series]
+    closed_closes=[v for day,v in rsi_series if day<ny_today]
     rsi_live=wilder_rsi(live_closes,14)
     rsi_closed=wilder_rsi(closed_closes,14)
     rsi=round(rsi_live,2) if rsi_live is not None else None
@@ -111,7 +103,8 @@ def calculate(effective, candles):
             if verified else None),
         "half_rule_version":2,
         "rsi_daily":rsi,"rsi_daily_live":rsi,"rsi_daily_closed":round(rsi_closed,2) if rsi_closed is not None else None,
-        "rsi_method":"Wilder 14 / split-adjusted close","rsi_rule_version":3,"rsi_includes_current_daily_candle":True,
+        "rsi_method":"Wilder 14 / split-adjusted close / split-scale validation","rsi_rule_version":4,"rsi_includes_current_daily_candle":True,
+        "rsi_source_repairs":rsi_repairs,
         "rsi_wilder_avg_gain":rsi_wilder_avg_gain,"rsi_wilder_avg_loss":rsi_wilder_avg_loss,
         "rsi_wilder_last_closed_close":rsi_wilder_last_closed_close,
         "first_bar":first["date"],"bar_count":len(bars),
@@ -439,7 +432,7 @@ async def worker(universe,history,yahoo,save):
                             except (IndexError,TypeError,ValueError):rsi_close=v["close"]
                             bars.append({"date":datetime.fromtimestamp(t,tz).date().isoformat(),**v,"rsi_close":rsi_close})
                         except (IndexError,TypeError,ValueError,KeyError):continue
-                    result_data=calculate(eff,bars)
+                    result_data=calculate(eff,bars,symbol=sym)
                     result_data.setdefault("effective_date",eff)
                     try:
                         # Keep Yahoo as primary. Query the independent provider

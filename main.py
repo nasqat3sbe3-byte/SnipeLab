@@ -13,6 +13,7 @@ from datetime import datetime, timezone, date, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
+from rsi import normalized_closes, wilder_rsi
 import websockets
 from history import worker as historical_worker
 import storage
@@ -273,23 +274,25 @@ async def live_daily_rsi_loop():
                         if not result:return
                         indicators=result.get("indicators") or {}
                         q=(indicators.get("quote") or [{}])[0]
-                        closes=[float(x) for x in (q.get("close") or [])
-                                if x is not None and float(x)>0]
+                        tz=ZoneInfo((result.get("meta") or {}).get("exchangeTimezoneName") or "America/New_York")
+                        raw_closes=q.get("close") or []
+                        observations=[(datetime.fromtimestamp(t,tz).date().isoformat(),raw_closes[i])
+                                      for i,t in enumerate(result.get("timestamp") or []) if i<len(raw_closes)]
+                        series,repairs=normalized_closes(sym,observations)
+                        closes=[v for _,v in series]
                         if len(closes)<15:return
-                        changes=[closes[i]-closes[i-1] for i in range(1,len(closes))]
-                        gains=[max(x,0.0) for x in changes];losses=[max(-x,0.0) for x in changes]
-                        g=sum(gains[:14])/14.0;l=sum(losses[:14])/14.0
-                        for i in range(14,len(changes)):
-                            g=((g*13.0)+gains[i])/14.0;l=((l*13.0)+losses[i])/14.0
-                        value=100.0 if l==0 else 100.0-(100.0/(1.0+g/l))
+                        value=wilder_rsi(closes)
                         value=round(value,2)
                         # Keep live RSI outside HISTORY. historical_worker replaces history
                         # records during refreshes and used to erase/roll back the live value.
                         LIVE_RSI[sym]={"value":value,"updated_at":utcnow().isoformat(),
-                            "method":"Wilder 14 / Yahoo 1d current candle / 2y seed"}
+                            "method":"Wilder 14 / Yahoo 1d current candle / 2y seed / split-scale validation",
+                            "source_repairs":repairs,"bar_count":len(series),
+                            "last_bar_date":series[-1][0]}
                         h=HISTORY.setdefault(sym,{})
                         h["rsi_daily"]=value;h["rsi_daily_live"]=value
-                        h["rsi_method"]="Wilder 14 / Yahoo 1d current candle / 2y seed"
+                        h["rsi_method"]=LIVE_RSI[sym]["method"]
+                        h["rsi_source_repairs"]=repairs
                         h["rsi_live_updated_at"]=LIVE_RSI[sym]["updated_at"]
                     except Exception:
                         return

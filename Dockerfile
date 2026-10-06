@@ -5,6 +5,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py .
 COPY dashboard.html .
 COPY history.py .
+COPY rsi.py .
 COPY storage.py .
 COPY event_rules.py .
 COPY corporate_actions.py .
