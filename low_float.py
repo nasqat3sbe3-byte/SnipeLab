@@ -12,7 +12,7 @@ import httpx
 import storage
 from rsi import normalized_closes, wilder_rsi
 
-MAX_FLOAT = 2_000_000
+MAX_FLOAT = 5_000_000
 MAX_CAP = 300_000_000
 DEFAULT_CAP = 100_000_000
 MAX_PRICE = 5.0
@@ -74,6 +74,10 @@ def restore():
         ROWS.update(data.get("low_float_rows") or {})
         STATUS.update(data.get("low_float_status") or {})
         STATUS.update(status="starting", error=None)
+        # A catalog collected with a smaller ceiling omitted the new range.
+        # Keep verified cached rows visible while requesting a complete rescan.
+        if STATUS.get("catalog_float_max") != MAX_FLOAT:
+            STATUS["last_complete_scan"] = None
     except Exception:
         STATUS.update(status="cache_error", error="تعذر استعادة بيانات القسم")
 
@@ -116,7 +120,7 @@ async def discover(client, token):
             ROWS.pop(sym)
         else:
             ROWS[sym].update(found[sym])
-    STATUS.update(scanned=count, candidates=len(found), last_complete_scan=now())
+    STATUS.update(scanned=count, candidates=len(found), last_complete_scan=now(), catalog_float_max=MAX_FLOAT)
     save()
 
 
