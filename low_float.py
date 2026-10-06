@@ -15,6 +15,7 @@ from rsi import normalized_closes, wilder_rsi
 MAX_FLOAT = 2_000_000
 MAX_CAP = 300_000_000
 DEFAULT_CAP = 100_000_000
+MAX_PRICE = 5.0
 CATALOG = {}
 ROWS = {}
 STATUS = {"status": "starting", "scanned": 0, "candidates": 0, "last_scan": None,
@@ -125,6 +126,12 @@ def update_borrow(parsed, received_at):
             row["borrow"] = {**parsed[sym], "received_at": received_at}
 
 
+def price_allowed(row):
+    quote = row.get("price") or {}
+    price = number(quote.get("price"))
+    return price is not None and 0 < price < MAX_PRICE and fresh(quote.get("received_at"), 1800)
+
+
 def rejection_reason(row, split_symbols):
     if row.get("symbol") in split_symbols: return "split"
     if row.get("active") is not True: return "inactive"
@@ -135,6 +142,7 @@ def rejection_reason(row, split_symbols):
     if ff is None or not 0 < ff <= MAX_FLOAT: return "float"
     if cap is None: return "missing_cap"
     if not 0 < cap < MAX_CAP: return "cap"
+    if not price_allowed(row): return "price_missing_stale_or_above_limit"
     return "eligible"
 
 
@@ -142,7 +150,7 @@ def snapshot(split_symbols):
     rows = {}
     for sym, row in ROWS.items():
         # Unknown/stale fundamental records never silently pass the screen.
-        if eligible(row, split_symbols) and fresh(row.get("details_checked_at"), 7 * 86400) and fresh(row.get("float_checked_at"), 7 * 86400):
+        if eligible(row, split_symbols) and price_allowed(row) and fresh(row.get("details_checked_at"), 7 * 86400) and fresh(row.get("float_checked_at"), 7 * 86400):
             rows[sym] = dict(row)
     reasons = {}
     samples = []
@@ -153,7 +161,7 @@ def snapshot(split_symbols):
             samples.append({k: row.get(k) for k in ("symbol", "active", "type", "locale", "primary_exchange", "market_cap", "free_float")})
     return {"rows": rows, "status": {**STATUS, "verification": {"checked": len(ROWS), "reasons": reasons, "samples": samples}}, "server_time": now(),
             "criteria": {"free_float_max": MAX_FLOAT, "market_cap_max": MAX_CAP,
-                         "default_market_cap_max": DEFAULT_CAP, "rsi_required": False}}
+                         "default_market_cap_max": DEFAULT_CAP, "last_price_max_exclusive": MAX_PRICE, "rsi_required": False}}
 
 
 async def discovery_worker(split_symbols):
@@ -205,7 +213,11 @@ async def market_worker(split_symbols, fetch_quote):
     sem = asyncio.Semaphore(2)
     async with httpx.AsyncClient(timeout=12, headers={"User-Agent": "Mozilla/5.0 SnipeLab"}) as client:
         while True:
-            for sym in list(snapshot(split_symbols)["rows"]):
+            # Price collection must include unknown/expensive prices, independently
+            # of the display gate, so new stocks and later drops can enter.
+            for sym in [sym for sym, row in list(ROWS.items()) if eligible(row, split_symbols)
+                        and fresh(row.get("details_checked_at"), 7 * 86400)
+                        and fresh(row.get("float_checked_at"), 7 * 86400)]:
                 row = ROWS.get(sym)
                 if not row:
                     continue

@@ -22,7 +22,7 @@ function matches(row, filters){
       kind === 'float' || kind === 'rsi' && max !== 15 ? value <= max : value < max);
   });
 }
-function allRows(){return Object.values(payload.rows || {});}
+function allRows(){return Object.values(payload.rows || {}).filter(row=>num(row.price?.price)!=null && Number(row.price.price)>0 && Number(row.price.price)<5);}
 function rows(){
   let list = allRows().filter(row => matches(row, filterValues()));
   const query = $('query').value.trim().toLowerCase();

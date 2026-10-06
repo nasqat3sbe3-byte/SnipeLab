@@ -10,7 +10,8 @@ import low_float as lf
 def candidate(symbol="ANPA", **updates):
     return {"symbol": symbol, "free_float": 2_000_000, "market_cap": 20_000_000,
             "active": True, "type": "CS", "locale": "us", "primary_exchange": "XNAS",
-            "float_checked_at": lf.now(), "details_checked_at": lf.now(), **updates}
+            "float_checked_at": lf.now(), "details_checked_at": lf.now(),
+            "price": {"price": 2, "received_at": lf.now()}, **updates}
 
 
 class EligibilityTests(unittest.TestCase):
@@ -38,6 +39,23 @@ class EligibilityTests(unittest.TestCase):
         lf.ROWS.update(A=candidate("A"), B=candidate("B", details_checked_at="2020-01-01T00:00:00+00:00"))
         self.assertEqual(set(lf.snapshot({})['rows']), {'A'})
         self.assertEqual(lf.snapshot({'A':{}})['rows'], {})
+
+    def test_price_gate_is_strict_and_cannot_block_price_discovery(self):
+        for value in (4.9999, 0.01):
+            row = candidate(price={"price": value, "received_at": lf.now()})
+            self.assertTrue(lf.price_allowed(row))
+        for value in (5, 5.01, 10, 0, -1, None, float("nan"), float("inf")):
+            row = candidate(price={"price": value, "received_at": lf.now()})
+            self.assertTrue(lf.eligible(row, {}), "must still be polled for a later price change")
+            self.assertFalse(lf.price_allowed(row))
+            lf.ROWS['ANPA'] = row
+            self.assertEqual(lf.snapshot({})['rows'], {})
+        self.assertFalse(lf.price_allowed(candidate(price=None)))
+        self.assertFalse(lf.price_allowed(candidate(price={"price": 2, "received_at": "2020-01-01T00:00:00+00:00"})))
+        lf.ROWS['ANPA'] = candidate(price={"price": 4.99, "received_at": lf.now()})
+        self.assertIn('ANPA', lf.snapshot({})['rows'])
+        lf.ROWS['ANPA']['price']['price'] = 5
+        self.assertNotIn('ANPA', lf.snapshot({})['rows'])
 
     def test_borrow_does_not_modify_split_rows_or_inputs(self):
         lf.ROWS['ANPA'] = candidate()
