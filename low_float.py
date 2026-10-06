@@ -212,43 +212,73 @@ async def discovery_worker(split_symbols):
                 await asyncio.sleep(90 if code not in (401, 402, 403) else 900)
 
 
+def market_queue(split_symbols):
+    due = []
+    for sym, row in ROWS.items():
+        if not eligible(row, split_symbols) or not fresh(row.get("details_checked_at"), 7 * 86400) or not fresh(row.get("float_checked_at"), 7 * 86400):
+            continue
+        quote = row.get("price") or {}
+        price = number(quote.get("price"))
+        interval = 900 if price is not None and price >= MAX_PRICE else 120
+        if fresh(quote.get("received_at"), interval) and (price is None or price >= MAX_PRICE or fresh(row.get("rsi_updated_at"), 900)):
+            continue
+        if fresh(row.get("market_attempted_at"), 120):
+            continue
+        # New records cannot wait behind a complete scan of old symbols.
+        due.append((price is not None, row.get("market_attempted_at") or "", sym))
+    return [sym for _, _, sym in sorted(due)]
+
+
+async def refresh_market_batch(client, split_symbols, fetch_quote):
+    queue = market_queue(split_symbols)
+    STATUS.update(market_worker_version=2, market_queue_pending=len(queue))
+    selected = queue[:12]
+    jobs = asyncio.Semaphore(2)
+    quote_sem = asyncio.Semaphore(2)
+    async def one(sym):
+        async with jobs:
+            row = ROWS.get(sym)
+            if not row: return
+            row["market_attempted_at"] = now()
+            try:
+                quote = row.get("price") or {}
+                interval = 900 if (number(quote.get("price")) or 0) >= MAX_PRICE else 120
+                if not fresh(quote.get("received_at"), interval):
+                    _, quote = await fetch_quote(client, quote_sem, sym)
+                    if quote: row["price"] = quote
+                    else: raise ValueError("No quote")
+                # Publish price-qualified rows before requesting the slower RSI history.
+                # RSI remains optional and never holds back price discovery.
+                price = number((row.get("price") or {}).get("price"))
+                if price is not None and 0 < price < MAX_PRICE and not fresh(row.get("rsi_updated_at"), 900):
+                    response = await client.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}",
+                                                params={"range": "2y", "interval": "1d", "events": "splits"})
+                    response.raise_for_status()
+                    result = response.json()["chart"]["result"][0]
+                    tz = ZoneInfo(result.get("meta", {}).get("exchangeTimezoneName") or "America/New_York")
+                    closes = result["indicators"]["quote"][0].get("close") or []
+                    series, repairs = normalized_closes(sym, [(datetime.fromtimestamp(t, tz).date().isoformat(), closes[i])
+                                                             for i, t in enumerate(result.get("timestamp") or []) if i < len(closes)])
+                    if len(series) >= 15:
+                        row.update(rsi_daily=round(wilder_rsi([v for _, v in series]), 2),
+                                   rsi_updated_at=now(), rsi_last_bar_date=series[-1][0], rsi_source_repairs=repairs)
+            except Exception:
+                row["market_error"] = "تعذر تحديث السعر أو RSI"
+            else:
+                row.pop("market_error", None)
+    await asyncio.gather(*(one(sym) for sym in selected))
+    STATUS.update(last_prices=now(), market_batch_count=len(selected))
+    return len(selected)
+
+
 async def market_worker(split_symbols, fetch_quote):
     await asyncio.sleep(45)
-    sem = asyncio.Semaphore(2)
     async with httpx.AsyncClient(timeout=12, headers={"User-Agent": "Mozilla/5.0 SnipeLab"}) as client:
         while True:
-            # Price collection must include unknown/expensive prices, independently
-            # of the display gate, so new stocks and later drops can enter.
-            for sym in [sym for sym, row in list(ROWS.items()) if eligible(row, split_symbols)
-                        and fresh(row.get("details_checked_at"), 7 * 86400)
-                        and fresh(row.get("float_checked_at"), 7 * 86400)]:
-                row = ROWS.get(sym)
-                if not row:
-                    continue
-                try:
-                    _, quote = await fetch_quote(client, sem, sym)
-                    if quote:
-                        row["price"] = quote
-                    if not fresh(row.get("rsi_updated_at"), 900):
-                        response = await client.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}",
-                                                    params={"range": "2y", "interval": "1d", "events": "splits"})
-                        response.raise_for_status()
-                        result = response.json()["chart"]["result"][0]
-                        tz = ZoneInfo(result.get("meta", {}).get("exchangeTimezoneName") or "America/New_York")
-                        closes = result["indicators"]["quote"][0].get("close") or []
-                        series, repairs = normalized_closes(sym, [(datetime.fromtimestamp(t, tz).date().isoformat(), closes[i])
-                                                                 for i, t in enumerate(result.get("timestamp") or []) if i < len(closes)])
-                        if len(series) >= 15:
-                            row.update(rsi_daily=round(wilder_rsi([v for _, v in series]), 2),
-                                       rsi_updated_at=now(), rsi_last_bar_date=series[-1][0], rsi_source_repairs=repairs)
-                except Exception:
-                    row["market_error"] = "تعذر تحديث السعر أو RSI"
-                else:
-                    row.pop("market_error", None)
-                await asyncio.sleep(1)
-            STATUS["last_prices"] = now()
+            await refresh_market_batch(client, split_symbols, fetch_quote)
             try:
                 save()
             except Exception:
                 STATUS["error"] = "تعذر حفظ آخر تحديث"
-            await asyncio.sleep(120)
+            # Re-evaluate newly verified symbols after every small batch.
+            await asyncio.sleep(15)

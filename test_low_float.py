@@ -102,6 +102,39 @@ class EligibilityTests(unittest.TestCase):
                     self.assertEqual(lf.STATUS['scanned'],4)
         asyncio.run(run(True)); asyncio.run(run(False))
 
+    def test_market_queue_prioritizes_new_price_and_retries_expensive_stocks(self):
+        old = "2020-01-01T00:00:00+00:00"
+        lf.ROWS.update(OLD=candidate("OLD", price={"price": 2, "received_at": old}),
+                       NEW=candidate("NEW", free_float=4000000, price=None),
+                       EXPENSIVE=candidate("EXPENSIVE", price={"price": 8, "received_at": old}),
+                       FRESH=candidate("FRESH", rsi_updated_at=lf.now()),
+                       RETRY=candidate("RETRY", price=None, market_attempted_at=lf.now()))
+        queue = lf.market_queue({})
+        self.assertEqual(queue[0], 'NEW')
+        self.assertIn('EXPENSIVE', queue)
+        self.assertNotIn('FRESH', queue)
+        self.assertNotIn('RETRY', queue)
+
+    def test_market_batch_is_bounded_and_reads_new_stock_before_old_backlog(self):
+        for i in range(15):
+            sym = 'OLD'+str(i)
+            lf.ROWS[sym] = candidate(sym, price={"price":2,"received_at":"2020-01-01T00:00:00+00:00"}, rsi_updated_at=lf.now())
+        lf.ROWS['NEW'] = candidate('NEW', free_float=4390000, price=None, rsi_updated_at=lf.now())
+        active, maximum, calls = 0, 0, []
+        async def fetch(client, sem, sym):
+            nonlocal active, maximum
+            active += 1; maximum = max(maximum, active); calls.append(sym)
+            await asyncio.sleep(0.001)
+            active -= 1
+            return sym, {"price":4.99,"received_at":lf.now()}
+        count = asyncio.run(lf.refresh_market_batch(None, {}, fetch))
+        self.assertEqual(count, 12)
+        self.assertEqual(maximum, 2)
+        self.assertEqual(calls[0], 'NEW')
+        self.assertIn('NEW', lf.snapshot({})['rows'])
+        self.assertEqual(len(calls), 12)
+        self.assertEqual(lf.STATUS['market_worker_version'], 2)
+
     def test_pagination_rejects_external_host_before_authorization(self):
         async def run():
             with self.assertRaises(ValueError):
