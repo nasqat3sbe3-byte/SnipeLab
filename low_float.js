@@ -6,7 +6,7 @@ const fmt = v => num(v) == null ? '—' : Number(v).toLocaleString('en-US', {max
 const money = v => num(v) == null ? '—' : '$' + Number(v).toLocaleString('en-US', {maximumFractionDigits:4});
 const pct = v => num(v) == null ? '—' : fmt(v) + '%';
 const compact = v => num(v) == null ? '—' : Number(v).toLocaleString('en-US', {notation:'compact', maximumFractionDigits:2});
-let payload = {rows:{},status:{}}, selected = 'all', loading = false, limit = 24, opened = null, boot = null;
+let payload = {rows:{},status:{}}, selected = 'all', preset = 'all', loading = false, limit = 24, opened = null, boot = null;
 const favorites = new Set(JSON.parse(localStorage.getItem('snipelab-low-float-favorites') || '[]'));
 
 function filterValues(){
@@ -23,6 +23,19 @@ function matches(row, filters){
   });
 }
 function allRows(){return Object.values(payload.rows || {}).filter(row=>num(row.price?.price)!=null && Number(row.price.price)>0 && Number(row.price.price)<5);}
+function formationMatch(row, steady=false){
+  const f=row.formation, rsi=num(row.rsi_daily), cap=num(row.market_cap);
+  const limits=filterValues().rsi;
+  const rsiMatch=rsi!=null && (limits?.length ? matches(row,{rsi:limits}) : rsi<30);
+  const rsiAge=Date.now()-Date.parse(row.rsi_updated_at || '');
+  return !!(f?.ready && f.setup && cap!=null && cap<100000000 && rsiMatch && rsiAge>=-60000 && rsiAge<1800000 && (!steady || f.state==='steady'));
+}
+function setupLine(row){
+  const f=row.formation;
+  if(!f?.ready)return '<div class="lf-setup">تكوين القاع: بانتظار بيانات 20 جلسة مكتملة</div>';
+  const label=f.state==='broken'?'كسر القاع':f.state==='steady'?'بدأ يتماسك':'تحت المتابعة';
+  return '<div class="lf-setup"><strong>'+label+'</strong><span>هبوط '+pct(f.drawdown_pct)+'</span><span>عن القاع '+pct(f.distance_pct)+'</span><span>ثبات '+fmt(f.stability_sessions)+' جلسات</span></div>';
+}
 function rows(){
   let list = allRows().filter(row => matches(row, filterValues()));
   const query = $('query').value.trim().toLowerCase();
@@ -30,9 +43,11 @@ function rows(){
   if(selected === 'borrow') list = list.filter(row => num(row.borrow?.available) != null && Number(row.borrow.available) < 10000);
   if(selected === 'rsi') list = list.filter(row => num(row.rsi_daily) != null && Number(row.rsi_daily) < 30);
   if(selected === 'float') list = list.filter(row => Number(row.free_float) <= 1000000);
+  if(preset!=='all') list=list.filter(row=>formationMatch(row,preset==='steady'));
   const kind = $('approvedSort').value;
   const value = row => num(kind === 'rsi' ? row.rsi_daily : kind === 'available' ? row.borrow?.available : kind === 'cap' ? row.market_cap : row.free_float) ?? Infinity;
-  return list.sort((a,b) => value(a)-value(b) || a.symbol.localeCompare(b.symbol));
+  const priority=row=>[Number(row.free_float)<=2000000?0:1, num(row.borrow?.available)!=null&&Number(row.borrow.available)<15000?0:1, row.borrow_change?.delta<0 && Date.now()-Date.parse(row.borrow_change.received_at)<86400000?0:1, num(row.formation?.distance_pct) ?? Infinity];
+  return list.sort((a,b) => {if(preset!=='all'){const pa=priority(a),pb=priority(b);for(let i=0;i<pa.length;i++){if(pa[i]!==pb[i])return pa[i]-pb[i];}}return value(a)-value(b) || a.symbol.localeCompare(b.symbol);});
 }
 function sparkline(row,cls){
   const values = (row.price?.sparkline || []).filter(v => num(v) != null && v > 0);
@@ -45,7 +60,7 @@ function card(row){
   const p=num(row.price?.price), prev=num(row.price?.previous_close), change=p!=null && prev>0 ? (p/prev-1)*100 : null;
   const cls=change==null?'flat':change>=0?'up':'down';
   const metric=(label,value,cls='')=>'<div class="sl-metric"><small>'+esc(label)+'</small><b class="'+cls+'">'+esc(value)+'</b></div>';
-  return '<article class="sl-row state-watch" role="button" tabindex="0" data-symbol="'+esc(row.symbol)+'" aria-label="تفاصيل '+esc(row.symbol)+'"><div class="sl-mainline"><span class="sl-change '+cls+'">'+esc(change==null?'—':(change>0?'+':'')+change.toFixed(2)+'%')+'</span>'+sparkline(row,cls)+'<div class="sl-quote"><span class="sl-price">'+esc(money(p))+'</span><span class="sl-dollar '+cls+'">'+esc(p!=null&&prev>0?(p-prev>=0?'+':'-')+money(Math.abs(p-prev)):'—')+'</span></div><div class="sl-identity"><div class="sl-identity-top"><button class="sl-fav '+(favorites.has(row.symbol)?'on':'')+'" data-favorite="'+esc(row.symbol)+'" aria-label="المفضلة" aria-pressed="'+favorites.has(row.symbol)+'">'+(favorites.has(row.symbol)?'★':'☆')+'</button><span class="sl-symbol">'+esc(row.symbol)+'</span></div><span class="sl-company">'+esc(row.company_name || '—')+'</span><span class="sl-open-hint" aria-hidden="true">›</span></div></div><div class="sl-metrics">'+metric('Available',fmt(row.borrow?.available),num(row.borrow?.available)!=null&&Number(row.borrow.available)<10000?'good':'borrow-warn')+metric('RSI',fmt(row.rsi_daily),num(row.rsi_daily)!=null&&Number(row.rsi_daily)<30?'good':'')+metric('Free Float',compact(row.free_float))+metric('Market Cap','$'+compact(row.market_cap))+metric('CTB',pct(row.borrow?.ctb))+metric('Rebate',pct(row.borrow?.rebate),num(row.borrow?.rebate)<0?'bad':'')+'</div></article>';
+  return '<article class="sl-row state-watch" role="button" tabindex="0" data-symbol="'+esc(row.symbol)+'" aria-label="تفاصيل '+esc(row.symbol)+'"><div class="sl-mainline"><span class="sl-change '+cls+'">'+esc(change==null?'—':(change>0?'+':'')+change.toFixed(2)+'%')+'</span>'+sparkline(row,cls)+'<div class="sl-quote"><span class="sl-price">'+esc(money(p))+'</span><span class="sl-dollar '+cls+'">'+esc(p!=null&&prev>0?(p-prev>=0?'+':'-')+money(Math.abs(p-prev)):'—')+'</span></div><div class="sl-identity"><div class="sl-identity-top"><button class="sl-fav '+(favorites.has(row.symbol)?'on':'')+'" data-favorite="'+esc(row.symbol)+'" aria-label="المفضلة" aria-pressed="'+favorites.has(row.symbol)+'">'+(favorites.has(row.symbol)?'★':'☆')+'</button><span class="sl-symbol">'+esc(row.symbol)+'</span></div><span class="sl-company">'+esc(row.company_name || '—')+'</span><span class="sl-open-hint" aria-hidden="true">›</span></div></div><div class="sl-metrics">'+metric('Available',fmt(row.borrow?.available),num(row.borrow?.available)!=null&&Number(row.borrow.available)<10000?'good':'borrow-warn')+metric('RSI',fmt(row.rsi_daily),num(row.rsi_daily)!=null&&Number(row.rsi_daily)<30?'good':'')+metric('Free Float',compact(row.free_float))+metric('Market Cap','$'+compact(row.market_cap))+metric('CTB',pct(row.borrow?.ctb))+metric('Rebate',pct(row.borrow?.rebate),num(row.borrow?.rebate)<0?'bad':'')+'</div>'+setupLine(row)+'</article>';
 }
 function updateFilterCount(){
   const n=document.querySelectorAll('[data-filter-kind]:checked').length;
@@ -55,6 +70,12 @@ function updateFilterCount(){
 }
 function render(){
   const base=allRows().filter(row=>matches(row,filterValues())), list=rows();
+  const analyzed=allRows().filter(row=>row.formation?.ready).length;
+  const analysisProgress=' · تحليل القاع: '+fmt(analyzed)+' من '+fmt(allRows().length)+' سهم';
+  $('countFormation').textContent='('+fmt(base.filter(row=>formationMatch(row)).length)+')';
+  $('countSteady').textContent='('+fmt(base.filter(row=>formationMatch(row,true)).length)+')';
+  document.querySelectorAll('[data-preset]').forEach(button=>{const active=button.dataset.preset===preset;button.classList.toggle('on',active);button.setAttribute('aria-pressed',String(active));});
+  $('formationNote').hidden=preset==='all';
   const pending=!allRows().length && payload.status?.status!=='ready' && !payload.status?.error;
   $('countAll').textContent=pending?'—':fmt(base.length);
   $('countBorrow').textContent=fmt(base.filter(row=>num(row.borrow?.available)!=null&&Number(row.borrow.available)<10000).length);
@@ -64,15 +85,18 @@ function render(){
   $('filteredResultCount').textContent=pending?'جاري التحقق من الأسهم':fmt(list.length)+' سهم مطابق';
   const caps=filterValues().cap || [300000000];$('referenceMarket').textContent='Market Cap < $'+compact(Math.max(...caps));
   const status=payload.status || {}, complete=status.last_complete_scan?new Date(status.last_complete_scan).toLocaleString('ar-SA'):null;
-  $('status').textContent=(status.error || (status.status==='ready'?'القائمة محدثة':'جاري اكتشاف الأسهم وتحديثها في الخلفية'))+' · '+fmt(status.scanned || 0)+' سهم فُحص · تم التحقق من '+fmt(status.verification?.checked || status.checked || 0)+' من '+fmt(status.candidates || 0)+' مرشحًا'+(complete?' · آخر مسح: '+complete:'');
-  $('stocks').innerHTML=list.length?list.slice(0,limit).map(card).join('')+(list.length>limit?'<button id="more" type="button" class="loadmore">عرض المزيد</button>':''):'<div class="empty">'+esc(allRows().length?'لا توجد أسهم مطابقة للفلاتر الحالية.':status.error || 'جاري التحقق من '+fmt(status.verification?.checked || status.checked || 0)+' من '+fmt(status.candidates || 0)+' مرشحًا. ستظهر الأسهم المؤهلة تلقائيًا؛ القائمة لم تكتمل بعد.')+'</div>';
+  $('status').textContent=(status.error || (status.status==='ready'?'القائمة محدثة':'جاري اكتشاف الأسهم وتحديثها في الخلفية'))+' · '+fmt(status.scanned || 0)+' سهم فُحص · تم التحقق من '+fmt(status.verification?.checked || status.checked || 0)+' من '+fmt(status.candidates || 0)+' مرشحًا'+(complete?' · آخر مسح: '+complete:'')+analysisProgress;
+  $('stocks').innerHTML=list.length?list.slice(0,limit).map(card).join('')+(list.length>limit?'<button id="more" type="button" class="loadmore">عرض المزيد</button>':''):'<div class="empty">'+esc(allRows().length?'لا توجد أسهم مطابقة للفلاتر الحالية.'+(preset!=='all'&&analyzed<allRows().length?' يجري حساب القاع لبقية الأسهم في الخلفية.':''):status.error || 'جاري التحقق من '+fmt(status.verification?.checked || status.checked || 0)+' من '+fmt(status.candidates || 0)+' مرشحًا. ستظهر الأسهم المؤهلة تلقائيًا؛ القائمة لم تكتمل بعد.')+'</div>';
   updateFilterCount();
 }
 function detail(sym, scroll=true){
   const row=payload.rows[sym];if(!row)return;
+  const f=row.formation || {};
+  const delta=row.borrow_change, recentDelta=delta&&Date.now()-Date.parse(delta.received_at)<86400000;
+  const analysisPanel=f.ready?'<div class="room-panel"><h3>تكوين القاع</h3><div class="room-data">'+[['الحالة',f.state==='broken'?'كسر القاع':f.state==='steady'?'بدأ يتماسك':'تحت المتابعة'],['قاع 20 جلسة',money(f.support)],['تاريخ القاع',f.support_date],['أعلى 20 جلسة',money(f.high_20)],['الهبوط من الأعلى',pct(f.drawdown_pct)],['بعده عن القاع',pct(f.distance_pct)],['الثبات بعد القاع',fmt(f.stability_sessions)+' جلسات مكتملة'],['إعادة اختبار القاع',f.retest_state==='broken'?'فشل / كسر':f.retest_state==='success'?'نجح · '+f.retest_date:'بانتظار'],['EMA5',money(f.ema5)],['EMA10',money(f.ema10)],['عودة فوق EMA5 وEMA10',f.ema_reclaim?'نعم':'لم تتحقق'],['آخر تغير Available',recentDelta?(delta.delta>0?'+':'')+fmt(delta.delta)+' · '+new Date(delta.received_at).toLocaleString('ar-SA'):'—']].map(([l,v])=>'<span>'+esc(l)+'</span><b>'+esc(v)+'</b>').join('')+'</div><p class="lf-asof">'+esc('آخر جلسة مكتملة: '+f.last_completed_session+' · إعادة الاختبار: رجوع ضمن 5% بعد الابتعاد عن القاع، بدون كسر')+'</p></div>':'<div class="room-panel lf-note">بانتظار بيانات 20 جلسة مكتملة لحساب القاع والتماسك.</div>';
   opened=sym;$('huntPage').hidden=true;$('stockDetailPage').hidden=false;
   const item=(label,value)=>'<span>'+esc(label)+'</span><b>'+esc(value)+'</b>';
-  $('stockDetailBody').innerHTML='<div class="ref-room lf-detail"><button class="ref-back" id="roomBack" type="button">‹ رجوع للقائمة</button><h2>'+esc(sym)+'</h2><p>'+esc(row.company_name || '')+'</p><div class="room-panel"><div class="room-data">'+item('السعر',money(row.price?.price))+item('RSI Daily (14)',fmt(row.rsi_daily))+item('Free Float',fmt(row.free_float))+item('Market Cap',money(row.market_cap))+item('Available',fmt(row.borrow?.available))+item('CTB',pct(row.borrow?.ctb))+item('Rebate',pct(row.borrow?.rebate))+item('البورصة',row.primary_exchange || '—')+'</div><div class="lf-asof">'+esc('آخر سعر: '+(row.price?.market_timestamp?new Date(row.price.market_timestamp).toLocaleString('ar-SA'):'—')+' · آخر RSI: '+(row.rsi_last_bar_date || '—'))+'</div><div class="lf-asof">'+esc('تاريخ قياس الفلوت: '+(row.float_effective_date || '—')+' · المصدر: Massive')+'</div></div><div class="lf-detail-links"><a href="https://www.tradingview.com/chart/?symbol='+encodeURIComponent(sym)+'" target="_blank" rel="noopener noreferrer">الشارت ↗</a><a href="https://finance.yahoo.com/quote/'+encodeURIComponent(sym)+'/news/" target="_blank" rel="noopener noreferrer">أخبار السهم ↗</a></div></div>';
+  $('stockDetailBody').innerHTML='<div class="ref-room lf-detail"><button class="ref-back" id="roomBack" type="button">‹ رجوع للقائمة</button><h2>'+esc(sym)+'</h2><p>'+esc(row.company_name || '')+'</p><div class="room-panel"><div class="room-data">'+item('السعر',money(row.price?.price))+item('RSI Daily (14)',fmt(row.rsi_daily))+item('Free Float',fmt(row.free_float))+item('Market Cap',money(row.market_cap))+item('Available',fmt(row.borrow?.available))+item('CTB',pct(row.borrow?.ctb))+item('Rebate',pct(row.borrow?.rebate))+item('البورصة',row.primary_exchange || '—')+'</div><div class="lf-asof">'+esc('آخر سعر: '+(row.price?.market_timestamp?new Date(row.price.market_timestamp).toLocaleString('ar-SA'):'—')+' · آخر RSI: '+(row.rsi_last_bar_date || '—'))+'</div><div class="lf-asof">'+esc('تاريخ قياس الفلوت: '+(row.float_effective_date || '—')+' · المصدر: Massive')+'</div></div>'+analysisPanel+'<div class="lf-detail-links"><a href="https://www.tradingview.com/chart/?symbol='+encodeURIComponent(sym)+'" target="_blank" rel="noopener noreferrer">الشارت ↗</a><a href="https://finance.yahoo.com/quote/'+encodeURIComponent(sym)+'/news/" target="_blank" rel="noopener noreferrer">أخبار السهم ↗</a></div></div>';
   if(scroll)window.scrollTo({top:0});
 }
 function closeDetail(){opened=null;$('stockDetailPage').hidden=true;$('huntPage').hidden=false;}
@@ -94,11 +118,12 @@ $('referenceMenu').onclick=()=>$('referenceMenuDialog').showModal();$('reference
 $('approvedFilterOpen').onclick=()=>{updateFilterCount();$('approvedFilterDialog').showModal();};
 $('approvedFilterClose').onclick=()=>$('approvedFilterDialog').close();
 $('approvedFilterDone').onclick=()=>{$('approvedFilterDialog').close();limit=24;render();};
-function clearFilters(){document.querySelectorAll('[data-filter-kind]').forEach(el=>el.checked=false);limit=24;render();}
+function clearFilters(){preset='all';selected='all';document.querySelectorAll('[data-filter-kind]').forEach(el=>el.checked=false);limit=24;render();}
 $('approvedFilterClear').onclick=clearFilters;$('clearAppliedFilters').onclick=clearFilters;
 document.querySelectorAll('[data-filter-kind]').forEach(el=>el.addEventListener('change',updateFilterCount));
 $('query').oninput=()=>{limit=24;render();};$('approvedSort').onchange=()=>{limit=24;render();};
 document.querySelectorAll('[data-filter]').forEach(button=>button.onclick=()=>{selected=button.dataset.filter;limit=24;render();});
+document.querySelectorAll('[data-preset]').forEach(button=>button.onclick=()=>{preset=button.dataset.preset;selected='all';limit=24;render();});
 document.querySelectorAll('[data-href]').forEach(button=>button.onclick=()=>location.href=button.dataset.href);
 document.addEventListener('click',event=>{
   const favorite=event.target.closest('[data-favorite]');if(favorite){const sym=favorite.dataset.favorite;favorites.has(sym)?favorites.delete(sym):favorites.add(sym);localStorage.setItem('snipelab-low-float-favorites',JSON.stringify([...favorites]));render();return;}

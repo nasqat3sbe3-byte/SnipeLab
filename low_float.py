@@ -4,7 +4,7 @@ import math
 import os
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, time as daytime
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
@@ -127,7 +127,103 @@ async def discover(client, token):
 def update_borrow(parsed, received_at):
     for sym, row in ROWS.items():
         if sym in parsed:
+            previous = number((row.get("borrow") or {}).get("available"))
+            current = number(parsed[sym].get("available"))
+            if previous is not None and current is not None and previous != current:
+                row["borrow_change"] = {"previous": previous, "current": current,
+                                        "delta": current - previous, "received_at": received_at}
             row["borrow"] = {**parsed[sym], "received_at": received_at}
+
+
+def daily_analysis(symbol, result, at=None):
+    """Use completed exchange sessions only; today's unfinished bar can break support."""
+    at = at or datetime.now(timezone.utc)
+    meta = result.get("meta") or {}
+    tz = ZoneInfo(meta.get("exchangeTimezoneName") or "America/New_York")
+    local = at.astimezone(tz)
+    regular_end = (meta.get("currentTradingPeriod") or {}).get("regular", {}).get("end")
+    end = datetime.fromtimestamp(regular_end, tz) if regular_end else None
+    close_time = end if end and end.date() == local.date() else datetime.combine(local.date(), daytime(16), tz)
+    quote = result["indicators"]["quote"][0]
+    timestamps = result.get("timestamp") or []
+    closes = quote.get("close") or []
+    observations = [(datetime.fromtimestamp(t, tz).date().isoformat(), closes[i])
+                    for i, t in enumerate(timestamps) if i < len(closes)]
+    normalized, repairs = normalized_closes(symbol, observations)
+    adjusted = dict(normalized)
+    bars, live_low = [], None
+    for i, stamp in enumerate(timestamps):
+        day = datetime.fromtimestamp(stamp, tz).date().isoformat()
+        incomplete = day == local.date().isoformat() and local < close_time
+        values = [number((quote.get(key) or [])[i]) if i < len(quote.get(key) or []) else None
+                  for key in ("high", "low", "close")]
+        high, low, close = values
+        if any(v is None or v <= 0 for v in values) or not low <= close <= high:
+            # Do not bridge missing trading sessions in a 20-session screen.
+            if day <= local.date().isoformat() and not incomplete: bars.append(None)
+            continue
+        factor = adjusted.get(day, close) / close
+        bar = {"date": day, "high": high * factor, "low": low * factor, "close": close * factor}
+        if incomplete:
+            live_low = bar["low"]
+        elif day <= local.date().isoformat():
+            bars.append(bar)
+    window = bars[-20:]
+    if len(window) < 20 or any(bar is None for bar in window):
+        return {"version": 1, "checked_at": now(), "ready": False, "reason": "تحتاج 20 جلسة مكتملة ببيانات سليمة"}
+    if (local.date() - datetime.fromisoformat(window[-1]["date"]).date()).days > 7:
+        return {"version": 1, "checked_at": now(), "ready": False, "reason": "آخر جلسة تاريخية قديمة"}
+    floor = min(bar["low"] for bar in window)
+    index = next(i for i, bar in enumerate(window) if bar["low"] == floor)
+    after = window[index + 1:]
+    retest_date = None
+    moved_away = False
+    for i, bar in enumerate(after):
+        # A departure on this candle cannot confirm a retest on the same candle.
+        if i >= 2 and moved_away and floor <= bar["low"] <= floor * 1.05:
+            retest_date = bar["date"]
+        if bar["high"] > floor * 1.05: moved_away = True
+    clean_closes = [b["close"] for b in bars if b is not None]
+    def ema(period):
+        value = clean_closes[0]
+        for close in clean_closes[1:]: value += 2 / (period + 1) * (close - value)
+        return value
+    return {"version": 1, "checked_at": now(), "ready": True,
+            "last_completed_session": window[-1]["date"], "window_start": window[0]["date"],
+            "high_20": max(bar["high"] for bar in window), "support": floor,
+            "support_date": window[index]["date"], "stability_sessions": len(after),
+            "retest_date": retest_date, "live_low": live_low, "live_low_date": local.date().isoformat(),
+            "ema5": ema(5), "ema10": ema(10), "source_repairs": repairs}
+
+
+def formation(row, at=None):
+    analysis = row.get("daily_analysis") or {}
+    if not analysis.get("ready") or not fresh(analysis.get("checked_at"), 1800):
+        return {"ready": False, "state": "pending"}
+    price = number((row.get("price") or {}).get("price"))
+    high, support = number(analysis.get("high_20")), number(analysis.get("support"))
+    if price is None or high is None or support is None or min(price, high, support) <= 0:
+        return {"ready": False, "state": "pending"}
+    today = (at or datetime.now(timezone.utc)).astimezone(ZoneInfo("America/New_York")).date().isoformat()
+    live_low = number(analysis.get("live_low")) if analysis.get("live_low_date") == today else None
+    quote = row.get("price") or {}
+    try:
+        quote_day = datetime.fromisoformat(quote.get("market_timestamp", "").replace("Z", "+00:00")).astimezone(ZoneInfo("America/New_York")).date().isoformat()
+    except (TypeError, ValueError):
+        quote_day = None
+    quote_low = number(quote.get("day_low")) if quote_day == today else None
+    broken = price < support or any(low is not None and low > 0 and low < support for low in (live_low, quote_low))
+    sessions = 0 if broken else analysis["stability_sessions"]
+    rsi, cap = number(row.get("rsi_daily")), number(row.get("market_cap"))
+    drawdown = (1 - price / high) * 100
+    distance = (price / support - 1) * 100
+    setup = not broken and drawdown >= 30 - 1e-9 and 0 <= distance <= 20 + 1e-9
+    candidate = setup and cap is not None and 0 < cap < DEFAULT_CAP and rsi is not None and rsi < 30 and fresh(row.get("rsi_updated_at"), 1800)
+    return {**analysis, "drawdown_pct": round(drawdown, 2), "distance_pct": round(distance, 2),
+            "stability_sessions": sessions, "setup": setup, "candidate": candidate,
+            "state": "broken" if broken else "steady" if sessions >= 2 else "watch",
+            "retest_state": "broken" if broken else "success" if analysis.get("retest_date") else "waiting",
+            "ema_reclaim": price >= analysis["ema5"] and price >= analysis["ema10"]}
 
 
 def price_allowed(row):
@@ -155,7 +251,7 @@ def snapshot(split_symbols):
     for sym, row in ROWS.items():
         # Unknown/stale fundamental records never silently pass the screen.
         if eligible(row, split_symbols) and price_allowed(row) and fresh(row.get("details_checked_at"), 7 * 86400) and fresh(row.get("float_checked_at"), 7 * 86400):
-            rows[sym] = dict(row)
+            rows[sym] = {**row, "formation": formation(row)}
     reasons = {}
     samples = []
     for row in ROWS.values():
@@ -165,7 +261,8 @@ def snapshot(split_symbols):
             samples.append({k: row.get(k) for k in ("symbol", "active", "type", "locale", "primary_exchange", "market_cap", "free_float")})
     return {"rows": rows, "status": {**STATUS, "verification": {"checked": len(ROWS), "reasons": reasons, "samples": samples}}, "server_time": now(),
             "criteria": {"free_float_max": MAX_FLOAT, "market_cap_max": MAX_CAP,
-                         "default_market_cap_max": DEFAULT_CAP, "last_price_max_exclusive": MAX_PRICE, "rsi_required": False}}
+                         "default_market_cap_max": DEFAULT_CAP, "last_price_max_exclusive": MAX_PRICE, "rsi_required": False,
+                         "formation": {"version": 1, "sessions": 20, "drawdown_min_pct": 30, "distance_max_pct": 20, "rsi_max_exclusive": 30, "stability_min": 2, "retest_max_pct": 5}}}
 
 
 async def discovery_worker(split_symbols):
@@ -220,7 +317,8 @@ def market_queue(split_symbols):
         quote = row.get("price") or {}
         price = number(quote.get("price"))
         interval = 900 if price is not None and price >= MAX_PRICE else 120
-        if fresh(quote.get("received_at"), interval) and (price is None or price >= MAX_PRICE or fresh(row.get("rsi_updated_at"), 900)):
+        history_due = not fresh((row.get("daily_analysis") or {}).get("checked_at"), 900)
+        if fresh(quote.get("received_at"), interval) and (price is None or price >= MAX_PRICE or fresh(row.get("rsi_updated_at"), 900) and not history_due):
             continue
         if fresh(row.get("market_attempted_at"), 120):
             continue
@@ -250,7 +348,7 @@ async def refresh_market_batch(client, split_symbols, fetch_quote):
                 # Publish price-qualified rows before requesting the slower RSI history.
                 # RSI remains optional and never holds back price discovery.
                 price = number((row.get("price") or {}).get("price"))
-                if price is not None and 0 < price < MAX_PRICE and not fresh(row.get("rsi_updated_at"), 900):
+                if price is not None and 0 < price < MAX_PRICE and (not fresh(row.get("rsi_updated_at"), 900) or not fresh((row.get("daily_analysis") or {}).get("checked_at"), 900)):
                     response = await client.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}",
                                                 params={"range": "2y", "interval": "1d", "events": "splits"})
                     response.raise_for_status()
@@ -262,6 +360,7 @@ async def refresh_market_batch(client, split_symbols, fetch_quote):
                     if len(series) >= 15:
                         row.update(rsi_daily=round(wilder_rsi([v for _, v in series]), 2),
                                    rsi_updated_at=now(), rsi_last_bar_date=series[-1][0], rsi_source_repairs=repairs)
+                    row["daily_analysis"] = daily_analysis(sym, result)
             except Exception:
                 row["market_error"] = "تعذر تحديث السعر أو RSI"
             else:

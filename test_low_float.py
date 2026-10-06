@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import httpx
@@ -11,7 +12,25 @@ def candidate(symbol="ANPA", **updates):
     return {"symbol": symbol, "free_float": 2_000_000, "market_cap": 20_000_000,
             "active": True, "type": "CS", "locale": "us", "primary_exchange": "XNAS",
             "float_checked_at": lf.now(), "details_checked_at": lf.now(),
+            "daily_analysis": {"checked_at": lf.now(), "ready": False},
             "price": {"price": 2, "received_at": lf.now()}, **updates}
+
+
+def chart(floor_index=17, today_low=None):
+    day = datetime(2026, 10, 5, 13, 30, tzinfo=timezone.utc)
+    days = []
+    while len(days) < 20:
+        if day.weekday() < 5: days.append(day)
+        day -= timedelta(days=1)
+    days.reverse()
+    quote = {"high": [2] * 20, "low": [1.1] * 20, "close": [1.15] * 20}
+    quote['low'][floor_index] = 1
+    for i in range(floor_index, 20): quote['high'][i] = 1.3
+    if today_low is not None:
+        days.append(datetime(2026, 10, 6, 13, 30, tzinfo=timezone.utc))
+        quote['high'].append(1.3); quote['low'].append(today_low); quote['close'].append(1.1)
+    return {"meta": {"exchangeTimezoneName": "America/New_York"},
+            "timestamp": [int(day.timestamp()) for day in days], "indicators": {"quote": [quote]}}
 
 
 class EligibilityTests(unittest.TestCase):
@@ -140,6 +159,98 @@ class EligibilityTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 await lf.massive_get(None, 'https://example.com/page', 'secret')
         asyncio.run(run())
+
+    def test_completed_sessions_and_intraday_break_even_after_price_recovery(self):
+        at = datetime(2026, 10, 6, 18, tzinfo=timezone.utc)
+        analysis = lf.daily_analysis('TEST', chart(today_low=.95), at)
+        self.assertEqual(analysis['last_completed_session'], '2026-10-05')
+        self.assertEqual(analysis['stability_sessions'], 2)
+        self.assertEqual(analysis['support'], 1)
+        row = candidate(daily_analysis=analysis, rsi_daily=27, rsi_updated_at=lf.now(), price={'price':1.15})
+        result = lf.formation(row, at)
+        self.assertEqual(result['state'], 'broken')
+        self.assertEqual(result['stability_sessions'], 0)
+        self.assertFalse(result['candidate'])
+        # Live quote lows also catch a break before the next history refresh.
+        analysis['live_low'] = None
+        row['price'].update(day_low=.99, market_timestamp=at.isoformat())
+        self.assertEqual(lf.formation(row, at)['state'], 'broken')
+
+    def test_twenty_session_drawdown_distance_and_new_low_reset(self):
+        at = datetime(2026, 10, 6, 18, tzinfo=timezone.utc)
+        analysis = lf.daily_analysis('TEST', chart(), at)
+        row = candidate(daily_analysis=analysis, rsi_daily=29.99, rsi_updated_at=lf.now(), price={'price':1.2})
+        result = lf.formation(row, at)
+        self.assertEqual(result['drawdown_pct'], 40)
+        self.assertEqual(result['distance_pct'], 20)
+        self.assertEqual(result['state'], 'steady')
+        self.assertTrue(result['candidate'])
+        row['price']['price'] = 1.201
+        self.assertFalse(lf.formation(row, at)['candidate'])
+        row['price']['price'] = 1.1
+        for update in ({'rsi_daily':30}, {'market_cap':100000000}, {'rsi_daily':None},
+                       {'rsi_updated_at':'2020-01-01T00:00:00+00:00'}):
+            self.assertFalse(lf.formation({**row, **update}, at)['candidate'])
+        row['daily_analysis'] = lf.daily_analysis('TEST', chart(floor_index=19), at)
+        self.assertEqual(lf.formation(row, at)['state'], 'watch')
+        self.assertEqual(lf.formation(row, at)['stability_sessions'], 0)
+
+    def test_retest_requires_prior_departure_and_completed_stability(self):
+        at = datetime(2026, 10, 6, 18, tzinfo=timezone.utc)
+        result = chart(floor_index=16)
+        result['indicators']['quote'][0]['low'][-1] = 1.02
+        analysis = lf.daily_analysis('TEST', result, at)
+        self.assertEqual(analysis['retest_date'], '2026-10-05')
+        result['indicators']['quote'][0]['high'][17:19] = [1.04,1.04]
+        result['indicators']['quote'][0]['low'][17:19] = [1.01,1.01]
+        result['indicators']['quote'][0]['close'][17:19] = [1.03,1.03]
+        self.assertIsNone(lf.daily_analysis('TEST', result, at)['retest_date'])
+        # An equal low is a retest, not a new lower low resetting stability.
+        result = chart(floor_index=16)
+        result['indicators']['quote'][0]['low'][-1] = 1
+        self.assertEqual(lf.daily_analysis('TEST', result, at)['stability_sessions'], 3)
+
+    def test_short_gappy_stale_and_early_close_history(self):
+        at = datetime(2026, 10, 6, 18, tzinfo=timezone.utc)
+        result = chart()
+        result['timestamp'] = result['timestamp'][1:]
+        self.assertFalse(lf.daily_analysis('TEST', result, at)['ready'])
+        result = chart()
+        result['indicators']['quote'][0]['close'][-2] = None
+        self.assertFalse(lf.daily_analysis('TEST', result, at)['ready'])
+        result = chart(today_low=1.1)
+        result['meta']['currentTradingPeriod']={'regular':{'end':int(datetime(2026,10,6,17,tzinfo=timezone.utc).timestamp())}}
+        analysis = lf.daily_analysis('TEST', result, at)
+        self.assertEqual(analysis['last_completed_session'], '2026-10-06')
+        self.assertEqual(analysis['stability_sessions'], 3)
+        self.assertFalse(lf.daily_analysis('TEST', chart(), at + timedelta(days=10))['ready'])
+        analysis['checked_at'] = '2020-01-01T00:00:00+00:00'
+        self.assertFalse(lf.formation(candidate(daily_analysis=analysis), at)['ready'])
+
+    def test_history_upgrade_reuses_rsi_request_and_borrow_delta_is_observed(self):
+        row = candidate(rsi_updated_at=lf.now())
+        row['daily_analysis'] = None
+        lf.ROWS['ANPA'] = row
+        calls = []
+        def handler(request):
+            calls.append(request.url)
+            return httpx.Response(200, json={'chart':{'result':[chart()]}}, request=request)
+        async def run():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                async def unused(*args): raise AssertionError('fresh price must be reused')
+                await lf.refresh_market_batch(client, {}, unused)
+        original_analysis = lf.daily_analysis
+        with patch.object(lf, 'daily_analysis', side_effect=lambda sym, result: original_analysis(sym, result, datetime(2026, 10, 6, 18, tzinfo=timezone.utc))):
+            asyncio.run(run())
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(row['daily_analysis']['ready'])
+        lf.update_borrow({'ANPA':{'available':12000}}, lf.now())
+        self.assertNotIn('borrow_change', row)
+        lf.update_borrow({'ANPA':{'available':8000}}, lf.now())
+        self.assertEqual(row['borrow_change']['delta'], -4000)
+        previous = copy.deepcopy(row['borrow_change'])
+        lf.update_borrow({'ANPA':{'available':8000}}, lf.now())
+        self.assertEqual(row['borrow_change'], previous)
 
 
 if __name__ == '__main__':
