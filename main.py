@@ -18,12 +18,13 @@ import websockets
 from history import worker as historical_worker
 import storage
 import opportunities
+import low_float
 from support_chart import worker as support_chart_worker, get as support_chart_get, retest_signal as support_retest_signal
 from corporate_actions import worker as corporate_actions_worker, upcoming as upcoming_actions
 from event_rules import borrow_events, ready_event, worker_health
 from bs4 import BeautifulSoup
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 
 app = FastAPI(title="SnipeLab Engine", version="0.6.0")
 BOOTED_AT = datetime.now(timezone.utc)
@@ -679,6 +680,7 @@ async def borrow_loop():
         try:
             text=await asyncio.wait_for(asyncio.to_thread(download_ibkr),timeout=30)
             rows=parse_ibkr(text); now=utcnow().isoformat(); changed=0
+            low_float.update_borrow(rows, now)
             if not rows:raise ValueError("IBKR returned zero valid USD rows; existing readings preserved")
             for sym in list(UNIVERSE):
                 new=rows.get(sym)
@@ -751,6 +753,9 @@ async def legacy_news_loop_disabled():
 @app.on_event("startup")
 async def startup():
     load_persistent_state()
+    low_float.restore()
+    asyncio.create_task(low_float.discovery_worker(UNIVERSE))
+    asyncio.create_task(low_float.market_worker(UNIVERSE, fetch_quote))
     asyncio.create_task(opportunities.worker(dashboard_data))
     asyncio.create_task(support_chart_worker(UNIVERSE,HISTORY))
     asyncio.create_task(corporate_actions_worker(UNIVERSE, CORPORATE_ACTIONS, STATE, save_persistent_state))
@@ -765,6 +770,22 @@ async def root():
 
 DASHBOARD = (Path(__file__).parent / "dashboard.html").read_text("utf-8")
 
+@app.get("/low-float", response_class=HTMLResponse)
+async def low_float_page():
+    return HTMLResponse((Path(__file__).parent / "low_float.html").read_text("utf-8"))
+
+@app.get("/api/low-float")
+async def low_float_data():
+    return {**low_float.snapshot(UNIVERSE), "uptime_seconds": int(time.time()-BOOTED_AT.timestamp())}
+
+@app.get("/assets/dashboard.css")
+async def dashboard_styles():
+    return Response(DASHBOARD.split("<style>", 1)[1].split("</style>", 1)[0], media_type="text/css")
+
+@app.get("/assets/low-float.js")
+async def low_float_script():
+    return Response((Path(__file__).parent / "low_float.js").read_text("utf-8"), media_type="application/javascript")
+
 @app.get("/api/support-chart/{symbol}")
 async def support_chart_data(symbol: str):
     symbol = re.sub(r"[^A-Z0-9.-]", "", symbol.upper())[:12]
@@ -773,10 +794,16 @@ async def support_chart_data(symbol: str):
     return support_chart_get(symbol,HISTORY)
 
 @app.get("/dashboard",response_class=HTMLResponse)
-async def dashboard(symbol: str = ""):
+async def dashboard(symbol: str = "", section: str = ""):
     # Deep links from Opportunities only; ordinary dashboard remains identical.
     symbol = re.sub(r"[^A-Z0-9.-]", "", symbol.upper())[:12]
     if not symbol:
+        if section in {"archive", "ai", "events"}:
+            target = json.dumps("hunt" if section == "events" else section)
+            script = "<script>openSection(" + target + ");</script>"
+            if section == "events":
+                script += "<script>document.querySelector('.events')?.scrollIntoView();</script>"
+            return HTMLResponse(DASHBOARD.replace("</body>", script + "</body>"))
         return HTMLResponse(DASHBOARD)
     ticker = json.dumps(symbol)
     script = """<script>(()=>{const symbol=TICKER;let observer;
@@ -1677,8 +1704,7 @@ async def massive_float_loop():
                             if (utcnow()-datetime.fromisoformat(cached["free_float_checked_at"])).total_seconds()<86400:continue
                         except (TypeError,ValueError):pass
                     try:
-                        r=await client.get("https://api.massive.com/stocks/vX/float",
-                            params={"ticker":sym},headers={"Authorization":f"Bearer {token}"})
+                        r=await low_float.massive_get(client, "https://api.massive.com/stocks/vX/float", token, params={"ticker":sym})
                         if r.status_code==429:
                             FUNDAMENTALS_STATUS.update(massive="rate_limited",massive_last_error="HTTP 429",massive_last_scan=utcnow().isoformat(),massive_last_symbol=sym)
                             if changed:save_persistent_state(force=True)

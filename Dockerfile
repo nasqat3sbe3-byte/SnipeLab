@@ -4,6 +4,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py .
 COPY dashboard.html .
+COPY low_float.py .
+COPY low_float.html .
+COPY low_float.js .
 COPY history.py .
 COPY rsi.py .
 COPY storage.py .
