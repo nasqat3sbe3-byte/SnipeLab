@@ -1229,13 +1229,26 @@ document.querySelectorAll('.section-nav button').forEach(b=>b.addEventListener('
 let stockRoomSymbol=null;
 function stockRoomMetric(label,value,good=false){return '<div class="room-kpi"><small>'+esc(label)+'</small><b class="'+(good?'good':'')+'">'+esc(value)+'</b></div>'}
 function stockRoomStrategy(label,value,ok){return '<div class="strategy-item '+(ok?'ok':'')+'"><span class="strategy-icon">'+(ok?'✓':'○')+'</span><b>'+esc(label)+'</b><small>'+esc(value)+'</small></div>'}
+function splitDayCandleHigh(x){
+ for(const raw of [x.split_day_4h_high,x.split_day_high]){
+  if(raw!=null&&raw!==''&&Number.isFinite(Number(raw))&&Number(raw)>0)return Number(raw);
+ }
+ return null;
+}
+function splitHalfTarget(x){
+ for(const raw of [x.half_level,x.half_target]){
+  if(raw!=null&&raw!==''&&Number.isFinite(Number(raw))&&Number(raw)>0)return Number(raw);
+ }
+ const high=splitDayCandleHigh(x);return high==null?null:high/2;
+}
 function openStockRoom(raw){
  const sym=String(raw||'').toUpperCase(),x=rows().find(r=>String(r.symbol).toUpperCase()===sym);if(!x)return;
  stockRoomSymbol=sym;
  const price=Number(x.q?.price),prev=Number(x.q?.previous_close),change=Number.isFinite(price)&&Number.isFinite(prev)&&prev>0?(price-prev)/prev*100:null;
  const changeTxt=change==null?'—':(change>0?'+':'')+change.toFixed(2)+'%',changeCls=change==null?'':change>=0?'up':'down';
  const score=displayedReadiness(x),av=Number(x.b?.available),rsi=Number(x.rsi_daily),dist=Number(x.effective_distance_pct??x.distance_from_low_pct),sessions=Number(x.stability_sessions);
- const support=x.history_verified?x.post_split_low:null,halfTarget=x.half_target??(Number.isFinite(Number(x.split_day_high))?Number(x.split_day_high)/2:null);
+ const support=x.history_verified?x.post_split_low:null,halfTarget=splitHalfTarget(x),splitHigh=splitDayCandleHigh(x);
+ const splitHighLabel=splitHigh!=null&&splitHigh===Number(x.split_day_4h_high)?'High 4H':'High يومي';
  const split=x.effective_date||x.split_date||'—',ratio=x.split_ratio||x.ratio||x.reverse_split_ratio||x.split?.ratio||'—',retest=supportRetestState(x);
  const retestText=retest==='success'?'ناجح':retest==='failed'?'فشل / كسر':'لم يُختبر بعد',retestOk=retest==='success';
  const exchange=x.exchange||x.q?.exchange||x.q?.full_exchange_name||x.q?.exchange_name||'';
@@ -1249,7 +1262,7 @@ function openStockRoom(raw){
  stockRoomStrategy('Available',fmt(x.b?.available),Number.isFinite(av)&&av<15000)+stockRoomStrategy('RSI',fmt(x.rsi_daily),Number.isFinite(rsi)&&rsi<=35)+stockRoomStrategy('نص شمعة التقسيم',money(halfTarget),x.half_reached===true)+stockRoomStrategy('قريب من الدعم',pct(dist),Number.isFinite(dist)&&dist<=25)+stockRoomStrategy('الثبات',(Number.isFinite(sessions)?Math.min(4,Math.floor(sessions)):'—')+'/4',Number.isFinite(sessions)&&sessions>=4)+stockRoomStrategy('إعادة اختبار الدعم',retestText,retestOk)+'</div><div class="ref-score-ring"><b>'+esc(pct(score))+'</b><small>جاهزية</small></div></div></div>'+
  '<div class="ref-duo"><div class="room-panel ref-support-card"><div class="room-panel-title">⚯ الدعم وإعادة الاختبار</div><div class="ref-three"><div><b>'+esc(money(support))+'</b><small>مستوى الدعم</small></div><div><b id="roomSupportAge">—</b><small>عمر الدعم · جلسات</small></div><div><b>'+esc(pct(dist))+'</b><small>يبعد عن الدعم</small></div></div><div id="roomRetestResult" class="ref-retest '+(retestOk?'ok':'')+'">'+(retestOk?'✓ إعادة اختبار ناجحة':'○ '+esc(retestText))+(x.support_retest_time?' · '+esc(x.support_retest_time)+' نيويورك':'')+'</div></div>'+
  '<div class="room-panel ref-stockdata"><div class="room-panel-title">▥ بيانات السهم</div><div class="room-data"><div><span>Market Cap</span><b>'+esc(x.market_cap!=null?fmt(x.market_cap):'—')+'</b></div><div><span>Free Float</span><b>'+esc(x.free_float!=null?fmt(x.free_float):'—')+'</b></div><div><span>سعر السهم</span><b>'+esc(money(price))+'</b></div><div><span>CTB</span><b>'+esc(pct(x.b?.ctb))+'</b></div><div><span>Rebate</span><b>'+esc(pct(x.b?.rebate))+'</b></div></div></div></div>'+
- '<div class="room-panel ref-splitdata"><div class="room-panel-title">▣ بيانات التقسيم الحالية</div><div class="split-grid"><div class="split-cell"><small>Open</small><b>'+esc(money(x.split_day_open))+'</b></div><div class="split-cell"><small>High</small><b>'+esc(money(x.split_day_high??x.split_day_4h_high))+'</b></div><div class="split-cell"><small>نص الشمعة</small><b>'+esc(money(halfTarget))+'</b></div><div class="split-cell"><small>Post-Split Low</small><b>'+esc(money(x.post_split_low))+'</b></div><div class="split-cell"><small>Peak بعد التقسيم</small><b>'+esc(money(x.highest_since_split))+'</b></div></div></div>'+
+ '<div class="room-panel ref-splitdata"><div class="room-panel-title">▣ بيانات التقسيم الحالية</div><div class="split-grid"><div class="split-cell"><small>Open</small><b>'+esc(money(x.split_day_open))+'</b></div><div class="split-cell"><small>'+esc(splitHighLabel)+'</small><b>'+esc(money(splitHigh))+'</b></div><div class="split-cell"><small>نص الشمعة</small><b>'+esc(money(halfTarget))+'</b></div><div class="split-cell"><small>Post-Split Low</small><b>'+esc(money(x.post_split_low))+'</b></div><div class="split-cell"><small>Peak بعد التقسيم</small><b>'+esc(money(x.highest_since_split))+'</b></div></div></div>'+
  '<div class="ref-actions"><button type="button" data-room-archive="'+esc(sym)+'">▣ فتح في الأرشيف</button><button type="button" data-room-chart="'+esc(sym)+'">⌁ فتح الشارت</button></div></div>';
  $('stockDetailBody').innerHTML=body;
  const chartDetails=$('supportChartDetails'),supportPanel=document.querySelector('.ref-room .ref-support-card');
@@ -1321,7 +1334,7 @@ function archiveCard(sym){
  const x=rows().find(r=>String(r.symbol).toUpperCase()===sym);
  if(!x)return '<div class="research-empty">السهم غير موجود حاليًا في قاعدة SnipeLab.</div>';
  const split=x.split_date||x.effective_date||'—';
- const splitHi=x.split_day_high??x.day_high??null;
+ const splitHi=splitDayCandleHigh(x);
  const postHi=x.highest_since_split??x.post_split_high??null;
  const low=x.post_split_low??x.lowest_low??null;
  const price=x.q?.price??x.price?.price??null;
