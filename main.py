@@ -13,6 +13,7 @@ from datetime import datetime, timezone, date, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
+from risk_evidence import dated_risk_evidence
 from rsi import normalized_closes, wilder_rsi
 import websockets
 from history import worker as historical_worker
@@ -1012,7 +1013,7 @@ _AI_CIK_MAP={}
 _AI_CIK_AT=0
 _AI_FILING_CACHE={}
 _AI_RISK_TTL=3600
-_AI_RISK_VERSION=2
+_AI_RISK_VERSION=3
 _AI_PATTERN_CACHE={}
 
 def _ai_readiness_top50():
@@ -1036,7 +1037,8 @@ def _ai_cached_risk(symbol,now=None):
     now=time.time() if now is None else now
     cached=_AI_RISK_CACHE.get(symbol) or {}
     raw=cached.get("result") or {}
-    events=[e for e in raw.get("events",[]) if _ai_window_event(e)]
+    events=[e for e in raw.get("events",[]) if cached.get("version")==_AI_RISK_VERSION
+            and e.get("verified") and e.get("evidence") and _ai_window_event(e)]
     fresh=cached.get("version")==_AI_RISK_VERSION and 0<=now-cached.get("at",0)<_AI_RISK_TTL
     checked=bool(fresh and raw.get("checked"))
     return {**raw,"blocked":bool(events),"checked":checked,"events":events,
@@ -1046,7 +1048,6 @@ def _ai_cached_risk(symbol,now=None):
 def _ai_risk_kind(text,form=None):
     """Explicit event categories, not general bearish sentiment or forecasts."""
     low=text.lower()
-    if form and (form.startswith("424B") or form=="FWP"):return "طرح / نشرة تمويل حديثة"
     groups=[("ATM حديث",("at-the-market offering","at the market offering","equity distribution agreement")),
       ("طرح / تمويل حديث",("registered direct offering","public offering","private placement","pricing of its offering","securities purchase agreement")),
       ("تخفيف / إصدار أسهم حديث",("unregistered sales of equity securities","item 3.02","convertible note","convertible preferred","exercise of warrants")),
@@ -1092,10 +1093,9 @@ async def _ai_sec_risk(client,symbol,today):
         if i>=len(accs) or i>=len(docs):complete=False;continue
         base=f"https://www.sec.gov/Archives/edgar/data/{cik}/{str(accs[i]).replace('-','')}/"
         event["url"]=base+str(docs[i])
-        direct=_ai_risk_kind("",form)
-        if direct:found.append({**event,"kind":direct});continue
         # Registration alone is a warning, not proof of an executed offering.
-        if form in {"8-K","8-K/A","6-K","6-K/A"}:items.append((base,docs[i],event))
+        if form in {"8-K","8-K/A","6-K","6-K/A","FWP"} or form.startswith("424B"):
+            items.append((base,docs[i],event))
     if found:return found,True,None
     if len(items)>100:complete=False
     for base,primary,event in items[:100]:
@@ -1114,9 +1114,9 @@ async def _ai_sec_risk(client,symbol,today):
             if not filing_complete:complete=False
             for name in names[:3]:
                 text=await asyncio.to_thread(_ai_html_text,await _ai_risk_read(client,base+name))
-                kind=_ai_risk_kind(text)
-                if kind:
-                    risk_event={**event,"kind":kind}
+                evidence=dated_risk_evidence(text,date.fromisoformat(event["date"]),today,_ai_risk_kind)
+                if evidence:
+                    risk_event={**event,**evidence,"url":base+name}
                     _AI_FILING_CACHE[base]={"version":_AI_RISK_VERSION,"date":event["date"],"event":risk_event}
                     return [risk_event],True,None
             if filing_complete:_AI_FILING_CACHE[base]={"version":_AI_RISK_VERSION,"date":event["date"],"event":None}
@@ -1145,14 +1145,13 @@ async def _ai_news_risk(client,symbol,company,today):
         issuer_match=bool(re.search(r"(?<![A-Za-z0-9])"+re.escape(symbol)+r"(?![A-Za-z0-9])",title))
         issuer_match=issuer_match or bool(company_key and len(company_key)>3 and company_key in title.lower())
         if not issuer_match:continue
-        kind=_ai_risk_kind(title)
-        if kind:found.append({**event,"kind":kind,"title":title,"source":item.findtext("source") or "Google News RSS",
-                              "url":item.findtext("link") or url})
+        # RSS headlines are discovery hints, not official event evidence. SEC
+        # documents independently verify exclusion; recycled titles cannot block.
     return found,complete,None if complete else "news_partial_coverage"
 
 async def _ai_scan_risk(symbol):
     today=datetime.now(ZoneInfo("America/New_York")).date()
-    result={"events":[],"checked":False,"window_days":30,"coverage":{},"source":"SEC EDGAR + dated news headlines"}
+    result={"events":[],"checked":False,"window_days":30,"coverage":{},"source":"SEC EDGAR verified event evidence"}
     company=(UNIVERSE.get(symbol) or {}).get("company_name") or (UNIVERSE.get(symbol) or {}).get("name") or ""
     headers={"User-Agent":os.environ.get("SEC_USER_AGENT","SnipeLab research contact@snipelab.app")}
     try:
@@ -1176,8 +1175,10 @@ async def ai_risk_background_loop():
     global _AI_CIK_MAP,_AI_CIK_AT,_AI_RISK_TARGETS
     try:
         saved=(await asyncio.to_thread(storage.load,("ai_risk_v2",))).get("ai_risk_v2") or {}
-        _AI_RISK_CACHE.update(saved.get("entries") or {})
-        _AI_FILING_CACHE.update({k:v for k,v in (saved.get("filings") or {}).items() if _ai_window_event(v)})
+        _AI_RISK_CACHE.update({k:v for k,v in (saved.get("entries") or {}).items()
+                               if v.get("version")==_AI_RISK_VERSION})
+        _AI_FILING_CACHE.update({k:v for k,v in (saved.get("filings") or {}).items()
+                                 if v.get("version")==_AI_RISK_VERSION and _ai_window_event(v)})
         _AI_CIK_MAP=saved.get("ciks") or {};_AI_CIK_AT=saved.get("cik_at") or 0
     except Exception:pass
     await asyncio.sleep(3)
@@ -1185,7 +1186,8 @@ async def ai_risk_background_loop():
         try:
             now=time.time();_AI_RISK_TARGETS=_ai_readiness_top50()
             targets=list(dict.fromkeys(list(_AI_RISK_PRIORITY)+_AI_RISK_TARGETS))[:60]
-            due=[s for s in targets if (_AI_RISK_CACHE.get(s) or {}).get("retry_at",0)<=now]
+            due=[s for s in targets if (_AI_RISK_CACHE.get(s) or {}).get("version")!=_AI_RISK_VERSION
+                 or (_AI_RISK_CACHE.get(s) or {}).get("retry_at",0)<=now]
             due.sort(key=lambda s:(_AI_RISK_CACHE.get(s) or {}).get("at",0))
             if not due:
                 _AI_RISK_WAKE.clear()
@@ -1293,8 +1295,8 @@ async def ai_patterns():
         "method":snapshot.get("method","provisional_rules"),"picks":clean[:5],
         "excluded_recent_risk":excluded,"risk_pending":pending,"candidate_count":len(shortlist),
         "status":"ready" if clean else "screening" if pending or not snapshot else "no_eligible",
-        "risk_gate":{"window_days":30,"source":"SEC EDGAR + news headlines","mode":"durable_bounded_background", "checked_count":len(clean),"pending_count":len(pending)},
-        "note":"تشابه مع لقطات فعلية قبل +100%؛ ليس توقعًا أو ضمانًا. فحص آخر 30 يومًا يستبعد الطرح والتخفيف والإفلاس والشطب والفشل التنظيمي المعلن في المصادر المتاحة. السهم ناقص الفحص لا يدخل الاختيارات. الأخبار العامة أو توقعات الهبوط ليست سبب استبعاد، ولا توجد ضمانة لتغطية كل الأخبار."}
+        "risk_gate":{"window_days":30,"source":"SEC EDGAR verified event evidence","mode":"durable_bounded_background", "checked_count":len(clean),"pending_count":len(pending)},
+        "note":"تشابه مع لقطات فعلية قبل +100%؛ ليس توقعًا أو ضمانًا. فحص آخر 30 يومًا يستبعد أحداث الطرح والتخفيف والإفلاس والشطب والفشل التنظيمي المثبتة في إفصاحات SEC بتاريخ الحدث. ذكر التمويل القديم أو التسجيل وحده أو عناوين الأخبار وحدها لا يثبت حدثًا جديدًا. السهم ناقص الفحص لا يدخل الاختيارات. الأخبار العامة أو توقعات الهبوط ليست سبب استبعاد، ولا توجد ضمانة لتغطية كل الأخبار."}
 
 @app.get("/api/fundamentals-status")
 async def fundamentals_status():
@@ -1990,3 +1992,4 @@ async def opportunities_page():
 @app.get("/api/opportunities")
 async def opportunities_data():
     return opportunities.payload()
+
