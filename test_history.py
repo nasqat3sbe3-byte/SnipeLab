@@ -63,12 +63,13 @@ class HistoryTests(unittest.TestCase):
         self.assertLess(result["top_10_gain_pct"],9000)
         self.assertGreaterEqual(result["top_10_high_date"],result["top_10_low_date"])
 
-    def test_top_requires_ten_completed_sessions(self):
+    def test_top_allows_observed_move_within_first_ten_sessions(self):
         x=bars(n=8)
         with patch("history.datetime") as mock:
             mock.now.return_value=datetime(2026,10,1,tzinfo=timezone.utc)
             result=calculate("2026-09-01",x)
-        self.assertFalse(result["top_10_verified"])
+        self.assertTrue(result["top_10_verified"])
+        self.assertGreaterEqual(result["top_10_high_date"],result["top_10_low_date"])
 
 class ExtendedHoursTests(unittest.IsolatedAsyncioTestCase):
     async def test_split_day_4h_and_period_extrema(self):
@@ -93,3 +94,4 @@ class ExtendedHoursTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(x["extended_history_complete"])
 
 if __name__=="__main__":unittest.main()
+

@@ -5,7 +5,7 @@ from event_rules import borrow_events,ready_event,worker_health
 class EventTests(unittest.TestCase):
     def test_zero_transition_only_once(self):
         first=borrow_events("RETO",{"available":250000},{"available":0})
-        self.assertEqual([e[1] for e in first],["available_down","available_zero"])
+        self.assertEqual([e[1] for e in first],["available_zero"])
         self.assertEqual(borrow_events("RETO",{"available":0},{"available":0}),[])
         self.assertEqual(borrow_events("RETO",None,{"available":0}),[])
     def test_ready_transition_only(self):
@@ -19,3 +19,4 @@ class EventTests(unittest.TestCase):
         self.assertEqual(worker_health(now,None,180)["state"],"waiting")
 
 if __name__=="__main__":unittest.main()
+

@@ -107,7 +107,7 @@ async function refresh(){
     if(!response.ok)throw Error('HTTP '+response.status);
     payload=await response.json();boot=Date.now()-payload.uptime_seconds*1000;
     $('headerServerLabel').textContent='Server online';$('headerServerLine').dataset.state='online';
-    render();if(opened){if(payload.rows[opened])detail(opened,false);else closeDetail();}
+    render();const target=new URLSearchParams(location.search).get('focus');if(!opened&&target&&payload.rows[target]){detail(target);history.replaceState(null,'',location.pathname);}if(opened){if(payload.rows[opened])detail(opened,false);else closeDetail();}
   }catch(e){$('headerServerLabel').textContent='Server offline';$('headerServerLine').dataset.state='offline';$('status').textContent='تعذر الاتصال؛ ستتم إعادة المحاولة تلقائيًا.';}
   finally{loading=false;}
 }
@@ -135,3 +135,4 @@ document.addEventListener('keydown',event=>{const row=event.target.closest('.sl-
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
 setInterval(()=>{if(boot!=null){const seconds=Math.max(0,Math.floor((Date.now()-boot)/1000));$('headerServerTime').textContent=Math.floor(seconds/86400)+'.'+[Math.floor(seconds/3600)%24,Math.floor(seconds/60)%60,seconds%60].map(v=>String(v).padStart(2,'0')).join('.');}},1000);
 refresh();setInterval(refresh,30000);
+

@@ -163,7 +163,10 @@ def daily_analysis(symbol, result, at=None):
             if day <= local.date().isoformat() and not incomplete: bars.append(None)
             continue
         factor = adjusted.get(day, close) / close
-        bar = {"date": day, "high": high * factor, "low": low * factor, "close": close * factor}
+        volumes = quote.get("volume") or []
+        volume = number(volumes[i]) if i < len(volumes) else None
+        bar = {"date": day, "high": high * factor, "low": low * factor, "close": close * factor,
+               "volume": volume if volume is not None and volume > 0 else None}
         if incomplete:
             live_low = bar["low"]
         elif day <= local.date().isoformat():
@@ -188,7 +191,12 @@ def daily_analysis(symbol, result, at=None):
         value = clean_closes[0]
         for close in clean_closes[1:]: value += 2 / (period + 1) * (close - value)
         return value
+    up = [b['volume'] for i,b in enumerate(window) if i and b['volume'] is not None and b['close'] > window[i-1]['close']]
+    down = [b['volume'] for i,b in enumerate(window) if i and b['volume'] is not None and b['close'] < window[i-1]['close']]
+    volume_ratio = (sum(up)/len(up))/(sum(down)/len(down)) if up and down else None
     return {"version": 1, "checked_at": now(), "ready": True,
+            "higher_low": window[-1]['low'] > window[-2]['low'],
+            "up_down_volume_ratio": volume_ratio,
             "last_completed_session": window[-1]["date"], "window_start": window[0]["date"],
             "high_20": max(bar["high"] for bar in window), "support": floor,
             "support_date": window[index]["date"], "stability_sessions": len(after),
@@ -381,3 +389,4 @@ async def market_worker(split_symbols, fetch_quote):
                 STATUS["error"] = "تعذر حفظ آخر تحديث"
             # Re-evaluate newly verified symbols after every small batch.
             await asyncio.sleep(15)
+

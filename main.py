@@ -20,6 +20,7 @@ from history import worker as historical_worker
 import storage
 import opportunities
 import low_float
+import focus
 from support_chart import worker as support_chart_worker, get as support_chart_get, retest_signal as support_retest_signal
 from corporate_actions import worker as corporate_actions_worker, upcoming as upcoming_actions
 from event_rules import borrow_events, ready_event, worker_health
@@ -755,6 +756,7 @@ async def legacy_news_loop_disabled():
 async def startup():
     load_persistent_state()
     low_float.restore()
+    asyncio.create_task(focus.worker(_focus_rows,_ai_cached_risk,_focus_queue))
     asyncio.create_task(low_float.discovery_worker(UNIVERSE))
     asyncio.create_task(low_float.market_worker(UNIVERSE, fetch_quote))
     asyncio.create_task(opportunities.worker(dashboard_data))
@@ -1152,7 +1154,7 @@ async def _ai_news_risk(client,symbol,company,today):
 async def _ai_scan_risk(symbol):
     today=datetime.now(ZoneInfo("America/New_York")).date()
     result={"events":[],"checked":False,"window_days":30,"coverage":{},"source":"SEC EDGAR verified event evidence"}
-    company=(UNIVERSE.get(symbol) or {}).get("company_name") or (UNIVERSE.get(symbol) or {}).get("name") or ""
+    company=(UNIVERSE.get(symbol) or low_float.ROWS.get(symbol) or {}).get("company_name") or (UNIVERSE.get(symbol) or {}).get("name") or ""
     headers={"User-Agent":os.environ.get("SEC_USER_AGENT","SnipeLab research contact@snipelab.app")}
     try:
         async with asyncio.timeout(35):
@@ -1216,7 +1218,7 @@ async def ai_risk_background_loop():
 @app.get("/api/ai-risk/{symbol}")
 async def ai_risk(symbol: str):
     symbol=re.sub(r"[^A-Z0-9.-]","",symbol.upper())[:12]
-    if symbol not in UNIVERSE:return {"symbol":symbol,"checked":False,"blocked":False,"reason":"symbol_not_tracked"}
+    if symbol not in UNIVERSE and symbol not in low_float.ROWS:return {"symbol":symbol,"checked":False,"blocked":False,"reason":"symbol_not_tracked"}
     risk=_ai_cached_risk(symbol)
     if not risk["checked"] and len(_AI_RISK_PRIORITY)<50:
         _AI_RISK_PRIORITY[symbol]=time.time();_AI_RISK_WAKE.set()
@@ -1993,3 +1995,51 @@ async def opportunities_page():
 async def opportunities_data():
     return opportunities.payload()
 
+
+# Focus is isolated from readiness and makes no requests in the HTTP path.
+def _focus_queue(symbols):
+    for symbol in symbols:
+        if len(_AI_RISK_PRIORITY)>=50:break
+        _AI_RISK_PRIORITY.setdefault(symbol,time.time())
+    if symbols:_AI_RISK_WAKE.set()
+
+
+def _focus_rows():
+    rows=[]
+    for sym,a in list(ANALYTICS.items()):
+        if not a.get('active') or a.get('top_10_verified'):continue
+        q=QUOTES.get(sym) or {};b=BORROW.get(sym) or {};h=HISTORY.get(sym) or {}
+        retest=support_retest_signal(sym,HISTORY)
+        rows.append({'symbol':sym,'source':'أسهم التقسيم','href':'/dashboard?focus='+sym,
+                     'price':q.get('price'),'price_at':q.get('received_at'),
+                     'available':b.get('available'),'borrow_at':b.get('received_at'),
+                     'rsi':a.get('rsi_daily'),'support':a.get('effective_low'),
+                     'sessions':a.get('effective_sessions'),'broken':a.get('new_low_today'),
+                     'verified':bool(h.get('verified') and focus.fresh(h.get('updated_at'),utcnow(),172800)),
+                     'retest':retest.get('support_retest_status')=='success',
+                     'retest_day':retest.get('support_retest_time'),
+                     'confirmation_at':retest.get('support_retest_updated_at')})
+    for sym,row in low_float.snapshot(UNIVERSE)['rows'].items():
+        f=row.get('formation') or {};q=row.get('price') or {};b=row.get('borrow') or {}
+        rows.append({'symbol':sym,'source':'الفري فلوت المنخفض','href':'/low-float?focus='+sym,
+                     'price':q.get('price'),'price_at':q.get('received_at'),
+                     'available':b.get('available'),'borrow_at':b.get('received_at'),
+                     'rsi':row.get('rsi_daily'),'support':f.get('support'),
+                     'sessions':f.get('stability_sessions'),'broken':f.get('state')=='broken',
+                     'verified':bool(f.get('ready')),'higher_low':f.get('higher_low'),
+                     'up_down_volume_ratio':f.get('up_down_volume_ratio'),
+                     'retest':f.get('retest_state')=='success','retest_day':f.get('retest_date'),'confirmation_at':f.get('checked_at')})
+    return rows
+
+
+@app.get('/api/focus')
+async def focus_snapshot():
+    snapshot=focus.SNAPSHOT
+    if snapshot.get('generated_at') and not focus.fresh(snapshot['generated_at'],utcnow(),60):
+        return {**snapshot,'picks':[],'status':'stale','note':'حساب القائمة قديم؛ الترشيحات معلقة حتى تحديث البيانات.'}
+    return snapshot
+
+
+@app.get('/focus')
+async def focus_page():
+    return HTMLResponse((Path(__file__).parent/'focus.html').read_text('utf-8'))
