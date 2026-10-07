@@ -8,7 +8,7 @@ import storage
 MEMORY = {}
 EVENTS = []
 SNAPSHOT = {'picks': [], 'watching': [], 'status': 'starting', 'events': []}
-VERSION = 1
+VERSION = 2
 
 
 def number(value):
@@ -90,7 +90,7 @@ def evaluate(row, memory, risk, at):
             'observed_change_pct':round((price/first_price-1)*100,2) if first_price else None,
             'confirmation_waiting':'الحفاظ على الدعم وإعادة اختبار ناجحة' if not retest else 'استمرار الثبات دون كسر الدعم',
             'invalidation':'كسر الدعم '+str(round(support,4))+' أو ظهور خطر رسمي موثق',
-            'source':row.get('source'),'href':row.get('href','/dashboard'),
+            'source':row.get('source'),'market':row.get('market') or ('low_float' if row.get('source')=='الفري فلوت المنخفض' else 'split'),'href':row.get('href','/dashboard'),
             'price_at':row.get('price_at'),'borrow_at':row.get('borrow_at')}
 
 
@@ -102,7 +102,8 @@ def update(rows, risks, at=None):
         result=evaluate(row,MEMORY,risks(row['symbol']),at)
         if result is not None:ranked.append(result)
     ranked.sort(key=lambda x:(-x['priority'],x['available'],x['symbol']))
-    picks=[x for x in ranked if x['eligible']][:5]
+    picks=[x for market in ('split','low_float') for x in ranked if x['eligible'] and x['market']==market]
+    picks=[x for market in ('split','low_float') for x in [v for v in picks if v['market']==market][:5]]
     selected={x['symbol'] for x in picks}
     for x in ranked:
         entry=MEMORY[x['symbol']]
@@ -110,7 +111,7 @@ def update(rows, risks, at=None):
         previous=entry.get('state')
         if (previous is not None and list(state)!=previous) or (previous is None and x['symbol'] in selected):
             EVENTS.insert(0,{'symbol':x['symbol'],'at':at.isoformat(),'stage':x['stage'],
-                             'selected':x['symbol'] in selected,'risk_state':x['risk_state']})
+                             'selected':x['symbol'] in selected,'risk_state':x['risk_state'],'market':x['market']})
         entry['state']=list(state)
         entry['last_result']=x
     cutoff=at-timedelta(days=30)
@@ -121,17 +122,29 @@ def update(rows, risks, at=None):
     active={x['symbol'] for x in ranked}
     for sym,entry in MEMORY.items():
         if sym not in active and entry.get('state') and entry['state'][2]:
-            EVENTS.insert(0,{'symbol':sym,'at':at.isoformat(),'stage':'stale','selected':False,'risk_state':'pending'})
+            EVENTS.insert(0,{'symbol':sym,'at':at.isoformat(),'stage':'stale','selected':False,'risk_state':'pending','market':(entry.get('last_result') or {}).get('market') or ('low_float' if (entry.get('last_result') or {}).get('source')=='الفري فلوت المنخفض' else 'split')})
             entry['state']=['stale','pending',False]
     EVENTS[:]=EVENTS[:50]
     # Keep remembered broken/ineligible symbols visible, never pretend old data is live.
     dormant=[{**v['last_result'],'eligible':False,'stage':'stale'} for s,v in MEMORY.items()
              if s not in {x['symbol'] for x in ranked} and v.get('last_result')]
-    SNAPSHOT={'version':VERSION,'generated_at':at.isoformat(),'status':'ready' if picks else 'watching',
-              'picks':picks,'watching':[x for x in ranked if x['symbol'] not in selected][:30],
-              'remembered':dormant[:30],'events':EVENTS[:20],
-              'risk_pending':[x['symbol'] for x in ranked if x['risk_state']=='pending'][:15],
-              'note':'ترتيب متابعة تجريبي حسب بيانات مرصودة؛ الدرجة ليست احتمال صعود. لم يُختبر تاريخيًا بعد. لا نملأ الخمسة بأسهم ناقصة التأكيد أو الفحص.'}
+    pools={}
+    for market in ('split','low_float'):
+        def belongs(x):
+            remembered=(MEMORY.get(x.get('symbol')) or {}).get('last_result') or {}
+            origin=x.get('market') or remembered.get('market')
+            source=x.get('source') or remembered.get('source')
+            return (origin or ('low_float' if source=='الفري فلوت المنخفض' else 'split'))==market
+        market_picks=[x for x in picks if belongs(x)]
+        pools[market]={'version':VERSION,'market':market,'generated_at':at.isoformat(),
+                      'status':'ready' if market_picks else 'watching',
+                      'picks':market_picks,
+                      'watching':[x for x in ranked if belongs(x) and x['symbol'] not in selected][:30],
+                      'remembered':[x for x in dormant if belongs(x)][:30],
+                      'events':[x for x in EVENTS if belongs(x)][:20],
+                      'risk_pending':[x['symbol'] for x in ranked if belongs(x) and x['risk_state']=='pending'][:15],
+                      'note':'ترتيب متابعة تجريبي حسب بيانات مرصودة؛ الدرجة ليست احتمال صعود. لم يُختبر تاريخيًا بعد. لا نملأ الخمسة بأسهم ناقصة التأكيد أو الفحص.'}
+    SNAPSHOT={**pools['split'],'pools':pools}
     return SNAPSHOT
 
 
@@ -146,10 +159,11 @@ async def worker(collect, risks, queue):
     while True:
         try:
             result=update(collect(),risks)
-            queue(result['risk_pending'])
+            queue([s for pool in result.get('pools',{}).values() for s in pool['risk_pending']])
             if count%4==0:
                 await asyncio.to_thread(storage.save,{'focus_v1':{'memory':deepcopy(MEMORY),'events':list(EVENTS)}})
             count+=1
         except Exception as exc:
             SNAPSHOT.update(status='error',error=type(exc).__name__,picks=[])
+            for pool in SNAPSHOT.get('pools',{}).values():pool.update(status='error',picks=[])
         await asyncio.sleep(15)

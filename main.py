@@ -2033,8 +2033,11 @@ def _focus_rows():
 
 
 @app.get('/api/focus')
-async def focus_snapshot():
-    snapshot=focus.SNAPSHOT
+async def focus_snapshot(market: str='split'):
+    if market not in {'split','low_float'}:
+        return Response('Unknown focus market',status_code=400)
+    snapshot=focus.SNAPSHOT.get('pools',{}).get(market) or {'picks':[],'watching':[],'remembered':[],'events':[],'market':market,'status':'starting'}
+    snapshot={k:v for k,v in snapshot.items() if k!='pools'}
     if snapshot.get('generated_at') and not focus.fresh(snapshot['generated_at'],utcnow(),60):
         return {**snapshot,'picks':[],'status':'stale','note':'حساب القائمة قديم؛ الترشيحات معلقة حتى تحديث البيانات.'}
     return snapshot

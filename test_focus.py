@@ -60,3 +60,25 @@ class FocusTests(unittest.TestCase):
         self.assertFalse(f.update([row(retest=False,higher_low=True,sessions=1)],risk,AT)['picks'])
         self.assertTrue(f.update([row(retest=False,higher_low=True,sessions=2)],risk,AT)['picks'])
 if __name__=='__main__':unittest.main()
+
+class IndependentPoolTests(unittest.TestCase):
+    def test_each_market_has_five_and_independent_ranking(self):
+        with patch.dict(f.MEMORY,{},clear=True),patch.object(f,'EVENTS',[]):
+            splits=[row('S'+str(i),market='split',source='أسهم التقسيم') for i in range(7)]
+            floats=[row('F'+str(i),market='low_float',source='الفري فلوت المنخفض') for i in range(7)]
+            result=f.update(splits+floats,risk,AT)
+            self.assertEqual(len(result['picks']),5)
+            for market,prefix in [('split','S'),('low_float','F')]:
+                pool=result['pools'][market]
+                self.assertEqual(len(pool['picks']),5)
+                for section in ('picks','watching','events'):
+                    self.assertTrue(all(x['symbol'].startswith(prefix) for x in pool[section]))
+            result=f.update([row('S0',broken=True,market='split')]+floats,risk,AT)
+            self.assertEqual(len(result['pools']['low_float']['picks']),5)
+            self.assertEqual(result['pools']['split']['picks'],[])
+    def test_legacy_low_float_memory_stays_in_its_pool(self):
+        with patch.dict(f.MEMORY,{'F':{'first_seen':AT.isoformat(),'last_seen':AT.isoformat(),
+            'last_result':{'symbol':'F','source':'الفري فلوت المنخفض'}}},clear=True),patch.object(f,'EVENTS',[]):
+            result=f.update([],risk,AT)
+            self.assertEqual(result['remembered'],[])
+            self.assertEqual(result['pools']['low_float']['remembered'][0]['symbol'],'F')
