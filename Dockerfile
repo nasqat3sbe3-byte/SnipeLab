@@ -3,6 +3,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py .
+COPY risk_evidence.py .
 COPY dashboard.html .
 COPY low_float.py .
 COPY low_float.html .
