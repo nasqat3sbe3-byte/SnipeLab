@@ -2008,10 +2008,13 @@ def _focus_queue(symbols):
 def _focus_rows():
     rows=[]
     for sym,a in list(ANALYTICS.items()):
-        if not a.get('active') or a.get('top_10_verified'):continue
+        if not a.get('active'):continue
         q=QUOTES.get(sym) or {};b=BORROW.get(sym) or {};h=HISTORY.get(sym) or {}
         retest=support_retest_signal(sym,HISTORY)
+        chart=SUPPORT_PATTERN_CACHE.get(sym) or {}
+        study_bars=focus.pattern_bars(chart.get('candles') or [],h.get('effective_date'),utcnow(),120) if focus.fresh(chart.get('updated_at'),utcnow(),21600) else []
         rows.append({'symbol':sym,'source':'أسهم التقسيم','href':'/dashboard?focus='+sym,
+                     'market':'split','already_rallied':bool(a.get('top_10_verified')),'study_bars':study_bars,
                      'price':q.get('price'),'price_at':q.get('received_at'),
                      'available':b.get('available'),'borrow_at':b.get('received_at'),
                      'rsi':a.get('rsi_daily'),'support':a.get('effective_low'),
@@ -2020,10 +2023,11 @@ def _focus_rows():
                      'retest':retest.get('support_retest_status')=='success',
                      'retest_day':retest.get('support_retest_time'),
                      'confirmation_at':retest.get('support_retest_updated_at'),
-                     'pattern_bars':focus.pattern_bars((SUPPORT_PATTERN_CACHE.get(sym) or {}).get('candles') or [],h.get('effective_date'),utcnow()) if focus.fresh((SUPPORT_PATTERN_CACHE.get(sym) or {}).get('updated_at'),utcnow(),21600) else []})
+                     'pattern_bars':study_bars[-12:]})
     for sym,row in low_float.snapshot(UNIVERSE)['rows'].items():
         f=row.get('formation') or {};q=row.get('price') or {};b=row.get('borrow') or {}
         rows.append({'symbol':sym,'source':'الفري فلوت المنخفض','href':'/low-float?focus='+sym,
+                     'market':'low_float','study_bars':f.get('study_bars') or [],
                      'price':q.get('price'),'price_at':q.get('received_at'),
                      'available':b.get('available'),'borrow_at':b.get('received_at'),
                      'rsi':row.get('rsi_daily'),'support':f.get('support'),
@@ -2031,7 +2035,15 @@ def _focus_rows():
                      'verified':bool(f.get('ready')),'higher_low':f.get('higher_low'),
                      'up_down_volume_ratio':f.get('up_down_volume_ratio'),
                      'retest':f.get('retest_state')=='success','retest_day':f.get('retest_date'),'confirmation_at':f.get('checked_at'),
-                     'pattern_bars':f.get('pattern_bars') or []})
+                     'pattern_bars':[bar for bar in (f.get('pattern_bars') or []) if bar.get('date','')<utcnow().astimezone(ZoneInfo('America/New_York')).date().isoformat()]})
+    # Research includes otherwise eligible cached low-float stocks whose price
+    # moved above $5; current price filtering must not erase historical winners.
+    visible={r['symbol'] for r in rows}
+    for sym,row in list(low_float.ROWS.items()):
+        analysis=row.get('daily_analysis') or {}
+        if sym not in visible and low_float.eligible(row,UNIVERSE) and focus.fresh(analysis.get('checked_at'),utcnow(),172800):
+            rows.append({'symbol':sym,'market':'low_float','study_only':True,'verified':bool(analysis.get('ready')),
+                         'study_bars':analysis.get('study_bars') or []})
     return rows
 
 

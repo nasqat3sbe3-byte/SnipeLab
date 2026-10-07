@@ -194,8 +194,13 @@ def daily_analysis(symbol, result, at=None):
     up = [b['volume'] for i,b in enumerate(window) if i and b['volume'] is not None and b['close'] > window[i-1]['close']]
     down = [b['volume'] for i,b in enumerate(window) if i and b['volume'] is not None and b['close'] < window[i-1]['close']]
     volume_ratio = (sum(up)/len(up))/(sum(down)/len(down)) if up and down else None
+    study_bars=[]
+    for bar in bars[-120:]:
+        if bar is None:study_bars=[]
+        else:study_bars.append({k:bar[k] for k in ('date','low','high','close')})
     return {"version": 1, "checked_at": now(), "ready": True,
             "pattern_bars": [{k:b[k] for k in ('date','low','high','close')} for b in window[-12:]],
+            "study_bars": study_bars,
             "higher_low": window[-1]['low'] > window[-2]['low'],
             "up_down_volume_ratio": volume_ratio,
             "last_completed_session": window[-1]["date"], "window_start": window[0]["date"],

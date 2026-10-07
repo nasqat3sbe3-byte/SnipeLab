@@ -20,7 +20,7 @@ class FocusTests(unittest.TestCase):
     def test_five_max_no_fillers(self):
         result=f.update([row(str(i)) for i in range(8)],risk,AT)
         self.assertEqual(len(result['picks']),5)
-        self.assertIn('ليست احتمال',result['note'])
+        self.assertIn('احتمال صعود',result['note'])
         self.assertEqual(f.update([row(retest=False,pattern_bars=[])],risk,AT)['picks'],[])
     def test_news_gate(self):
         for r in ({'checked':False},{'blocked':True,'checked':True}):

@@ -13,6 +13,6 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -r requirements.txt
-      - run: python -m py_compile main.py history.py rsi.py storage.py event_rules.py low_float.py risk_evidence.py focus.py
+      - run: python -m py_compile main.py history.py rsi.py storage.py event_rules.py low_float.py risk_evidence.py focus.py focus_study.py
       - run: python -m unittest discover -v
 

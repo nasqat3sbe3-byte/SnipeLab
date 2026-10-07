@@ -5,14 +5,17 @@ from copy import deepcopy
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 import storage
+import focus_study
 
 MEMORY = {}
 EVENTS = []
 SNAPSHOT = {'picks': [], 'watching': [], 'status': 'starting', 'events': []}
-VERSION = 3
+VERSION = 4
+MODELS = {}
+MODEL_AT = None
 
 
-def pattern_bars(candles, split_date, at):
+def pattern_bars(candles, split_date, at, limit=12):
     """Conservative complete-session view of the existing 4H cache, no I/O."""
     today = at.astimezone(ZoneInfo('America/New_York')).date().isoformat()
     days = {}
@@ -36,7 +39,18 @@ def pattern_bars(candles, split_date, at):
             bars=[]
         else:
             bars.append({k:d[k] for k in ('date','low','high','close')})
-    return bars[-12:]
+    return bars[-limit:]
+
+
+def calibrate(rows, at):
+    global MODELS, MODEL_AT
+    corpus={'split':{},'low_float':{}}
+    for row in rows:
+        market=row.get('market') or ('low_float' if row.get('source')=='الفري فلوت المنخفض' else 'split')
+        if row.get('study_bars') and row.get('verified'):
+            corpus[market][row['symbol']]=row['study_bars']
+    MODELS={market:focus_study.build(data,at) for market,data in corpus.items()}
+    MODEL_AT=at
 
 
 def pattern_state(bars, price, at):
@@ -106,6 +120,7 @@ def fresh(stamp, at, seconds=1800):
 
 def evaluate(row, memory, risk, at):
     sym = row['symbol']
+    if row.get('already_rallied') or row.get('study_only'):return None
     price, support, av, rsi = [number(row.get(k)) for k in ('price','support','available','rsi')]
     known = all(x is not None for x in (price,support,av,rsi))
     if not known or price <= 0 or support <= 0:
@@ -145,9 +160,24 @@ def evaluate(row, memory, risk, at):
     volume_ok = volume is not None and volume > 1
     confirmations = sum((retest,higher_low,reclaimed))
     pattern = pattern_state(row.get('pattern_bars') or [],price,at)
+    market=row.get('market') or ('low_float' if row.get('source')=='الفري فلوت المنخفض' else 'split')
+    model=MODELS.get(market) or {}
+    similarity=focus_study.match(model,row.get('study_bars') or [],sym,price,at) if model else None
+    studied=bool(similarity and similarity['matched'])
+    if studied:
+        closest=similarity['closest'][0]
+        pattern={'name':'observed_similarity','label':'تشابه مع صعود حديث','confirmed':False,
+                 'score':max(0,50-20*similarity['distance']),
+                 'reference':closest['symbol']+' · قبل حركة +'+str(closest['gain_pct'])+'%',
+                 'level':similarity['level'],'as_of':similarity['as_of'],
+                 'reasons':['سلوك آخر 6 جلسات أقرب لعينة صعود موثقة من عينات المقارنة'],
+                 'waiting':'استعادة قمة آخر 3 جلسات '+str(similarity['level'])+' والمحافظة على القاع'}
     # A base belongs in early monitoring before a breakout/retest. Recovery needs
     # an actual later completed close over the old level, not two stability days.
-    ready = not broken and 0 <= distance <= 20 and bool(pattern['name']) and sessions >= (1 if pattern['name']=='recovery' else 2)
+    if model.get('status')=='ready':
+        ready = not broken and 0 <= distance <= 25 and studied
+    else:
+        ready = not broken and 0 <= distance <= 20 and bool(pattern['name']) and sessions >= (1 if pattern['name']=='recovery' else 2)
     reasons = ['ثبات '+str(sessions)+' جلسات فوق القاع'] if not broken else ['كسر الدعم؛ الجاهزية السابقة ملغاة']
     for ok, label in ((retest,'إعادة اختبار ناجحة'),(higher_low,'قاع الجلسة الأخيرة أعلى من السابقة'),
                       (reclaimed,'استرجع الدعم المكسور'),(drying,'Available يتناقص عبر 3 قراءات'),
@@ -156,6 +186,7 @@ def evaluate(row, memory, risk, at):
     missing = []
     reasons.extend(pattern['reasons'])
     if not pattern['name']: missing.append(pattern['waiting'])
+    if model.get('status')=='ready' and not studied:missing.append('لم يجتز التشابه مع عينات الصعود ومقارنتها')
     if volume is None: missing.append('مقارنة أحجام الصعود والهبوط غير متاحة')
     if not drying: missing.append('تناقص Available المتتالي لم يتأكد')
     if not ready: missing.append('النموذج لم يكتمل أو السعر خرج من منطقة المتابعة')
@@ -170,7 +201,7 @@ def evaluate(row, memory, risk, at):
             'eligible':ready and risk_state=='checked','reasons':reasons,'missing':missing,
             'first_seen':entry['first_seen'],'first_price':first_price,
             'observed_change_pct':round((price/first_price-1)*100,2) if first_price else None,
-            'pattern':pattern,'confirmation_waiting':pattern['waiting'],
+            'pattern':pattern,'similarity':similarity,'confirmation_waiting':pattern['waiting'],
             'invalidation':'كسر الدعم '+str(round(support,4))+' أو ظهور خطر رسمي موثق',
             'source':row.get('source'),'market':row.get('market') or ('low_float' if row.get('source')=='الفري فلوت المنخفض' else 'split'),'href':row.get('href','/dashboard'),
             'price_at':row.get('price_at'),'borrow_at':row.get('borrow_at')}
@@ -219,13 +250,16 @@ def update(rows, risks, at=None):
             return (origin or ('low_float' if source=='الفري فلوت المنخفض' else 'split'))==market
         market_picks=[x for x in picks if belongs(x)]
         pools[market]={'version':VERSION,'market':market,'generated_at':at.isoformat(),
+                      'study':{k:v for k,v in (MODELS.get(market) or {}).items() if k not in ('positives','negatives','scales')},
+                      'study_samples':{'positive':len((MODELS.get(market) or {}).get('positives',[])),
+                                       'comparison':len((MODELS.get(market) or {}).get('negatives',[]))},
                       'status':'ready' if market_picks else 'watching',
                       'picks':market_picks,
                       'watching':[x for x in ranked if belongs(x) and x['symbol'] not in selected][:30],
                       'remembered':[x for x in dormant if belongs(x)][:30],
                       'events':[x for x in EVENTS if belongs(x)][:20],
                       'risk_pending':[x['symbol'] for x in ranked if belongs(x) and x['risk_state']=='pending'][:15],
-                      'note':'نموذجان تجريبيان: تماسك قبل الانطلاقة واستعادة بعد هبوط، مستوحيان من YMT وDKI وSXTC. الدرجة ليست احتمال صعود؛ لم يثبت تفوقهما باختبار تاريخي. حتى خمسة لكل قسم، مع بيانات مكتملة وفحص أخبار. التماسك يدخل للمراقبة قبل تأكيد الاختراق.'}
+                      'note':'تشابه تجريبي مع سلوك سابق لصعود +100% وقمته ضمن آخر عشر جلسات مكتملة، مع عينات مقارنة لم تبلغ الحركة. نفصل كل قسم ونستبعد مطابقة السهم مع نفسه. عند نقص عينات الدراسة تُستخدم القواعد الأولية مع توضيح النقص. التشابه ليس احتمال صعود؛ لم تثبت الفائدة باختبار زمني مستقل.'}
     SNAPSHOT={**pools['split'],'pools':pools}
     return SNAPSHOT
 
@@ -240,7 +274,10 @@ async def worker(collect, risks, queue):
     count=0
     while True:
         try:
-            result=update(collect(),risks)
+            rows=collect();at=datetime.now(timezone.utc)
+            if MODEL_AT is None or (at-MODEL_AT).total_seconds()>=300:
+                await asyncio.to_thread(calibrate,rows,at)
+            result=update(rows,risks,at)
             queue([s for pool in result.get('pools',{}).values() for s in pool['risk_pending']])
             if count%4==0:
                 await asyncio.to_thread(storage.save,{'focus_v1':{'memory':deepcopy(MEMORY),'events':list(EVENTS)}})
