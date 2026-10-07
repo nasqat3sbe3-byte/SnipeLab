@@ -111,7 +111,7 @@ async function refresh(){
   }catch(e){$('headerServerLabel').textContent='Server offline';$('headerServerLine').dataset.state='offline';$('status').textContent='تعذر الاتصال؛ ستتم إعادة المحاولة تلقائيًا.';}
   finally{loading=false;}
 }
-function themeLabel(){$('themeToggle').textContent=document.body.classList.contains('black-gold')?'◐ Crystal':'◐ Black Gold';}
+function themeLabel(){$('themeToggle').textContent=document.body.classList.contains('black-gold')?'◐ Crystal':'◐ Ice Blue';}
 if(localStorage.getItem('snipelab-theme')==='black-gold')document.body.classList.add('black-gold');themeLabel();
 $('themeToggle').onclick=()=>{document.body.classList.toggle('black-gold');localStorage.setItem('snipelab-theme',document.body.classList.contains('black-gold')?'black-gold':'crystal');themeLabel();};
 $('referenceMenu').onclick=()=>$('referenceMenuDialog').showModal();$('referenceMenuClose').onclick=()=>$('referenceMenuDialog').close();
