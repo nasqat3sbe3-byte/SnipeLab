@@ -3,12 +3,89 @@ import asyncio
 import math
 from copy import deepcopy
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 import storage
 
 MEMORY = {}
 EVENTS = []
 SNAPSHOT = {'picks': [], 'watching': [], 'status': 'starting', 'events': []}
-VERSION = 2
+VERSION = 3
+
+
+def pattern_bars(candles, split_date, at):
+    """Conservative complete-session view of the existing 4H cache, no I/O."""
+    today = at.astimezone(ZoneInfo('America/New_York')).date().isoformat()
+    days = {}
+    for c in sorted(candles, key=lambda c: c.get('time', 0)):
+        day = c.get('date', '')
+        if not c.get('closed') or day >= today or day < (split_date or ''):
+            continue
+        low, high, close = [number(c.get(k)) for k in ('low','high','close')]
+        if any(v is None or v <= 0 for v in (low,high,close)) or not low <= close <= high:
+            continue
+        d = days.setdefault(day, {'date':day,'low':low,'high':high,'close':close,'regular_samples':0,'regular_slots':set()})
+        d.update(low=min(d['low'],low),high=max(d['high'],high),close=close)
+        slot = str(c.get('local_time',''))[-5:]
+        if slot in ('09:30','13:30'):
+            d['regular_samples'] += int(c.get('samples') or 0)
+            d['regular_slots'].add(slot)
+    # Missing regular-session coverage breaks the sequence; do not silently bridge it.
+    bars=[]
+    for d in days.values():
+        if d['regular_samples'] < 6 or len(d['regular_slots']) != 2:
+            bars=[]
+        else:
+            bars.append({k:d[k] for k in ('date','low','high','close')})
+    return bars[-12:]
+
+
+def pattern_state(bars, price, at):
+    """Two explicit hypotheses inspired by examples, not fitted success odds."""
+    empty={'name':None,'confirmed':False,'score':0,'reasons':[],
+           'waiting':'تحتاج ست جلسات مكتملة وحديثة لقراءة السلوك'}
+    if len(bars or []) < 6:
+        return empty
+    try:
+        today=at.astimezone(ZoneInfo('America/New_York')).date()
+        if not 0 <= (today-datetime.fromisoformat(bars[-1]['date']).date()).days <= 5:
+            return empty
+        clean=[]
+        for b in bars[-6:]:
+            low,high,close=[number(b.get(k)) for k in ('low','high','close')]
+            if any(v is None or v<=0 for v in (low,high,close)) or not low<=close<=high:return empty
+            if b['date'] >= today.isoformat() or (clean and b['date'] <= clean[-1]['date']):return empty
+            clean.append({'date':b['date'],'low':low,'high':high,'close':close})
+    except (TypeError,ValueError,KeyError):return empty
+    prev,recent=clean[:3],clean[3:]
+    span=lambda a:max(b['high'] for b in a)/min(b['low'] for b in a)-1
+    old_range,new_range=span(prev),span(recent)
+    floor=min(b['low'] for b in recent)
+    ceiling=max(b['high'] for b in recent)
+    ratio=new_range/old_range if old_range>0 else None
+    # Rebound uses a prior candle's closing level. A later peak never defines the trigger.
+    drop_index=min(range(1,5),key=lambda i:clean[i]['low']/clean[i-1]['close'])
+    drop=clean[drop_index]; level=clean[drop_index-1]['close']
+    fall=1-drop['low']/level
+    after=clean[drop_index+1:]
+    recovery=fall>=.20 and after and after[-1]['close']>=level and min(b['low'] for b in after)>=drop['low'] and price>=level and price<=level*1.20
+    if recovery:
+        return {'name':'recovery','label':'استعادة بعد هبوط','confirmed':True,'score':35,
+                'reference':'SXTC · فرضية سلوكية','level':round(level,4),'floor':drop['low'],
+                'reasons':['هبوط سابق '+str(round(fall*100,1))+'% ثم إغلاق لاحق فوق منطقة الكسر','لم يكسر القاع بعد الاستعادة'],
+                'waiting':'استمرار الحفاظ على منطقة الاستعادة '+str(round(level,4)),
+                'as_of':clean[-1]['date']}
+    held=recent[-1]['low']>=recent[-2]['low']
+    shallow_reclaim=recent[-1]['low']>=recent[-2]['low']*.95 and recent[-1]['close']>recent[-2]['high']
+    stable=(held or shallow_reclaim) and recent[-1]['close']>recent[-2]['close']
+    contraction=ratio is not None and ratio<=.8 and new_range<=.25 and stable and floor<=price<=floor*1.20
+    if contraction:
+        confirmed=price>ceiling
+        return {'name':'base','label':'تماسك قبل الانطلاقة','confirmed':confirmed,'score':30+(10 if confirmed else 0),
+                'reference':'YMT / DKI · فرضية سلوكية','level':round(ceiling,4),'floor':floor,
+                'range_ratio':round(ratio,3),'as_of':clean[-1]['date'],
+                'reasons':['نطاق آخر 3 جلسات '+str(round(new_range*100,1))+'% مقابل '+str(round(old_range*100,1))+'% للثلاث السابقة','إغلاق يتحسن مع ثبات القاع أو استعادة كسر محدود'],
+                'waiting':('الحفاظ فوق قمة التماسك ' if confirmed else 'تجاوز قمة التماسك والثبات فوق ')+str(round(ceiling,4))}
+    return {**empty,'waiting':'لم يتأكد تضيق النطاق مع التحسن أو استعادة منطقة كسر سابقة','as_of':clean[-1]['date']}
 
 
 def number(value):
@@ -67,20 +144,25 @@ def evaluate(row, memory, risk, at):
     volume = number(row.get('up_down_volume_ratio'))
     volume_ok = volume is not None and volume > 1
     confirmations = sum((retest,higher_low,reclaimed))
-    ready = not broken and sessions >= 2 and 0 <= distance <= 20 and confirmations > 0
+    pattern = pattern_state(row.get('pattern_bars') or [],price,at)
+    # A base belongs in early monitoring before a breakout/retest. Recovery needs
+    # an actual later completed close over the old level, not two stability days.
+    ready = not broken and 0 <= distance <= 20 and bool(pattern['name']) and sessions >= (1 if pattern['name']=='recovery' else 2)
     reasons = ['ثبات '+str(sessions)+' جلسات فوق القاع'] if not broken else ['كسر الدعم؛ الجاهزية السابقة ملغاة']
     for ok, label in ((retest,'إعادة اختبار ناجحة'),(higher_low,'قاع الجلسة الأخيرة أعلى من السابقة'),
                       (reclaimed,'استرجع الدعم المكسور'),(drying,'Available يتناقص عبر 3 قراءات'),
                       (volume_ok,'متوسط حجم جلسات الصعود أعلى من الهبوط')):
         if ok: reasons.append(label)
     missing = []
+    reasons.extend(pattern['reasons'])
+    if not pattern['name']: missing.append(pattern['waiting'])
     if volume is None: missing.append('مقارنة أحجام الصعود والهبوط غير متاحة')
     if not drying: missing.append('تناقص Available المتتالي لم يتأكد')
-    if not ready: missing.append('تحتاج تأكيدًا سعريًا مع ثبات جلستين وقرب من الدعم')
+    if not ready: missing.append('النموذج لم يكتمل أو السعر خرج من منطقة المتابعة')
     risk_state = 'blocked' if risk.get('blocked') else 'checked' if risk.get('checked') else 'pending'
-    stage = 'broken' if broken else 'confirmed' if ready and retest else 'recovering' if ready else 'watch'
+    stage = 'broken' if broken else 'confirmed' if ready and pattern['confirmed'] else 'setup' if ready else 'watch'
     if risk_state == 'blocked': stage='risk'
-    priority = (25 if retest else 0)+(20 if higher_low else 0)+(20 if reclaimed else 0)+(15 if drying else 0)+(10 if volume_ok else 0)+min(10,max(0,sessions)*2.5)
+    priority = pattern['score']+(10 if retest else 0)+(5 if higher_low else 0)+(5 if reclaimed else 0)+(5 if drying else 0)+(5 if volume_ok else 0)
     first_price = number(entry.get('first_price'))
     return {'symbol':sym,'price':price,'support':support,'available':av,'rsi':rsi,
             'sessions':0 if broken else sessions,'distance_pct':round(distance,2),
@@ -88,7 +170,7 @@ def evaluate(row, memory, risk, at):
             'eligible':ready and risk_state=='checked','reasons':reasons,'missing':missing,
             'first_seen':entry['first_seen'],'first_price':first_price,
             'observed_change_pct':round((price/first_price-1)*100,2) if first_price else None,
-            'confirmation_waiting':'الحفاظ على الدعم وإعادة اختبار ناجحة' if not retest else 'استمرار الثبات دون كسر الدعم',
+            'pattern':pattern,'confirmation_waiting':pattern['waiting'],
             'invalidation':'كسر الدعم '+str(round(support,4))+' أو ظهور خطر رسمي موثق',
             'source':row.get('source'),'market':row.get('market') or ('low_float' if row.get('source')=='الفري فلوت المنخفض' else 'split'),'href':row.get('href','/dashboard'),
             'price_at':row.get('price_at'),'borrow_at':row.get('borrow_at')}
@@ -143,7 +225,7 @@ def update(rows, risks, at=None):
                       'remembered':[x for x in dormant if belongs(x)][:30],
                       'events':[x for x in EVENTS if belongs(x)][:20],
                       'risk_pending':[x['symbol'] for x in ranked if belongs(x) and x['risk_state']=='pending'][:15],
-                      'note':'ترتيب متابعة تجريبي حسب بيانات مرصودة؛ الدرجة ليست احتمال صعود. لم يُختبر تاريخيًا بعد. لا نملأ الخمسة بأسهم ناقصة التأكيد أو الفحص.'}
+                      'note':'نموذجان تجريبيان: تماسك قبل الانطلاقة واستعادة بعد هبوط، مستوحيان من YMT وDKI وSXTC. الدرجة ليست احتمال صعود؛ لم يثبت تفوقهما باختبار تاريخي. حتى خمسة لكل قسم، مع بيانات مكتملة وفحص أخبار. التماسك يدخل للمراقبة قبل تأكيد الاختراق.'}
     SNAPSHOT={**pools['split'],'pools':pools}
     return SNAPSHOT
 

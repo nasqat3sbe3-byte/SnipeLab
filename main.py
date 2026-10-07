@@ -22,6 +22,7 @@ import opportunities
 import low_float
 import focus
 from support_chart import worker as support_chart_worker, get as support_chart_get, retest_signal as support_retest_signal
+from support_chart import CACHE as SUPPORT_PATTERN_CACHE
 from corporate_actions import worker as corporate_actions_worker, upcoming as upcoming_actions
 from event_rules import borrow_events, ready_event, worker_health
 from bs4 import BeautifulSoup
@@ -2018,7 +2019,8 @@ def _focus_rows():
                      'verified':bool(h.get('verified') and focus.fresh(h.get('updated_at'),utcnow(),172800)),
                      'retest':retest.get('support_retest_status')=='success',
                      'retest_day':retest.get('support_retest_time'),
-                     'confirmation_at':retest.get('support_retest_updated_at')})
+                     'confirmation_at':retest.get('support_retest_updated_at'),
+                     'pattern_bars':focus.pattern_bars((SUPPORT_PATTERN_CACHE.get(sym) or {}).get('candles') or [],h.get('effective_date'),utcnow()) if focus.fresh((SUPPORT_PATTERN_CACHE.get(sym) or {}).get('updated_at'),utcnow(),21600) else []})
     for sym,row in low_float.snapshot(UNIVERSE)['rows'].items():
         f=row.get('formation') or {};q=row.get('price') or {};b=row.get('borrow') or {}
         rows.append({'symbol':sym,'source':'الفري فلوت المنخفض','href':'/low-float?focus='+sym,
@@ -2028,7 +2030,8 @@ def _focus_rows():
                      'sessions':f.get('stability_sessions'),'broken':f.get('state')=='broken',
                      'verified':bool(f.get('ready')),'higher_low':f.get('higher_low'),
                      'up_down_volume_ratio':f.get('up_down_volume_ratio'),
-                     'retest':f.get('retest_state')=='success','retest_day':f.get('retest_date'),'confirmation_at':f.get('checked_at')})
+                     'retest':f.get('retest_state')=='success','retest_day':f.get('retest_date'),'confirmation_at':f.get('checked_at'),
+                     'pattern_bars':f.get('pattern_bars') or []})
     return rows
 
 

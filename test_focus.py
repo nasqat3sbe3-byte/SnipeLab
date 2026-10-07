@@ -3,10 +3,14 @@ from datetime import datetime,timezone,timedelta
 from unittest.mock import patch
 import focus as f
 AT=datetime(2026,10,7,20,0,tzinfo=timezone.utc)
+def base_bars():
+    dates=['2026-09-29','2026-09-30','2026-10-01','2026-10-02','2026-10-05','2026-10-06']
+    return [{'date':d,'low':1 if i<3 else 1.01+(i-3)*.01,'high':1.5 if i<3 else 1.12,
+             'close':1.1 if i<3 else 1.05+(i-3)*.02} for i,d in enumerate(dates)]
 def row(sym='TEST',**extra):
     return {'symbol':sym,'price':1.1,'support':1,'available':1000,'rsi':25,'sessions':3,
             'verified':True,'retest':True,'retest_day':AT.date().isoformat(),'confirmation_at':AT.isoformat(),
-            'price_at':AT.isoformat(),'borrow_at':AT.isoformat(),**extra}
+            'price_at':AT.isoformat(),'borrow_at':AT.isoformat(),'pattern_bars':base_bars(),**extra}
 def risk(sym):return {'checked':True,'blocked':False}
 class FocusTests(unittest.TestCase):
     def setUp(self):
@@ -17,14 +21,14 @@ class FocusTests(unittest.TestCase):
         result=f.update([row(str(i)) for i in range(8)],risk,AT)
         self.assertEqual(len(result['picks']),5)
         self.assertIn('ليست احتمال',result['note'])
-        self.assertEqual(f.update([row(retest=False)],risk,AT)['picks'],[])
+        self.assertEqual(f.update([row(retest=False,pattern_bars=[])],risk,AT)['picks'],[])
     def test_news_gate(self):
         for r in ({'checked':False},{'blocked':True,'checked':True}):
             self.assertEqual(f.update([row()],lambda s:r,AT)['picks'],[])
         self.assertTrue(f.update([row()],risk,AT)['picks'])
     def test_stale_sources(self):
         old=(AT-timedelta(days=3)).isoformat()
-        for k in ('price_at','borrow_at','confirmation_at'):
+        for k in ('price_at','borrow_at'):
             self.assertFalse(f.update([row(**{k:old})],risk,AT)['picks'])
     def test_zero_is_valid_missing_is_not_zero(self):
         self.assertTrue(f.update([row(available=0)],risk,AT)['picks'])
@@ -52,7 +56,7 @@ class FocusTests(unittest.TestCase):
         self.assertEqual(result['remembered'][0]['symbol'],'TEST')
         self.assertFalse(result['remembered'][0]['eligible'])
     def test_ancient_retest_not_current_improvement(self):
-        self.assertFalse(f.update([row(retest_day='2026-08-01')],risk,AT)['picks'])
+        self.assertFalse(f.update([row(retest_day='2026-08-01',pattern_bars=[])],risk,AT)['picks'])
     def test_same_support_reclaimed_after_break(self):
         f.update([row(price=.9,broken=True)],risk,AT)
         self.assertTrue(f.update([row(price=1.05,retest=False)],risk,AT)['picks'])
@@ -82,3 +86,49 @@ class IndependentPoolTests(unittest.TestCase):
             result=f.update([],risk,AT)
             self.assertEqual(result['remembered'],[])
             self.assertEqual(result['pools']['low_float']['remembered'][0]['symbol'],'F')
+
+class PatternTests(unittest.TestCase):
+    def test_base_can_be_monitored_before_breakout_without_retest(self):
+        result=f.evaluate(row(retest=False),{},risk('TEST'),AT)
+        self.assertTrue(result['eligible'])
+        self.assertEqual(result['stage'],'setup')
+        self.assertFalse(result['pattern']['confirmed'])
+        self.assertEqual(result['pattern']['name'],'base')
+    def test_new_low_and_price_chase_are_not_base_matches(self):
+        bars=base_bars();bars[-1]['low']=.8
+        self.assertIsNone(f.pattern_state(bars,1.1,AT)['name'])
+        self.assertIsNone(f.pattern_state(base_bars(),1.5,AT)['name'])
+    def test_recovery_requires_a_later_close_not_same_candle_wick(self):
+        bars=base_bars()
+        for b in bars:b.update(low=1.9,high=2.1,close=2)
+        bars[-2].update(low=1.2,high=2.1,close=1.4)
+        bars[-1].update(low=1.3,high=2.2,close=2.05)
+        p=f.pattern_state(bars,2.05,AT)
+        self.assertEqual(p['name'],'recovery');self.assertTrue(p['confirmed'])
+        result=f.evaluate(row(price=2.05,support=1.8,sessions=1,retest=False,pattern_bars=bars),{},risk('TEST'),AT)
+        self.assertTrue(result['eligible'])
+        bars[-1]['close']=1.5
+        self.assertIsNone(f.pattern_state(bars,2.05,AT)['name'])
+    def test_future_incomplete_old_and_missing_bars_do_not_select(self):
+        for kind in ['future','old','missing']:
+            bars=base_bars()
+            if kind=='future':bars[-1]['date']='2026-10-08'
+            elif kind=='old':
+                for i,b in enumerate(bars):b['date']='2026-08-'+str(i+10)
+            else:bars[-1]['low']=None
+            self.assertIsNone(f.pattern_state(bars,1.1,AT)['name'])
+    def test_cache_coverage_and_split_boundaries(self):
+        candles=[]
+        for i,b in enumerate(base_bars()):
+            for j,slot in enumerate(['09:30','13:30']):
+                candles.append({**b,'time':i*2+j,'local_time':b['date']+' '+slot,'closed':True,'samples':4 if j==0 else 3})
+        self.assertEqual(len(f.pattern_bars(candles,'2026-09-29',AT)),6)
+        self.assertEqual(len(f.pattern_bars(candles,'2026-10-02',AT)),3)
+        candles[-1]['closed']=False
+        self.assertEqual(f.pattern_bars(candles,None,AT),[])
+    def test_prefix_cannot_use_later_rally(self):
+        bars=base_bars()
+        before=f.pattern_state(bars,1.1,AT)
+        later=bars+[{'date':'2026-10-08','low':1.1,'high':5,'close':4}]
+        self.assertIsNone(f.pattern_state(later,1.1,AT)['name'])
+        self.assertEqual(before,f.pattern_state(bars,1.1,AT))
