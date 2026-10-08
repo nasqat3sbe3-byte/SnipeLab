@@ -1,8 +1,12 @@
 """Cache-only personal half-of-split-candle screen; independent of readiness."""
 import asyncio
+from copy import deepcopy
+import storage
 from datetime import datetime, timedelta, timezone
 from opportunities import NY, trading, number, usable_reading
 
+RULE_VERSION=2
+EXCLUSIONS={}
 SNAPSHOT={'status':'starting','rows':[],'pending':0,'excluded':0,'generated_at':None}
 
 def window(at):
@@ -15,12 +19,12 @@ def window(at):
         end-=timedelta(days=1)
     return sorted(days)
 
-def ordered_chart(chart,dates,at):
+def ordered_chart(chart,dates,at,*,require_fresh=True,require_complete=True):
     """Keep intraday time order; sparse stocks need session slots, not six trades."""
-    if not recent(chart.get('updated_at'),at,21600):return []
+    if require_fresh and not recent(chart.get('updated_at'),at,21600):return []
     today=at.astimezone(NY).date().isoformat()
     candles=sorted([c for c in chart.get('candles',[]) if c.get('date') in dates and (c.get('closed') or c.get('date')==today)],key=lambda c:c.get('time',0))
-    for d in dates:
+    for d in dates if require_complete else []:
         slots={str(c.get('local_time',''))[-5:] for c in candles if c.get('date')==d}
         if not slots or (d<today and not {'09:30','13:30'}<=slots):return []
     fine=[]
@@ -64,7 +68,7 @@ def waves80(sequence):
             by_session[day]=event
     return {'events':list(by_session.values()),'uncertain':uncertain}
 
-def evaluate(meta,h,q,b,a,at,chart=None,detail=None):
+def evaluate(meta,h,q,b,a,at,chart=None,detail=None,exclusion=None):
     def fail(state,reason):
         if detail is not None:detail.update(state=state,reason=reason)
         return state,None
@@ -82,6 +86,20 @@ def evaluate(meta,h,q,b,a,at,chart=None,detail=None):
     if not usable_reading(borrow_fresh,at):return fail('pending','بيانات Available تحتاج تحديثًا')
     fresh={'status':'fresh' if recent(q.get('received_at'),at,900) else 'stale','timestamp':q.get('market_timestamp')}
     if not usable_reading(fresh,at) or not recent(h.get('updated_at'),at,172800):return fail('pending','السعر أو التاريخ يحتاج تحديثًا')
+    # Historical disqualification never expires or falls back to regular-session daily bars.
+    # A new reverse split changes its key and requires an independent verification.
+    if exclusion and len(exclusion.get('events') or [])>=2 and exclusion.get('version')==RULE_VERSION and exclusion.get('effective_date')==meta['effective_date']:
+        if detail is not None:detail.update(waves80_count=len(exclusion['events']),waves80=exclusion['events'],wave_proof_saved=True,movement_source='saved_extended_wave_evidence')
+        return fail('excluded','طلعتان فوق 80% موثقتان في يومين مختلفين بعد هذا التقسيم')
+    chart=chart or {}
+    if chart.get('split_date') not in (None,meta['effective_date']):chart={}
+    full_dates=post_split_dates(meta['effective_date'],at)
+    observed=ordered_chart(chart,full_dates,at,require_fresh=False,require_complete=False)
+    wave_result=waves80(observed) if observed else {'events':[],'uncertain':[]}
+    if detail is not None and observed:detail.update(waves80_count=len(wave_result['events']),waves80=wave_result['events'],waves80_uncertain=wave_result['uncertain'],wave_source='extended_intraday')
+    if len(wave_result['events'])>=2:
+        return fail('excluded','طلعتان فوق 80% في جلستين مختلفتين بعد التقسيم، وبينهما رجوع لقاع البداية')
+    full_sequence=ordered_chart(chart,full_dates,at,require_fresh=False)
     dates=[d for d in window(at) if d>=meta['effective_date']]
     bars={x['date']:x for x in h.get('hunt_daily_bars',[]) if x.get('date') in dates}
     # A current quote may safely extend today's high/low, but cannot fill missing history.
@@ -115,16 +133,10 @@ def evaluate(meta,h,q,b,a,at,chart=None,detail=None):
     if detail is not None:detail['recent_rise_pct']=round(max_rise,2)
     if max_rise>=70-1e-9:return fail('excluded','طلعة 70% أو أكثر داخل آخر 10 جلسات')
     if ambiguous:return fail('pending','ترتيب القاع والقمة داخل شمعة واحدة يحتاج تحققًا')
-    full_dates=post_split_dates(meta['effective_date'],at)
-    full_sequence=ordered_chart(chart or {},full_dates,at)
+    if not intraday:
+        return fail('pending','بانتظار شموع الساعات الممتدة؛ اليومية وحدها لا تثبت اجتياز شروط الحركة')
     if not full_sequence:
-        full_bars={x['date']:x for x in h.get('hunt_post_split_bars',[]) if x.get('date') in full_dates}
-        if full_dates[-1] in bars:full_bars[full_dates[-1]]=bars[full_dates[-1]]
-        if all(d in full_bars for d in full_dates):full_sequence=[full_bars[d] for d in full_dates]
-    if not full_sequence:return fail('pending','فحص طلعتين فوق 80% ينتظر تاريخ ما بعد التقسيم كاملًا')
-    wave_result=waves80(full_sequence)
-    if detail is not None:detail.update(waves80_count=len(wave_result['events']),waves80=wave_result['events'],waves80_uncertain=wave_result['uncertain'])
-    if len(wave_result['events'])>=2:return fail('excluded','طلعتان فوق 80% في جلستين مختلفتين بعد التقسيم، وبينهما رجوع لقاع البداية')
+        return fail('pending','فحص طلعتين فوق 80% ينتظر شموع الساعات الممتدة بعد التقسيم كاملة')
     if wave_result['uncertain']:return fail('pending','فحص طلعات 80% يحتاج ترتيبًا أدق داخل الشمعة')
     if detail is not None:detail.update(state='eligible',reason='مطابق للشروط')
     return 'eligible',{'symbol':meta['symbol'],'price':price,'split_high':high,'half':half,
@@ -137,29 +149,53 @@ def recent(value,at,seconds):
     try:return 0<=(at-datetime.fromisoformat(value.replace('Z','+00:00'))).total_seconds()<=seconds
     except (AttributeError,TypeError,ValueError):return False
 
-def build(universe,history,quotes,borrow,analytics,at,charts=None):
+def build(universe,history,quotes,borrow,analytics,at,charts=None,exclusions=None):
     rows=[];pending=excluded=0;diagnostics=[]
     for sym,meta in list(universe.items()):
         if not meta.get('effective_date') or meta['effective_date']>at.astimezone(NY).date().isoformat():continue
         detail={'symbol':sym}
-        state,row=evaluate({**meta,'symbol':sym},history.get(sym) or {},quotes.get(sym) or {},borrow.get(sym) or {},analytics.get(sym) or {},at,(charts or {}).get(sym),detail)
+        state,row=evaluate({**meta,'symbol':sym},history.get(sym) or {},quotes.get(sym) or {},borrow.get(sym) or {},analytics.get(sym) or {},at,(charts or {}).get(sym),detail,(exclusions or {}).get(sym))
         diagnostics.append(detail)
         if row:rows.append(row)
         pending+=state=='pending';excluded+=state=='excluded'
     rows.sort(key=lambda x:(-x['discount_pct'],number(x['available']) if number(x['available']) is not None else float('inf'),x['symbol']))
     return {'status':'ready','rows':rows,'pending':pending,'excluded':excluded,'generated_at':at.isoformat(),'diagnostics':diagnostics}
 
+def remember_exclusions(snapshot,universe,proofs,at):
+    changed=False
+    for d in snapshot.get('diagnostics',[]):
+        if d.get('wave_source')!='extended_intraday' or d.get('waves80_count',0)<2:continue
+        sym=d['symbol'];effective=(universe.get(sym) or {}).get('effective_date')
+        previous=proofs.get(sym) or {}
+        if previous.get('version')==RULE_VERSION and previous.get('effective_date')==effective:continue
+        proofs[sym]={'version':RULE_VERSION,'effective_date':effective,'checked_at':at.isoformat(),
+                     'events':deepcopy(d['waves80'][:2]),'source':'extended_intraday'}
+        changed=True
+    return changed
+
 async def worker(universe,history,quotes,borrow,analytics,charts=None):
     global SNAPSHOT
+    try:
+        EXCLUSIONS.update((await asyncio.to_thread(storage.load,('hunt_wave_exclusions_v2',))).get('hunt_wave_exclusions_v2') or {})
+    except Exception:pass
+    saved_proofs=deepcopy(EXCLUSIONS)
     while True:
         try:
-            SNAPSHOT=build(universe,history,quotes,borrow,analytics,datetime.now(timezone.utc),charts)
-            # Bounded optional chart refresh for qualifying pending stocks only.
+            at=datetime.now(timezone.utc)
+            SNAPSHOT=build(universe,history,quotes,borrow,analytics,at,charts,EXCLUSIONS)
+            remember_exclusions(SNAPSHOT,universe,EXCLUSIONS,at)
+            if EXCLUSIONS!=saved_proofs:
+                await asyncio.to_thread(storage.save,{'hunt_wave_exclusions_v2':deepcopy(EXCLUSIONS)})
+                saved_proofs=deepcopy(EXCLUSIONS)
+            # Only candidates in the price/borrow zone request optional chart refreshes.
+            # Share the existing single chart worker and its cooldown, without HTTP-path I/O.
             from support_chart import PRIORITY, WAKE
             for d in SNAPSHOT.get('diagnostics',[]):
-                if d.get('state')=='pending' and d.get('available') is not None and d['available']<=40000 and 20<=d.get('discount_pct',0)<=35 and len(PRIORITY)<50:
-                    cached=(charts or {}).get(d['symbol']) or {}
-                    if cached.get('hourly_version',0)<1 or not recent(cached.get('updated_at'),datetime.now(timezone.utc),21600):PRIORITY.setdefault(d['symbol'],0)
+                if d.get('state') not in ('pending','eligible') or d.get('available') is None or d['available']>40000 or not 20<=d.get('discount_pct',0)<=35 or len(PRIORITY)>=50:continue
+                cached=(charts or {}).get(d['symbol']) or {}
+                if cached.get('hourly_version',0)<1 or cached.get('split_date')!=(universe.get(d['symbol']) or {}).get('effective_date') or not recent(cached.get('updated_at'),at,21600):
+                    PRIORITY.setdefault(d['symbol'],0)
             if PRIORITY:WAKE.set()
-        except Exception:SNAPSHOT={**SNAPSHOT,'status':'error','rows':[]}
+        except Exception:
+            SNAPSHOT={**SNAPSHOT,'status':'error'}
         await asyncio.sleep(30)

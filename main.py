@@ -676,12 +676,28 @@ if(observer)observer.disconnect();openStockRoom(symbol);return true}catch(e){ret
 if(!open()){observer=new MutationObserver(open);observer.observe(document.body,{childList:true,subtree:true});setTimeout(()=>observer.disconnect(),120000)}})();</script>""".replace("TICKER", ticker)
     return HTMLResponse(DASHBOARD.replace("</body>", script + "</body>"))
 
+def runtime_resources():
+    """Small read-only Linux resource counters; no provider calls or cache copies."""
+    result={"chart_cache_count":len(SUPPORT_PATTERN_CACHE)}
+    try:
+        line=next(x for x in Path('/proc/self/status').read_text().splitlines() if x.startswith('VmRSS:'))
+        result['process_rss_bytes']=int(line.split()[1])*1024
+    except (OSError,ValueError,StopIteration):pass
+    for field,path in [('memory_current_bytes','/sys/fs/cgroup/memory.current'),('memory_limit_bytes','/sys/fs/cgroup/memory.max')]:
+        try:
+            value=Path(path).read_text().strip();result[field]=int(value) if value!='max' else None
+        except (OSError,ValueError):pass
+    try:
+        result['memory_events']={p[0]:int(p[1]) for line in Path('/sys/fs/cgroup/memory.events').read_text().splitlines() if len(p:=line.split())==2}
+    except (OSError,ValueError):pass
+    return result
+
 @app.get("/health")
 async def health():
     last=STATE["heartbeat"]; age=(utcnow()-datetime.fromisoformat(last)).total_seconds() if last else None
     now=utcnow()
     workers={"market":worker_health(now,STATE.get("last_market_scan"),180),"borrow":worker_health(now,STATE.get("last_borrow_scan"),420),"history":worker_health(now,max((v.get("attempted_at","") for v in HISTORY.values()),default=None),900),"analytics":worker_health(now,STATE.get("last_analytics"),120),"halt":worker_health(now,STATE.get("last_halt_scan"),240)}
-    return {"ok":bool(last) and age<30,"heartbeat_age_seconds":age,"workers":workers,"storage":storage.status(),"quotes_cached":len(QUOTES),"history_cached":len(HISTORY),"history_verified":sum(bool(HISTORY.get(sym,{}).get("verified")) for sym in UNIVERSE),"history_failed":sum(bool(HISTORY.get(sym,{}).get("error")) for sym in UNIVERSE),"history_last_attempt":max((v.get("attempted_at","") for v in HISTORY.values()),default=None),**STATE}
+    return {"ok":bool(last) and age<30,"runtime":runtime_resources(),"heartbeat_age_seconds":age,"workers":workers,"storage":storage.status(),"quotes_cached":len(QUOTES),"history_cached":len(HISTORY),"history_verified":sum(bool(HISTORY.get(sym,{}).get("verified")) for sym in UNIVERSE),"history_failed":sum(bool(HISTORY.get(sym,{}).get("error")) for sym in UNIVERSE),"history_last_attempt":max((v.get("attempted_at","") for v in HISTORY.values()),default=None),**STATE}
 
 @app.get("/api/rsi-status/{symbol}")
 async def rsi_status(symbol: str):
