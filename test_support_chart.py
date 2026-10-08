@@ -6,6 +6,21 @@ import support_chart as chart
 
 
 class SupportChartTests(unittest.TestCase):
+    def test_partial_refresh_preserves_observed_sessions_and_hourly_extrema(self):
+        times=[int(datetime(2026,10,2,h,tzinfo=chart.NY).timestamp()) for h in (4,5,8)]
+        def result(stamps,highs):
+            return {'timestamp':stamps,'indicators':{'quote':[{'open':[2]*len(stamps),'high':highs,'low':[1.9]*len(stamps),'close':[2]*len(stamps)}]}}
+        at=datetime(2026,10,3,tzinfo=timezone.utc)
+        old=chart.aggregate_hourly(result(times,[2.1,4,2.1]),at)
+        fresh=chart.aggregate_hourly(result(times[:1],[2.2]),at)
+        merged=chart.merge_candles(old,fresh)
+        self.assertEqual(len(merged),2)
+        self.assertEqual(merged[0]['high'],4)
+        self.assertEqual(merged[0]['samples'],2)
+        self.assertEqual(merged[0]['hourly_parts'][0]['high'],2.2)
+        self.assertEqual(old[0]['hourly_parts'][0]['high'],2.1)
+        self.assertEqual(merged[1],old[1])
+
     def test_extended_low_is_in_four_hour_candle(self):
         times = [int(datetime(2026, 10, 2, h, tzinfo=chart.NY).timestamp()) for h in (4, 5, 8, 9, 16, 17)]
         result = {'timestamp': times, 'meta': {'exchangeTimezoneName': 'America/New_York'},

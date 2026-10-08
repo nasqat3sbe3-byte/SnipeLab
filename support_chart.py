@@ -13,6 +13,7 @@ CACHE = {}
 PRIORITY = {}
 OBSERVATIONS = {}
 WAKE = asyncio.Event()
+READY = asyncio.Event()
 REFRESH_SECONDS = 21600
 
 def aggregate_hourly(result, now=None):
@@ -166,6 +167,21 @@ def get(symbol, history):
             'details': observation(symbol, history),
             'split_date': h.get('effective_date')}
 
+def merge_candles(previous,fresh):
+    """Retain observed history if a refresh returns fewer sessions/hour samples."""
+    merged={c['time']:c for c in previous}
+    for candle in fresh:
+        old=merged.get(candle['time']) or {}
+        parts={b['time']:b for b in old.get('hourly_parts') or []}
+        parts.update({b['time']:b for b in candle.get('hourly_parts') or []})
+        if parts:
+            ordered=sorted(parts.values(),key=lambda b:b['time'])
+            candle={**candle,'hourly_parts':ordered,'samples':len(ordered),
+                    'open':ordered[0]['open'],'close':ordered[-1]['close'],
+                    'high':max(b['high'] for b in ordered),'low':min(b['low'] for b in ordered)}
+        merged[candle['time']]=candle
+    return [merged[t] for t in sorted(merged)]
+
 async def fetch(client, symbol, h):
     base = h.get('effective_date') or h.get('post_split_low_date')
     if not base:
@@ -183,6 +199,9 @@ async def fetch(client, symbol, h):
     candles = aggregate_hourly(result, now)
     if not candles:
         raise ValueError('no valid hourly candles')
+    previous=CACHE.get(symbol) or {}
+    if previous.get('split_date')==h.get('effective_date'):
+        candles=merge_candles(previous.get('candles') or [],candles)
     CACHE[symbol] = {'candles': candles[-1600:], 'split_date': h.get('effective_date'),
                      'updated_at': now.isoformat(), 'fetched_epoch': time.time(), 'error': None,'hourly_version':1}
     # Save only this optional cache entry, not any core collection.
@@ -195,6 +214,7 @@ async def worker(universe, history):
         CACHE.update({k.split(':', 1)[1]: v for k, v in saved.items()})
     except Exception:
         pass
+    READY.set()
     attempts = {}
     async with httpx.AsyncClient(headers={'User-Agent': 'Mozilla/5.0'}, follow_redirects=True) as client:
         while True:
