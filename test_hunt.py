@@ -80,4 +80,11 @@ class HuntTests(unittest.TestCase):
                 candles.append({'time':i*100+(0 if slot=='09:30' else 30),'date':d,'local_time':d+' '+slot,'closed':True,'low':low,'high':high,'hourly_parts':parts})
         state,row=hunt.evaluate(self.meta,self.h,self.q,self.borrow,{},self.at,{'updated_at':self.at.isoformat(),'candles':candles})
         self.assertEqual(state,'eligible')
+    def test_two_rebounds_same_day_count_only_once(self):
+        seq=[{'date':'2026-09-01','local_time':'2026-09-01 '+hour,'low':lo,'high':hi} for hour,lo,hi in [('09:30',1,1.1),('10:30',1.9,2),('11:30',1,1.1),('12:30',1.9,2)]]
+        self.assertEqual(len(hunt.waves80(seq)['events']),1)
+        seq.extend([{'date':'2026-09-02','local_time':'2026-09-02 09:30','low':1,'high':1.1},{'date':'2026-09-02','local_time':'2026-09-02 10:30','low':1.9,'high':2}])
+        result=hunt.waves80(seq)
+        self.assertEqual(len(result['events']),2)
+        self.assertEqual([e['peak_session'] for e in result['events']],['2026-09-01','2026-09-02'])
 if __name__=='__main__':unittest.main()

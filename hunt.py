@@ -36,7 +36,7 @@ def post_split_dates(effective,at):
     return dates
 
 def waves80(sequence):
-    """Count independent >80% waves, resetting only at the first wave's base."""
+    """Count >80% waves on distinct NY sessions, resetting at the original base."""
     base=None;base_at=None;active=False;events=[];uncertain=[]
     for bar in sequence:
         lo,hi=number(bar.get('low')),number(bar.get('high'))
@@ -55,7 +55,14 @@ def waves80(sequence):
             # A return in this same OHLC bar has unknown order. Do not invent a reset.
         elif base is None or lo<base:
             base=lo;base_at=stamp
-    return {'events':events,'uncertain':uncertain}
+    # Multiple independent rebounds in one NY session count only once.
+    by_session={}
+    for event in events:
+        day=str(event['peak_at']).split(' ')[0]
+        event['peak_session']=day
+        if day not in by_session or event['gain_pct']>by_session[day]['gain_pct']:
+            by_session[day]=event
+    return {'events':list(by_session.values()),'uncertain':uncertain}
 
 def evaluate(meta,h,q,b,a,at,chart=None,detail=None):
     def fail(state,reason):
@@ -117,7 +124,7 @@ def evaluate(meta,h,q,b,a,at,chart=None,detail=None):
     if not full_sequence:return fail('pending','فحص طلعتين فوق 80% ينتظر تاريخ ما بعد التقسيم كاملًا')
     wave_result=waves80(full_sequence)
     if detail is not None:detail.update(waves80_count=len(wave_result['events']),waves80=wave_result['events'],waves80_uncertain=wave_result['uncertain'])
-    if len(wave_result['events'])>=2:return fail('excluded','طلعتان منفصلتان فوق 80% بعد التقسيم، وبينهما رجوع لقاع البداية')
+    if len(wave_result['events'])>=2:return fail('excluded','طلعتان فوق 80% في جلستين مختلفتين بعد التقسيم، وبينهما رجوع لقاع البداية')
     if wave_result['uncertain']:return fail('pending','فحص طلعات 80% يحتاج ترتيبًا أدق داخل الشمعة')
     if detail is not None:detail.update(state='eligible',reason='مطابق للشروط')
     return 'eligible',{'symbol':meta['symbol'],'price':price,'split_high':high,'half':half,
