@@ -5,6 +5,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py .
 COPY risk_evidence.py .
 COPY focus.py .
+COPY hunt.py .
+COPY hunt.html .
 COPY focus_study.py .
 COPY focus.html .
 COPY dashboard.html .

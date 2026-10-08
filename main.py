@@ -21,6 +21,7 @@ import storage
 import opportunities
 import low_float
 import focus
+import hunt
 from support_chart import worker as support_chart_worker, get as support_chart_get, retest_signal as support_retest_signal
 from support_chart import CACHE as SUPPORT_PATTERN_CACHE
 from corporate_actions import worker as corporate_actions_worker, upcoming as upcoming_actions
@@ -757,6 +758,7 @@ async def legacy_news_loop_disabled():
 async def startup():
     load_persistent_state()
     low_float.restore()
+    asyncio.create_task(hunt.worker(UNIVERSE,HISTORY,QUOTES,BORROW,ANALYTICS))
     asyncio.create_task(focus.worker(_focus_rows,_ai_cached_risk,_focus_queue))
     asyncio.create_task(low_float.discovery_worker(UNIVERSE))
     asyncio.create_task(low_float.market_worker(UNIVERSE, fetch_quote))
@@ -2061,3 +2063,15 @@ async def focus_snapshot(market: str='split'):
 @app.get('/focus')
 async def focus_page():
     return HTMLResponse((Path(__file__).parent/'focus.html').read_text('utf-8'))
+
+
+@app.get('/api/hunt')
+async def hunt_snapshot():
+    snapshot=hunt.SNAPSHOT
+    if snapshot.get('generated_at') and not hunt.recent(snapshot['generated_at'],utcnow(),90):
+        return {**snapshot,'status':'stale','rows':[]}
+    return snapshot
+
+@app.get('/hunt')
+async def hunt_page():
+    return HTMLResponse((Path(__file__).parent/'hunt.html').read_text('utf-8'))

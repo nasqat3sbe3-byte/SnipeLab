@@ -107,6 +107,7 @@ def calculate(effective, candles, symbol=None):
         "rsi_source_repairs":rsi_repairs,
         "rsi_wilder_avg_gain":rsi_wilder_avg_gain,"rsi_wilder_avg_loss":rsi_wilder_avg_loss,
         "rsi_wilder_last_closed_close":rsi_wilder_last_closed_close,
+        "hunt_daily_bars":[{k:b[k] for k in ("date","low","high")} for b in bars[-12:]],
         "first_bar":first["date"],"bar_count":len(bars),
         "top_10_verified":bool(top and verified and top["top_10_gain_pct"]>=40),
         "top_calculated_at":datetime.now(timezone.utc).isoformat(),
