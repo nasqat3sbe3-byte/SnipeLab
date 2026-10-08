@@ -365,6 +365,7 @@ async def worker(universe,history,yahoo,save):
                              or age<=90))
             todo=[(sym,meta) for sym,meta in todo
                   if needs_top_migration(sym,meta)
+                  or not history.get(sym,{}).get("hunt_daily_bars")
                   or not complete(history.get(sym,{}),meta)
                   or (time.time()-datetime.fromisoformat(
                       history[sym].get("attempted_at", "1970-01-01T00:00:00+00:00")
@@ -379,7 +380,7 @@ async def worker(universe,history,yahoo,save):
                 except (ValueError,KeyError,TypeError):return True
                 return age>=1800
             todo=[(sym,meta) for sym,meta in todo
-                  if needs_top_migration(sym,meta) or retry_due(sym,meta)]
+                  if needs_top_migration(sym,meta) or not history.get(sym,{}).get("hunt_daily_bars") or retry_due(sym,meta)]
             # Recent split histories missing TOP-wave calculations must be
             # recalculated promptly, even when the four core fields are complete.
             # Older split histories with no rally stay on the normal refresh cycle.
@@ -397,6 +398,7 @@ async def worker(universe,history,yahoo,save):
             todo.sort(key=lambda item:(
                 # Calculator migrations must run before ordinary refreshes.
                 not needs_top_migration(item[0],item[1]),
+                bool(history.get(item[0],{}).get("hunt_daily_bars")),
                 not top_recalc_due(item[0],item[1]),
                 -(history.get(item[0],{}).get("top_10_gain_pct") or 0)
                     if top_recalc_due(item[0],item[1]) else 0,

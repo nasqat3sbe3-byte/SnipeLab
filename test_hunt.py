@@ -31,4 +31,23 @@ class HuntTests(unittest.TestCase):
         self.q.update(day_low=2,day_high=3.5);self.assertEqual(self.result()[0],'excluded')
     def test_ten_sessions_ignore_old_peak(self):
         self.h['hunt_daily_bars'].insert(0,{'date':'2026-09-23','low':1,'high':8});self.assertEqual(self.result()[0],'eligible')
+    def test_intraday_resolves_falling_session_range(self):
+        days=hunt.window(self.at);candles=[]
+        for i,d in enumerate(days):
+            # The peak occurs before the new low; this is a decline, not a rally.
+            levels=[(3.1,3.2),(3.1,3.2)] if i<4 else [(1.8,1.9),(1.75,1.85)]
+            if i==4:levels=[(3.1,3.2),(1.75,1.85)]
+            for n,(lo,hi) in enumerate(levels):
+                candles.append({'date':d,'time':i*2+n,'local_time':d+(' 09:30' if n==0 else ' 13:30'),'low':lo,'high':hi,'closed':True,'samples':1})
+        self.h.pop('hunt_daily_bars');detail={}
+        chart={'updated_at':self.at.isoformat(),'candles':candles}
+        state,row=hunt.evaluate(self.meta,self.h,self.q,{}, {},self.at,chart,detail)
+        self.assertEqual(state,'eligible');self.assertEqual(detail['movement_source'],'chronological_4h_extended')
+        # A later upward move still triggers the same >=70% exclusion.
+        candles[-1]['low']=2.9;candles[-1]['high']=3.0
+        self.assertEqual(hunt.evaluate(self.meta,self.h,self.q,{}, {},self.at,chart)[0],'excluded')
+    def test_diagnostic_explains_missing_sessions(self):
+        self.h['hunt_daily_bars'].pop(2);detail={}
+        hunt.evaluate(self.meta,self.h,self.q,{}, {},self.at,detail=detail)
+        self.assertEqual(detail['state'],'pending');self.assertIn('10',detail['reason'])
 if __name__=='__main__':unittest.main()

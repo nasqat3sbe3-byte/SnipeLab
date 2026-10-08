@@ -758,7 +758,7 @@ async def legacy_news_loop_disabled():
 async def startup():
     load_persistent_state()
     low_float.restore()
-    asyncio.create_task(hunt.worker(UNIVERSE,HISTORY,QUOTES,BORROW,ANALYTICS))
+    asyncio.create_task(hunt.worker(UNIVERSE,HISTORY,QUOTES,BORROW,ANALYTICS,SUPPORT_PATTERN_CACHE))
     asyncio.create_task(focus.worker(_focus_rows,_ai_cached_risk,_focus_queue))
     asyncio.create_task(low_float.discovery_worker(UNIVERSE))
     asyncio.create_task(low_float.market_worker(UNIVERSE, fetch_quote))
