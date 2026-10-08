@@ -58,6 +58,7 @@ def aggregate_hourly(result, now=None):
                         'low': min(v['low'] for _, v, _ in parts), 'close': parts[-1][1]['close'],
                         'extended': extended, 'samples': len(parts),
                         'session_partial': duration < 240,
+                        'hourly_parts': [{'time':t,'date':d.date().isoformat(),'local_time':d.strftime('%Y-%m-%d %H:%M'),**v} for t,v,d in parts],
                         'closed': now.timestamp() >= stamp + duration * 60})
     return candles
 
@@ -183,7 +184,7 @@ async def fetch(client, symbol, h):
     if not candles:
         raise ValueError('no valid hourly candles')
     CACHE[symbol] = {'candles': candles[-1600:], 'split_date': h.get('effective_date'),
-                     'updated_at': now.isoformat(), 'fetched_epoch': time.time(), 'error': None}
+                     'updated_at': now.isoformat(), 'fetched_epoch': time.time(), 'error': None,'hourly_version':1}
     # Save only this optional cache entry, not any core collection.
     await asyncio.to_thread(storage.save, {'support_chart:' + symbol: CACHE[symbol]})
 
@@ -201,7 +202,7 @@ async def worker(universe, history):
                 now = time.time()
                 eligible = [s for s in universe if history.get(s, {}).get('verified') and
                             now - attempts.get(s, 0) > 120 and
-                            (s in PRIORITY or now - CACHE.get(s, {}).get('fetched_epoch', 0) > REFRESH_SECONDS
+                            (s in PRIORITY or CACHE.get(s,{}).get('hourly_version',0)<1 or now - CACHE.get(s, {}).get('fetched_epoch', 0) > REFRESH_SECONDS
                              or CACHE.get(s, {}).get('split_date') != history[s].get('effective_date'))]
                 eligible.sort(key=lambda s: (s not in PRIORITY, attempts.get(s, 0)))
                 if eligible:

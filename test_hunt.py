@@ -7,6 +7,7 @@ class HuntTests(unittest.TestCase):
         self.meta={'symbol':'TEST','effective_date':'2026-09-01'}
         self.h={'verified':True,'effective_date':'2026-09-01','split_day_4h_high':6,'updated_at':self.at.isoformat(),'hunt_daily_bars':[{'date':d,'low':2,'high':2.4} for d in hunt.window(self.at)]}
         self.borrow={'available':30000,'received_at':self.at.isoformat()}
+        self.h['hunt_post_split_bars']=[{'date':d,'low':2,'high':2.4} for d in hunt.post_split_dates(self.meta['effective_date'],self.at)]
         self.q={'price':2.1,'received_at':self.at.isoformat(),'market_timestamp':self.at.isoformat()}
     def result(self):return hunt.evaluate(self.meta,self.h,self.q,self.borrow, {},self.at)
     def test_price_boundaries(self):
@@ -58,4 +59,25 @@ class HuntTests(unittest.TestCase):
     def test_old_borrow_holds(self):
         self.borrow['received_at']='2026-09-01T00:00:00+00:00'
         self.assertEqual(self.result()[0],'pending')
+    def test_two_waves_require_return_to_original_base(self):
+        seq=[{'date':str(i),'low':lo,'high':hi} for i,(lo,hi) in enumerate([(1,1.1),(1.9,2),(2.4,2.5),(1.2,1.4),(2.2,2.4)])]
+        self.assertEqual(len(hunt.waves80(seq)['events']),1)
+        seq[3].update(low=1,high=1.1)
+        self.assertEqual(len(hunt.waves80(seq)['events']),2)
+    def test_eighty_is_strict_and_peak_extensions_count_once(self):
+        self.assertEqual(len(hunt.waves80([{'date':'1','low':1,'high':1},{'date':'2','low':1.8,'high':1.8}])['events']),0)
+        seq=[{'date':'1','low':1,'high':1},{'date':'2','low':1.9,'high':2},{'date':'3','low':2.3,'high':2.5}]
+        self.assertEqual(len(hunt.waves80(seq)['events']),1)
+    def test_hourly_parts_resolve_large_falling_four_hour_bar(self):
+        days=hunt.window(self.at);candles=[]
+        for i,d in enumerate(days):
+            for slot in ['09:30','13:30']:
+                low,high=(2,2.4)
+                parts=[]
+                if i==0 and slot=='09:30':
+                    low,high=2,4
+                    parts=[{'time':1,'date':d,'low':3.9,'high':4},{'time':2,'date':d,'low':2,'high':2.2}]
+                candles.append({'time':i*100+(0 if slot=='09:30' else 30),'date':d,'local_time':d+' '+slot,'closed':True,'low':low,'high':high,'hourly_parts':parts})
+        state,row=hunt.evaluate(self.meta,self.h,self.q,self.borrow,{},self.at,{'updated_at':self.at.isoformat(),'candles':candles})
+        self.assertEqual(state,'eligible')
 if __name__=='__main__':unittest.main()

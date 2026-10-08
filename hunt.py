@@ -23,7 +23,39 @@ def ordered_chart(chart,dates,at):
     for d in dates:
         slots={str(c.get('local_time',''))[-5:] for c in candles if c.get('date')==d}
         if not slots or (d<today and not {'09:30','13:30'}<=slots):return []
-    return candles
+    fine=[]
+    for candle in candles:
+        fine.extend(candle.get('hourly_parts') or [candle])
+    return sorted(fine,key=lambda x:x.get('time',0))
+
+def post_split_dates(effective,at):
+    end=window(at)[-1];day=datetime.fromisoformat(effective).date();dates=[]
+    while day.isoformat()<=end:
+        if trading(day):dates.append(day.isoformat())
+        day+=timedelta(days=1)
+    return dates
+
+def waves80(sequence):
+    """Count independent >80% waves, resetting only at the first wave's base."""
+    base=None;base_at=None;active=False;events=[];uncertain=[]
+    for bar in sequence:
+        lo,hi=number(bar.get('low')),number(bar.get('high'))
+        if not lo or not hi or not 0<lo<=hi:return {'events':events,'uncertain':['invalid_bar']}
+        stamp=bar.get('local_time') or bar.get('date')
+        if hi/lo>1.8+1e-9:uncertain.append(stamp)
+        if active:
+            if hi>events[-1]['peak']:
+                events[-1].update(peak=hi,peak_at=stamp,gain_pct=round((hi/base-1)*100,2))
+            if lo<=base:
+                active=False;base=lo;base_at=stamp
+            continue
+        if base is not None and hi/base>1.8+1e-9:
+            events.append({'base':base,'base_at':base_at,'peak':hi,'peak_at':stamp,'gain_pct':round((hi/base-1)*100,2)})
+            active=True
+            # A return in this same OHLC bar has unknown order. Do not invent a reset.
+        elif base is None or lo<base:
+            base=lo;base_at=stamp
+    return {'events':events,'uncertain':uncertain}
 
 def evaluate(meta,h,q,b,a,at,chart=None,detail=None):
     def fail(state,reason):
@@ -76,12 +108,23 @@ def evaluate(meta,h,q,b,a,at,chart=None,detail=None):
     if detail is not None:detail['recent_rise_pct']=round(max_rise,2)
     if max_rise>=70-1e-9:return fail('excluded','طلعة 70% أو أكثر داخل آخر 10 جلسات')
     if ambiguous:return fail('pending','ترتيب القاع والقمة داخل شمعة واحدة يحتاج تحققًا')
+    full_dates=post_split_dates(meta['effective_date'],at)
+    full_sequence=ordered_chart(chart or {},full_dates,at)
+    if not full_sequence:
+        full_bars={x['date']:x for x in h.get('hunt_post_split_bars',[]) if x.get('date') in full_dates}
+        if full_dates[-1] in bars:full_bars[full_dates[-1]]=bars[full_dates[-1]]
+        if all(d in full_bars for d in full_dates):full_sequence=[full_bars[d] for d in full_dates]
+    if not full_sequence:return fail('pending','فحص طلعتين فوق 80% ينتظر تاريخ ما بعد التقسيم كاملًا')
+    wave_result=waves80(full_sequence)
+    if detail is not None:detail.update(waves80_count=len(wave_result['events']),waves80=wave_result['events'],waves80_uncertain=wave_result['uncertain'])
+    if len(wave_result['events'])>=2:return fail('excluded','طلعتان منفصلتان فوق 80% بعد التقسيم، وبينهما رجوع لقاع البداية')
+    if wave_result['uncertain']:return fail('pending','فحص طلعات 80% يحتاج ترتيبًا أدق داخل الشمعة')
     if detail is not None:detail.update(state='eligible',reason='مطابق للشروط')
     return 'eligible',{'symbol':meta['symbol'],'price':price,'split_high':high,'half':half,
         'range_low':half*.65,'range_high':half*.8,'discount_pct':round(discount,2),
         'recent_rise_pct':round(max_rise,2),'split_date':meta['effective_date'],
         'available':b.get('available'),'rsi':a.get('rsi_daily'),'sessions':a.get('effective_sessions'),
-        'price_at':q.get('market_timestamp'),'history_at':h.get('updated_at')}
+        'price_at':q.get('market_timestamp'),'history_at':h.get('updated_at'),'waves80_count':len(wave_result['events'])}
 
 def recent(value,at,seconds):
     try:return 0<=(at-datetime.fromisoformat(value.replace('Z','+00:00'))).total_seconds()<=seconds
@@ -102,6 +145,14 @@ def build(universe,history,quotes,borrow,analytics,at,charts=None):
 async def worker(universe,history,quotes,borrow,analytics,charts=None):
     global SNAPSHOT
     while True:
-        try:SNAPSHOT=build(universe,history,quotes,borrow,analytics,datetime.now(timezone.utc),charts)
+        try:
+            SNAPSHOT=build(universe,history,quotes,borrow,analytics,datetime.now(timezone.utc),charts)
+            # Bounded optional chart refresh for qualifying pending stocks only.
+            from support_chart import PRIORITY, WAKE
+            for d in SNAPSHOT.get('diagnostics',[]):
+                if d.get('state')=='pending' and d.get('available') is not None and d['available']<=40000 and 20<=d.get('discount_pct',0)<=35 and len(PRIORITY)<50:
+                    cached=(charts or {}).get(d['symbol']) or {}
+                    if cached.get('hourly_version',0)<1 or not recent(cached.get('updated_at'),datetime.now(timezone.utc),21600):PRIORITY.setdefault(d['symbol'],0)
+            if PRIORITY:WAKE.set()
         except Exception:SNAPSHOT={**SNAPSHOT,'status':'error','rows':[]}
         await asyncio.sleep(30)
