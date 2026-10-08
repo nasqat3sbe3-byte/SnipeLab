@@ -1,5 +1,6 @@
 """SQLite-backed snapshot cache. Mount SNIPELAB_DATA_DIR to a persistent Northflank volume."""
 import json
+from contextlib import closing
 import os
 import sqlite3
 import time
@@ -18,7 +19,7 @@ def connect():
 
 def load(names):
     result={}
-    with connect() as conn:
+    with closing(connect()) as conn:
         for name in names:
             row=conn.execute("SELECT value FROM snapshots WHERE name=?",(name,)).fetchone()
             if row:
@@ -27,8 +28,9 @@ def load(names):
 
 def save(data):
     now=time.time()
-    with connect() as conn:
-        conn.executemany("INSERT INTO snapshots(name,value,updated_at) VALUES(?,?,?) ON CONFLICT(name) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",[(k,json.dumps(v,separators=(",",":")),now) for k,v in data.items()])
+    rows=[(k,json.dumps(v,separators=(",",":")),now) for k,v in data.items()]
+    with closing(connect()) as conn, conn:
+        conn.executemany("INSERT INTO snapshots(name,value,updated_at) VALUES(?,?,?) ON CONFLICT(name) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",rows)
 
 def status():
     return {"path":str(DB_PATH),"persistent_volume_required":str(DB_PATH).startswith("/tmp"),"exists":DB_PATH.exists()}
@@ -36,6 +38,6 @@ def status():
 
 def snapshot_info():
     """Last durable snapshot metadata; proves persistence only after restart."""
-    with connect() as conn:
+    with closing(connect()) as conn:
         rows=conn.execute("SELECT name,updated_at FROM snapshots").fetchall()
     return {"collections":{name:{"saved_at_epoch":ts} for name,ts in rows},"count":len(rows)}

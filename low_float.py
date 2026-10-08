@@ -82,8 +82,11 @@ def restore():
         STATUS.update(status="cache_error", error="تعذر استعادة بيانات القسم")
 
 
-def save():
-    storage.save({"low_float_catalog": CATALOG, "low_float_rows": ROWS, "low_float_status": STATUS})
+def save(*, include_catalog=True):
+    data={"low_float_rows": ROWS, "low_float_status": STATUS}
+    if include_catalog:
+        data["low_float_catalog"]=CATALOG
+    storage.save(data)
 
 
 async def discover(client, token):
@@ -311,9 +314,9 @@ async def discovery_worker(split_symbols):
                                      "active": details.get("active"), "primary_exchange": details.get("primary_exchange"),
                                      "details_checked_at": now()}
                     STATUS.update(last_scan=now(), checked=len(ROWS))
-                    save()
+                    save(include_catalog=False)
                 STATUS.update(status="ready", error=None)
-                save()
+                save(include_catalog=False)
                 await asyncio.sleep(900)
             except Exception as exc:
                 # Do not expose credentials embedded in external exception URLs.
@@ -390,7 +393,7 @@ async def market_worker(split_symbols, fetch_quote):
         while True:
             await refresh_market_batch(client, split_symbols, fetch_quote)
             try:
-                save()
+                save(include_catalog=False)
             except Exception:
                 STATUS["error"] = "تعذر حفظ آخر تحديث"
             # Re-evaluate newly verified symbols after every small batch.

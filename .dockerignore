@@ -1,0 +1,10 @@
+.git
+__pycache__
+*.py[cod]
+.pytest_cache
+backups
+dashboard.pre-*
+test_*.py
+tools
+*.sqlite3
+*.sqlite3-*
