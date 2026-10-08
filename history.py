@@ -334,6 +334,7 @@ async def alpaca_split_day(client, symbol, effective):
 
 
 async def worker(universe,history,yahoo,save):
+    hunt_migration_attempted=set()
     await asyncio.sleep(8)
     async with httpx.AsyncClient(timeout=15,follow_redirects=True,headers={"User-Agent":"Mozilla/5.0"}) as client:
         while True:
@@ -365,7 +366,7 @@ async def worker(universe,history,yahoo,save):
                              or age<=90))
             todo=[(sym,meta) for sym,meta in todo
                   if needs_top_migration(sym,meta)
-                  or not history.get(sym,{}).get("hunt_daily_bars")
+                  or (not history.get(sym,{}).get("hunt_daily_bars") and sym not in hunt_migration_attempted)
                   or not complete(history.get(sym,{}),meta)
                   or (time.time()-datetime.fromisoformat(
                       history[sym].get("attempted_at", "1970-01-01T00:00:00+00:00")
@@ -380,7 +381,7 @@ async def worker(universe,history,yahoo,save):
                 except (ValueError,KeyError,TypeError):return True
                 return age>=1800
             todo=[(sym,meta) for sym,meta in todo
-                  if needs_top_migration(sym,meta) or not history.get(sym,{}).get("hunt_daily_bars") or retry_due(sym,meta)]
+                  if needs_top_migration(sym,meta) or (not history.get(sym,{}).get("hunt_daily_bars") and sym not in hunt_migration_attempted) or retry_due(sym,meta)]
             # Recent split histories missing TOP-wave calculations must be
             # recalculated promptly, even when the four core fields are complete.
             # Older split histories with no rally stay on the normal refresh cycle.
@@ -407,6 +408,7 @@ async def worker(universe,history,yahoo,save):
                 complete(history.get(item[0],{}),item[1]),
                 history.get(item[0],{}).get("attempted_at","")))
             for sym,meta in todo[:16]:
+                hunt_migration_attempted.add(sym)
                 try:
                     eff=meta["effective_date"]
                     # Pull enough PRE-split daily history for a true Wilder RSI.
