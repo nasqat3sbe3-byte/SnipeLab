@@ -6,8 +6,9 @@ class HuntTests(unittest.TestCase):
         self.at=datetime(2026,10,8,19,tzinfo=timezone.utc)
         self.meta={'symbol':'TEST','effective_date':'2026-09-01'}
         self.h={'verified':True,'effective_date':'2026-09-01','split_day_4h_high':6,'updated_at':self.at.isoformat(),'hunt_daily_bars':[{'date':d,'low':2,'high':2.4} for d in hunt.window(self.at)]}
+        self.borrow={'available':30000,'received_at':self.at.isoformat()}
         self.q={'price':2.1,'received_at':self.at.isoformat(),'market_timestamp':self.at.isoformat()}
-    def result(self):return hunt.evaluate(self.meta,self.h,self.q,{}, {},self.at)
+    def result(self):return hunt.evaluate(self.meta,self.h,self.q,self.borrow, {},self.at)
     def test_price_boundaries(self):
         for price,state in [(2.4,'eligible'),(1.95,'eligible'),(2.401,'outside'),(1.949,'outside')]:
             self.q['price']=price;self.assertEqual(self.result()[0],state)
@@ -41,13 +42,20 @@ class HuntTests(unittest.TestCase):
                 candles.append({'date':d,'time':i*2+n,'local_time':d+(' 09:30' if n==0 else ' 13:30'),'low':lo,'high':hi,'closed':True,'samples':1})
         self.h.pop('hunt_daily_bars');detail={}
         chart={'updated_at':self.at.isoformat(),'candles':candles}
-        state,row=hunt.evaluate(self.meta,self.h,self.q,{}, {},self.at,chart,detail)
+        state,row=hunt.evaluate(self.meta,self.h,self.q,self.borrow, {},self.at,chart,detail)
         self.assertEqual(state,'eligible');self.assertEqual(detail['movement_source'],'chronological_4h_extended')
         # A later upward move still triggers the same >=70% exclusion.
         candles[-1]['low']=2.9;candles[-1]['high']=3.0
-        self.assertEqual(hunt.evaluate(self.meta,self.h,self.q,{}, {},self.at,chart)[0],'excluded')
+        self.assertEqual(hunt.evaluate(self.meta,self.h,self.q,self.borrow, {},self.at,chart)[0],'excluded')
     def test_diagnostic_explains_missing_sessions(self):
         self.h['hunt_daily_bars'].pop(2);detail={}
-        hunt.evaluate(self.meta,self.h,self.q,{}, {},self.at,detail=detail)
+        hunt.evaluate(self.meta,self.h,self.q,self.borrow, {},self.at,detail=detail)
         self.assertEqual(detail['state'],'pending');self.assertIn('10',detail['reason'])
+    def test_available_boundary_and_missing(self):
+        for available,state in [(0,'eligible'),(40000,'eligible'),(40001,'excluded'),(None,'pending')]:
+            self.borrow['available']=available
+            self.assertEqual(self.result()[0],state)
+    def test_old_borrow_holds(self):
+        self.borrow['received_at']='2026-09-01T00:00:00+00:00'
+        self.assertEqual(self.result()[0],'pending')
 if __name__=='__main__':unittest.main()

@@ -35,6 +35,12 @@ def evaluate(meta,h,q,b,a,at,chart=None,detail=None):
     half=high/2; discount=(1-price/half)*100
     if detail is not None:detail.update(price=price,split_high=high,half=half,discount_pct=round(discount,2),range_low=half*.65,range_high=half*.8)
     if not 20-1e-9<=discount<=35+1e-9:return fail('outside','السعر خارج نطاق 20% إلى 35% تحت النصف')
+    available=number(b.get('available'))
+    if detail is not None:detail['available']=available
+    if available is None or available<0:return fail('pending','بيانات Available غير مكتملة')
+    if available>40000:return fail('excluded','Available فوق 40,000 سهم')
+    borrow_fresh={'status':'fresh' if recent(b.get('received_at'),at,1200) else 'stale','timestamp':b.get('received_at')}
+    if not usable_reading(borrow_fresh,at):return fail('pending','بيانات Available تحتاج تحديثًا')
     fresh={'status':'fresh' if recent(q.get('received_at'),at,900) else 'stale','timestamp':q.get('market_timestamp')}
     if not usable_reading(fresh,at) or not recent(h.get('updated_at'),at,172800):return fail('pending','السعر أو التاريخ يحتاج تحديثًا')
     dates=[d for d in window(at) if d>=meta['effective_date']]
