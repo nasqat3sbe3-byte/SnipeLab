@@ -133,4 +133,13 @@ class HuntTests(unittest.TestCase):
         self.chart['split_date']='2026-08-01'
         self.assertEqual(self.result()[0],'pending')
 
+    def test_evicted_candidates_are_verified_from_disk_without_ram_limit_filter(self):
+        import asyncio,storage,tempfile
+        from unittest.mock import patch
+        universe={symbol:dict(self.meta,symbol=symbol) for symbol in ['A','B']}
+        with tempfile.TemporaryDirectory() as d,patch.object(storage,'DB_PATH',storage.Path(d)/'test.sqlite3'):
+            storage.save({'support_chart:A':self.chart,'support_chart:B':self.chart})
+            result=asyncio.run(hunt.build_cached(universe,{s:self.h for s in universe},{s:self.q for s in universe},{s:self.borrow for s in universe},{},{},{},self.at))
+            self.assertEqual({x['symbol'] for x in result['rows']},{'A','B'})
+
 if __name__=='__main__':unittest.main()

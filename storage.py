@@ -26,6 +26,14 @@ def load(names):
                 result[name]=json.loads(row[0])
     return result
 
+def iter_snapshots(names):
+    """Decode one durable collection at a time instead of materializing them all."""
+    with closing(connect()) as conn:
+        for name in names:
+            row=conn.execute("SELECT value FROM snapshots WHERE name=?",(name,)).fetchone()
+            if row:
+                yield name,json.loads(row[0])
+
 def save(data):
     now=time.time()
     rows=[(k,json.dumps(v,separators=(",",":")),now) for k,v in data.items()]

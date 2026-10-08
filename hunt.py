@@ -161,6 +161,28 @@ def build(universe,history,quotes,borrow,analytics,at,charts=None,exclusions=Non
     rows.sort(key=lambda x:(-x['discount_pct'],number(x['available']) if number(x['available']) is not None else float('inf'),x['symbol']))
     return {'status':'ready','rows':rows,'pending':pending,'excluded':excluded,'generated_at':at.isoformat(),'diagnostics':diagnostics}
 
+async def build_cached(universe,history,quotes,borrow,analytics,charts,exclusions,at=None):
+    """Evaluate an evicted candidate from its durable chart, one ticker at a time."""
+    rows=[];pending=excluded=0;diagnostics=[]
+    for sym,meta in list(universe.items()):
+        now=at or datetime.now(timezone.utc)
+        if not meta.get('effective_date') or meta['effective_date']>now.astimezone(NY).date().isoformat():continue
+        h=history.get(sym) or {};q=quotes.get(sym) or {};b=borrow.get(sym) or {}
+        chart=(charts or {}).get(sym)
+        high=number(h.get('split_day_4h_high'));price=number(q.get('price'));available=number(b.get('available'))
+        proof=(exclusions or {}).get(sym) or {}
+        saved_exclusion=proof.get('version')==RULE_VERSION and proof.get('effective_date')==meta['effective_date'] and len(proof.get('events') or [])>=2
+        if not chart and high and price and available is not None and 0<=available<=40000 and high*.325<=price<=high*.4 and not saved_exclusion:
+            saved=await asyncio.to_thread(storage.load,('support_chart:'+sym,))
+            chart=saved.get('support_chart:'+sym)
+        detail={'symbol':sym}
+        state,row=evaluate({**meta,'symbol':sym},h,q,b,analytics.get(sym) or {},at or datetime.now(timezone.utc),chart,detail,(exclusions or {}).get(sym))
+        diagnostics.append(detail)
+        if row:rows.append(row)
+        pending+=state=='pending';excluded+=state=='excluded'
+    rows.sort(key=lambda x:(-x['discount_pct'],number(x['available']) if number(x['available']) is not None else float('inf'),x['symbol']))
+    return {'status':'ready','rows':rows,'pending':pending,'excluded':excluded,'generated_at':(at or datetime.now(timezone.utc)).isoformat(),'diagnostics':diagnostics}
+
 def remember_exclusions(snapshot,universe,proofs,at):
     changed=False
     for d in snapshot.get('diagnostics',[]):
@@ -182,7 +204,7 @@ async def worker(universe,history,quotes,borrow,analytics,charts=None):
     while True:
         try:
             at=datetime.now(timezone.utc)
-            SNAPSHOT=build(universe,history,quotes,borrow,analytics,at,charts,EXCLUSIONS)
+            SNAPSHOT=await build_cached(universe,history,quotes,borrow,analytics,charts,EXCLUSIONS)
             remember_exclusions(SNAPSHOT,universe,EXCLUSIONS,at)
             if EXCLUSIONS!=saved_proofs:
                 await asyncio.to_thread(storage.save,{'hunt_wave_exclusions_v2':deepcopy(EXCLUSIONS)})

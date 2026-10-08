@@ -6,6 +6,30 @@ import support_chart as chart
 
 
 class SupportChartTests(unittest.TestCase):
+    def test_eviction_preserves_retest_and_disk_chart_without_provider_call(self):
+        import asyncio,tempfile,storage,time
+        from unittest.mock import patch
+        h={'A':{'verified':True,'effective_date':'2026-09-01','post_split_low':1,'post_split_low_date':'2026-10-01'}}
+        def bar(t,low,close):
+            return {'time':t,'date':'2026-10-01','local_time':f'2026-10-01 {t}:00','low':low,'high':1.2,'close':close,'closed':True,'samples':4,'extended':True}
+        stored={'split_date':'2026-09-01','fetched_epoch':time.time(),'hourly_version':1,'updated_at':datetime.now(timezone.utc).isoformat(),'candles':[bar(1,1,1.02),bar(2,1.08,1.1),bar(3,1.04,1.06)]}
+        with tempfile.TemporaryDirectory() as d,patch.object(storage,'DB_PATH',storage.Path(d)/'test.sqlite3'),patch.object(chart,'CACHE',{}),patch.object(chart,'META',{}),patch.object(chart,'OBSERVATIONS',{}),patch.object(chart,'_HOT',set()),patch.object(chart,'MAX_CACHED_CHARTS',1),patch.object(chart,'fetch',side_effect=AssertionError('Unexpected provider request')):
+            storage.save({'support_chart:A':stored,'support_chart:B':stored})
+            summaries,charts=chart.restore_summaries(['A','B'],h,{'A','B'})
+            self.assertEqual(len(charts),1);self.assertEqual(len(summaries),2)
+            chart.META.update(summaries)
+            chart.retain('A',stored)
+            before=chart.retest_signal('A',h)
+            self.assertEqual(before['support_retest_status'],'success')
+            chart.retain('B',stored)
+            self.assertNotIn('A',chart.CACHE)
+            self.assertEqual(chart.retest_signal('A',h),before)
+            asyncio.run(chart.load_cached('A',h))
+            self.assertEqual(chart.get('A',h)['candles'],stored['candles'])
+            self.assertEqual(len(chart.CACHE),1)
+            h['A']['post_split_low']=.95
+            self.assertEqual(chart.retest_signal('A',h)['support_retest_status'],'waiting')
+
     def test_extended_low_is_in_four_hour_candle(self):
         times = [int(datetime(2026, 10, 2, h, tzinfo=chart.NY).timestamp()) for h in (4, 5, 8, 9, 16, 17)]
         result = {'timestamp': times, 'meta': {'exchangeTimezoneName': 'America/New_York'},
