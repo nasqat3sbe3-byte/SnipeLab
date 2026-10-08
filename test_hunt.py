@@ -68,15 +68,15 @@ class HuntTests(unittest.TestCase):
     def test_old_borrow_holds(self):
         self.borrow['received_at']='2026-09-01T00:00:00+00:00'
         self.assertEqual(self.result()[0],'pending')
-    def test_two_waves_require_return_to_original_base(self):
+    def test_one_rally_is_enough_without_reset(self):
         seq=[{'date':str(i),'low':lo,'high':hi} for i,(lo,hi) in enumerate([(1,1.1),(1.9,2),(2.4,2.5),(1.2,1.4),(2.2,2.4)])]
         self.assertEqual(len(hunt.waves80(seq)['events']),1)
-        seq[3].update(low=1,high=1.1)
-        self.assertEqual(len(hunt.waves80(seq)['events']),2)
-    def test_eighty_is_strict_and_peak_extensions_count_once(self):
-        self.assertEqual(len(hunt.waves80([{'date':'1','low':1,'high':1},{'date':'2','low':1.8,'high':1.8}])['events']),0)
-        seq=[{'date':'1','low':1,'high':1},{'date':'2','low':1.9,'high':2},{'date':'3','low':2.3,'high':2.5}]
-        self.assertEqual(len(hunt.waves80(seq)['events']),1)
+        self.assertEqual(hunt.waves80(seq)['events'][0]['gain_pct'],150)
+    def test_eighty_inclusive_and_decline_not_rally(self):
+        self.assertEqual(hunt.waves80([{'date':'1','low':1,'high':1},{'date':'2','low':1.8,'high':1.8}])['events'][0]['gain_pct'],80)
+        self.assertFalse(hunt.waves80([{'date':'1','low':2,'high':2.1},{'date':'2','low':1,'high':1.1}])['events'])
+        result=hunt.waves80([{'date':'1','low':1,'high':2}])
+        self.assertFalse(result['events']);self.assertTrue(result['uncertain'])
     def test_hourly_parts_resolve_large_falling_four_hour_bar(self):
         days=hunt.window(self.at);candles=[]
         for i,d in enumerate(days):
@@ -89,13 +89,19 @@ class HuntTests(unittest.TestCase):
                 candles.append({'time':i*100+(0 if slot=='09:30' else 30),'date':d,'local_time':d+' '+slot,'closed':True,'low':low,'high':high,'hourly_parts':parts})
         state,row=hunt.evaluate(self.meta,self.h,self.q,self.borrow,{},self.at,{'updated_at':self.at.isoformat(),'candles':candles})
         self.assertEqual(state,'pending')
-    def test_two_rebounds_same_day_count_only_once(self):
-        seq=[{'date':'2026-09-01','local_time':'2026-09-01 '+hour,'low':lo,'high':hi} for hour,lo,hi in [('09:30',1,1.1),('10:30',1.9,2),('11:30',1,1.1),('12:30',1.9,2)]]
-        self.assertEqual(len(hunt.waves80(seq)['events']),1)
-        seq.extend([{'date':'2026-09-02','local_time':'2026-09-02 09:30','low':1,'high':1.1},{'date':'2026-09-02','local_time':'2026-09-02 10:30','low':1.9,'high':2}])
-        result=hunt.waves80(seq)
-        self.assertEqual(len(result['events']),2)
-        self.assertEqual([e['peak_session'] for e in result['events']],['2026-09-01','2026-09-02'])
+    def test_one_same_day_rally_excludes(self):
+        self.chart['candles'][0].update(low=1,high=1.1)
+        self.chart['candles'][1].update(low=1.8,high=1.8)
+        self.assertEqual(self.result()[0],'excluded')
+    def test_live_price_can_prove_rally_from_old_low(self):
+        self.chart['candles'][0].update(low=1.1,high=1.2)
+        for candle in self.chart['candles'][1:]:candle.update(low=1.1,high=1.2)
+        detail={}
+        self.assertEqual(hunt.evaluate(self.meta,self.h,self.q,self.borrow,{},self.at,self.chart,detail)[0],'excluded')
+        self.assertGreater(detail['waves80'][0]['gain_pct'],80)
+    def test_legacy_positive_proof_is_valid_for_single_rally(self):
+        proof={'version':2,'effective_date':self.meta['effective_date'],'events':[{'gain_pct':149.42}]}
+        self.assertEqual(hunt.evaluate(self.meta,self.h,self.q,self.borrow,{},self.at,exclusion=proof)[0],'excluded')
     def test_no_daily_admission_on_chart_loss_staleness_or_partial_history(self):
         self.chart=None
         self.assertEqual(self.result()[0],'pending')
@@ -104,22 +110,22 @@ class HuntTests(unittest.TestCase):
         self.setUp();self.chart['candles']=self.chart['candles'][2:]
         self.assertEqual(self.result()[0],'pending')
 
-    def test_old_extended_two_waves_remain_excluded_and_survive_restart(self):
+    def test_old_extended_single_rally_remains_excluded_and_survive_restart(self):
         import storage,tempfile
         from unittest.mock import patch
         # The daily history misses both extended-hour spikes.
         candles=self.chart['candles']
-        for index,(lo,hi) in zip([0,1,2,3],[(1,1.1),(1.9,2),(1,1.1),(1.9,2)]):
+        for index,(lo,hi) in zip([0,1],[(1,1.1),(1.8,1.8)]):
             candles[index].update(low=lo,high=hi)
         detail={}
         state,_=hunt.evaluate(self.meta,self.h,self.q,self.borrow,{},self.at,self.chart,detail)
-        self.assertEqual(state,'excluded');self.assertEqual(detail['waves80_count'],2)
+        self.assertEqual(state,'excluded');self.assertEqual(detail['waves80_count'],1)
         proofs={};snap={'diagnostics':[detail | {'symbol':'TEST'}]}
         self.assertTrue(hunt.remember_exclusions(snap,{'TEST':self.meta},proofs,self.at))
         self.assertFalse(hunt.remember_exclusions(snap,{'TEST':self.meta},proofs,self.at))
         with tempfile.TemporaryDirectory() as d,patch.object(storage,'DB_PATH',storage.Path(d)/'test.sqlite3'):
-            storage.save({'hunt_wave_exclusions_v2':proofs})
-            restored=storage.load(('hunt_wave_exclusions_v2',))['hunt_wave_exclusions_v2']
+            storage.save({'hunt_rally_exclusions_v3':proofs})
+            restored=storage.load(('hunt_rally_exclusions_v3',))['hunt_rally_exclusions_v3']
         for chart in [None,{},self.chart | {'updated_at':'2026-10-01T00:00:00+00:00'}]:
             state,_=hunt.evaluate(self.meta,self.h,self.q,self.borrow,{},self.at,chart,exclusion=restored['TEST'])
             self.assertEqual(state,'excluded')

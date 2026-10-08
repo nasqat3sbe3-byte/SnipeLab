@@ -5,7 +5,7 @@ import storage
 from datetime import datetime, timedelta, timezone
 from opportunities import NY, trading, number, usable_reading
 
-RULE_VERSION=2
+RULE_VERSION=3
 EXCLUSIONS={}
 SNAPSHOT={'status':'starting','rows':[],'pending':0,'excluded':0,'generated_at':None}
 
@@ -40,33 +40,26 @@ def post_split_dates(effective,at):
     return dates
 
 def waves80(sequence):
-    """Count >80% waves on distinct NY sessions, resetting at the original base."""
-    base=None;base_at=None;active=False;events=[];uncertain=[]
+    """Prove any >=80% rise using a low from a strictly earlier candle."""
+    base=None;base_at=None;event=None;uncertain=[]
     for bar in sequence:
         lo,hi=number(bar.get('low')),number(bar.get('high'))
-        if not lo or not hi or not 0<lo<=hi:return {'events':events,'uncertain':['invalid_bar']}
+        if not lo or not hi or not 0<lo<=hi:return {'events':[event] if event else [],'uncertain':['invalid_bar']}
         stamp=bar.get('local_time') or bar.get('date')
-        if hi/lo>1.8+1e-9:uncertain.append(stamp)
-        if active:
-            if hi>events[-1]['peak']:
-                events[-1].update(peak=hi,peak_at=stamp,gain_pct=round((hi/base-1)*100,2))
-            if lo<=base:
-                active=False;base=lo;base_at=stamp
-            continue
-        if base is not None and hi/base>1.8+1e-9:
-            events.append({'base':base,'base_at':base_at,'peak':hi,'peak_at':stamp,'gain_pct':round((hi/base-1)*100,2)})
-            active=True
-            # A return in this same OHLC bar has unknown order. Do not invent a reset.
-        elif base is None or lo<base:
-            base=lo;base_at=stamp
-    # Multiple independent rebounds in one NY session count only once.
-    by_session={}
-    for event in events:
-        day=str(event['peak_at']).split(' ')[0]
-        event['peak_session']=day
-        if day not in by_session or event['gain_pct']>by_session[day]['gain_pct']:
-            by_session[day]=event
-    return {'events':list(by_session.values()),'uncertain':uncertain}
+        if hi/lo>=1.8-1e-9:uncertain.append(stamp)
+        if base is not None and hi/base>=1.8-1e-9:
+            gain=(hi/base-1)*100
+            if event is None or gain>event['gain_pct']:
+                event={'base':base,'base_at':base_at,'peak':hi,'peak_at':stamp,
+                       'gain_pct':round(gain,2),'peak_session':str(stamp).split(' ')[0]}
+        # Updating only after testing the high avoids inventing same-candle order.
+        if base is None or lo<base:base=lo;base_at=stamp
+    return {'events':[event] if event else [],'uncertain':uncertain}
+
+def valid_exclusion(proof,effective):
+    return bool(proof and proof.get('version') in (2,RULE_VERSION)
+                and proof.get('effective_date')==effective
+                and any((number(e.get('gain_pct')) or 0)>=80-1e-9 for e in proof.get('events') or []))
 
 def evaluate(meta,h,q,b,a,at,chart=None,detail=None,exclusion=None):
     def fail(state,reason):
@@ -88,17 +81,25 @@ def evaluate(meta,h,q,b,a,at,chart=None,detail=None,exclusion=None):
     if not usable_reading(fresh,at) or not recent(h.get('updated_at'),at,172800):return fail('pending','السعر أو التاريخ يحتاج تحديثًا')
     # Historical disqualification never expires or falls back to regular-session daily bars.
     # A new reverse split changes its key and requires an independent verification.
-    if exclusion and len(exclusion.get('events') or [])>=2 and exclusion.get('version')==RULE_VERSION and exclusion.get('effective_date')==meta['effective_date']:
+    if valid_exclusion(exclusion,meta['effective_date']):
         if detail is not None:detail.update(waves80_count=len(exclusion['events']),waves80=exclusion['events'],wave_proof_saved=True,movement_source='saved_extended_wave_evidence')
-        return fail('excluded','طلعتان فوق 80% موثقتان في يومين مختلفين بعد هذا التقسيم')
+        return fail('excluded','طلعة 80% أو أكثر موثقة بعد هذا التقسيم')
     chart=chart or {}
     if chart.get('split_date') not in (None,meta['effective_date']):chart={}
     full_dates=post_split_dates(meta['effective_date'],at)
     observed=ordered_chart(chart,full_dates,at,require_fresh=False,require_complete=False)
+    # A later live trade can establish a rally from an older post-split low.
+    if observed:
+        try:
+            quote_time=datetime.fromisoformat(q['market_timestamp'].replace('Z','+00:00'))
+            if quote_time.timestamp()>observed[-1].get('time',float('inf')):
+                observed.append({'time':quote_time.timestamp(),'date':quote_time.astimezone(NY).date().isoformat(),
+                                 'local_time':quote_time.astimezone(NY).strftime('%Y-%m-%d %H:%M'),'low':price,'high':price})
+        except (KeyError,TypeError,ValueError):pass
     wave_result=waves80(observed) if observed else {'events':[],'uncertain':[]}
     if detail is not None and observed:detail.update(waves80_count=len(wave_result['events']),waves80=wave_result['events'],waves80_uncertain=wave_result['uncertain'],wave_source='extended_intraday')
-    if len(wave_result['events'])>=2:
-        return fail('excluded','طلعتان فوق 80% في جلستين مختلفتين بعد التقسيم، وبينهما رجوع لقاع البداية')
+    if wave_result['events']:
+        return fail('excluded','طلعة 80% أو أكثر من قاع إلى قمة لاحقة بعد التقسيم')
     full_sequence=ordered_chart(chart,full_dates,at,require_fresh=False)
     dates=[d for d in window(at) if d>=meta['effective_date']]
     bars={x['date']:x for x in h.get('hunt_daily_bars',[]) if x.get('date') in dates}
@@ -136,7 +137,7 @@ def evaluate(meta,h,q,b,a,at,chart=None,detail=None,exclusion=None):
     if not intraday:
         return fail('pending','بانتظار شموع الساعات الممتدة؛ اليومية وحدها لا تثبت اجتياز شروط الحركة')
     if not full_sequence:
-        return fail('pending','فحص طلعتين فوق 80% ينتظر شموع الساعات الممتدة بعد التقسيم كاملة')
+        return fail('pending','فحص طلعة 80% أو أكثر ينتظر شموع الساعات الممتدة بعد التقسيم كاملة')
     if wave_result['uncertain']:return fail('pending','فحص طلعات 80% يحتاج ترتيبًا أدق داخل الشمعة')
     if detail is not None:detail.update(state='eligible',reason='مطابق للشروط')
     return 'eligible',{'symbol':meta['symbol'],'price':price,'split_high':high,'half':half,
@@ -171,7 +172,7 @@ async def build_cached(universe,history,quotes,borrow,analytics,charts,exclusion
         chart=(charts or {}).get(sym)
         high=number(h.get('split_day_4h_high'));price=number(q.get('price'));available=number(b.get('available'))
         proof=(exclusions or {}).get(sym) or {}
-        saved_exclusion=proof.get('version')==RULE_VERSION and proof.get('effective_date')==meta['effective_date'] and len(proof.get('events') or [])>=2
+        saved_exclusion=valid_exclusion(proof,meta['effective_date'])
         if not chart and high and price and available is not None and 0<=available<=40000 and high*.325<=price<=high*.4 and not saved_exclusion:
             saved=await asyncio.to_thread(storage.load,('support_chart:'+sym,))
             chart=saved.get('support_chart:'+sym)
@@ -186,19 +187,21 @@ async def build_cached(universe,history,quotes,borrow,analytics,charts,exclusion
 def remember_exclusions(snapshot,universe,proofs,at):
     changed=False
     for d in snapshot.get('diagnostics',[]):
-        if d.get('wave_source')!='extended_intraday' or d.get('waves80_count',0)<2:continue
+        if d.get('wave_source')!='extended_intraday' or d.get('waves80_count',0)<1:continue
         sym=d['symbol'];effective=(universe.get(sym) or {}).get('effective_date')
         previous=proofs.get(sym) or {}
         if previous.get('version')==RULE_VERSION and previous.get('effective_date')==effective:continue
         proofs[sym]={'version':RULE_VERSION,'effective_date':effective,'checked_at':at.isoformat(),
-                     'events':deepcopy(d['waves80'][:2]),'source':'extended_intraday'}
+                     'events':deepcopy(d['waves80'][:1]),'source':'extended_intraday'}
         changed=True
     return changed
 
 async def worker(universe,history,quotes,borrow,analytics,charts=None):
     global SNAPSHOT
     try:
-        EXCLUSIONS.update((await asyncio.to_thread(storage.load,('hunt_wave_exclusions_v2',))).get('hunt_wave_exclusions_v2') or {})
+        saved=await asyncio.to_thread(storage.load,('hunt_wave_exclusions_v2','hunt_rally_exclusions_v3'))
+        EXCLUSIONS.update(saved.get('hunt_wave_exclusions_v2') or {})
+        EXCLUSIONS.update(saved.get('hunt_rally_exclusions_v3') or {})
     except Exception:pass
     saved_proofs=deepcopy(EXCLUSIONS)
     while True:
@@ -207,14 +210,14 @@ async def worker(universe,history,quotes,borrow,analytics,charts=None):
             SNAPSHOT=await build_cached(universe,history,quotes,borrow,analytics,charts,EXCLUSIONS)
             remember_exclusions(SNAPSHOT,universe,EXCLUSIONS,at)
             if EXCLUSIONS!=saved_proofs:
-                await asyncio.to_thread(storage.save,{'hunt_wave_exclusions_v2':deepcopy(EXCLUSIONS)})
+                await asyncio.to_thread(storage.save,{'hunt_rally_exclusions_v3':deepcopy(EXCLUSIONS)})
                 saved_proofs=deepcopy(EXCLUSIONS)
             # Only candidates in the price/borrow zone request optional chart refreshes.
             # Share the existing single chart worker and its cooldown, without HTTP-path I/O.
-            from support_chart import PRIORITY, WAKE
+            from support_chart import PRIORITY, WAKE, cache_info
             for d in SNAPSHOT.get('diagnostics',[]):
                 if d.get('state') not in ('pending','eligible') or d.get('available') is None or d['available']>40000 or not 20<=d.get('discount_pct',0)<=35 or len(PRIORITY)>=50:continue
-                cached=(charts or {}).get(d['symbol']) or {}
+                cached=cache_info(d['symbol']) or {}
                 if cached.get('hourly_version',0)<1 or cached.get('split_date')!=(universe.get(d['symbol']) or {}).get('effective_date') or not recent(cached.get('updated_at'),at,21600):
                     PRIORITY.setdefault(d['symbol'],0)
             if PRIORITY:WAKE.set()
