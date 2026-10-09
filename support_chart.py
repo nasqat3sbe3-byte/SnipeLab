@@ -17,6 +17,7 @@ PRIORITY = {}
 OBSERVATIONS = {}
 WAKE = asyncio.Event()
 REFRESH_SECONDS = 21600
+WORKER_STATE = {"state":"starting","successes":0,"failures":0}
 
 def aggregate_hourly(result, now=None):
     now = now or datetime.now(timezone.utc)
@@ -107,7 +108,8 @@ def describe(candles, support, support_date, today=None):
     return out
 
 def cache_info(symbol):
-    return CACHE.get(symbol) or META.get(symbol) or {}
+    stored=CACHE.get(symbol) or META.get(symbol) or {}
+    return {**stored,**{k:v for k,v in (META.get(symbol) or {}).items() if k in ('error','attempted_at')}}
 
 def support_key(h):
     return (h.get('effective_date'),h.get('verified'),h.get('post_split_low'),h.get('post_split_low_date'))
@@ -206,7 +208,7 @@ def get(symbol, history):
     return {'symbol': symbol, 'interval': '4h', 'timezone': 'America/New_York',
             'source': 'Yahoo hourly with includePrePost=true', 'candles': bars,
             'updated_at': stored.get('updated_at'), 'status': 'ready' if bars else 'pending',
-            'refresh_error': stored.get('error'), 'stale': now - stored.get('fetched_epoch', 0) > REFRESH_SECONDS,
+            'refresh_error': cache_info(symbol).get('error'), 'last_refresh_attempt':cache_info(symbol).get('attempted_at'), 'stale': now - stored.get('fetched_epoch', 0) > REFRESH_SECONDS,
             'extended_observed': any(b.get('extended') for b in bars),
             'coverage_note': 'الشموع مبنية من بيانات الساعة المتاحة، بما فيها الساعات الممتدة التي يوفرها المصدر. بعض الفترات قد تكون ناقصة.',
             'details': observation(symbol, history),
@@ -273,16 +275,24 @@ async def worker(universe, history,quotes=None,borrow=None):
                     symbol = eligible[0]
                     PRIORITY.pop(symbol, None)
                     attempts[symbol] = now
+                    stamp=datetime.now(timezone.utc).isoformat()
+                    WORKER_STATE.update(state='fetching',symbol=symbol,attempted_at=stamp,queued=len(PRIORITY))
+                    META.setdefault(symbol,{})['attempted_at']=stamp
                     try:
                         await fetch(client, symbol, dict(history[symbol]))
+                        WORKER_STATE.update(state='waiting',last_success=stamp,error=None)
+                        WORKER_STATE['successes']+=1
                     except Exception as exc:
-                        META.setdefault(symbol,{})['error']=f'{type(exc).__name__}: {str(exc)[:100]}'
+                        error=f'{type(exc).__name__}: {str(exc)[:180]}'
+                        META.setdefault(symbol,{})['error']=error
+                        WORKER_STATE.update(state='waiting',error=error)
+                        WORKER_STATE['failures']+=1
                     # One request at a time with a cooldown. Chart opening never
                     # triggers synchronous data retrieval or historical analysis.
                     await asyncio.sleep(5)
                     continue
-            except Exception:
-                pass
+            except Exception as exc:
+                WORKER_STATE.update(state='error',error=f'{type(exc).__name__}: {str(exc)[:180]}')
             WAKE.clear()
             try:
                 await asyncio.wait_for(WAKE.wait(), timeout=20)

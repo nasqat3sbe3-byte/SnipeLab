@@ -23,7 +23,7 @@ import low_float
 import focus
 import hunt
 from support_chart import worker as support_chart_worker, get as support_chart_get, retest_signal as support_retest_signal
-from support_chart import CACHE as SUPPORT_PATTERN_CACHE, META as SUPPORT_CHART_META, load_cached as load_cached_chart, MAX_CACHED_CHARTS
+from support_chart import CACHE as SUPPORT_PATTERN_CACHE, META as SUPPORT_CHART_META, load_cached as load_cached_chart, MAX_CACHED_CHARTS, WORKER_STATE as CHART_WORKER_STATE
 from corporate_actions import worker as corporate_actions_worker, upcoming as upcoming_actions
 from event_rules import borrow_events, ready_event, worker_health
 from bs4 import BeautifulSoup
@@ -679,7 +679,7 @@ if(!open()){observer=new MutationObserver(open);observer.observe(document.body,{
 
 def runtime_resources():
     """Small read-only Linux resource counters; no provider calls or cache copies."""
-    result={"chart_cache_count":len(SUPPORT_PATTERN_CACHE),"chart_cache_limit":MAX_CACHED_CHARTS,"chart_summaries":len(SUPPORT_CHART_META)}
+    result={"chart_cache_count":len(SUPPORT_PATTERN_CACHE),"chart_cache_limit":MAX_CACHED_CHARTS,"chart_summaries":len(SUPPORT_CHART_META),"chart_worker":dict(CHART_WORKER_STATE)}
     try:
         line=next(x for x in Path('/proc/self/status').read_text().splitlines() if x.startswith('VmRSS:'))
         result['process_rss_bytes']=int(line.split()[1])*1024
