@@ -69,8 +69,8 @@ def evaluate(meta,h,q,b,a,at,chart=None,detail=None,exclusion=None):
     if not high or high<=0 or not price or price<=0:return fail('pending','بيانات السعر أو شمعة التقسيم غير مكتملة')
     if not h.get('verified') or h.get('effective_date')!=meta.get('effective_date') or h.get('partial_exchange_coverage'):return fail('pending','تاريخ التقسيم غير متحقق أو تغطية الشمعة جزئية')
     half=high/2; discount=(1-price/half)*100
-    if detail is not None:detail.update(price=price,split_high=high,half=half,discount_pct=round(discount,2),range_low=half*.65,range_high=half*.8)
-    if not 20-1e-9<=discount<=35+1e-9:return fail('outside','السعر خارج نطاق 20% إلى 35% تحت النصف')
+    if detail is not None:detail.update(price=price,split_high=high,half=half,discount_pct=round(discount,2),range_low=half*.6,range_high=half*.85)
+    if not 15-1e-9<=discount<=40+1e-9:return fail('outside','السعر خارج نطاق 15% إلى 40% تحت النصف')
     available=number(b.get('available'))
     if detail is not None:detail['available']=available
     if available is None or available<0:return fail('pending','بيانات Available غير مكتملة')
@@ -141,7 +141,7 @@ def evaluate(meta,h,q,b,a,at,chart=None,detail=None,exclusion=None):
     if wave_result['uncertain']:return fail('pending','فحص طلعات 80% يحتاج ترتيبًا أدق داخل الشمعة')
     if detail is not None:detail.update(state='eligible',reason='مطابق للشروط')
     return 'eligible',{'symbol':meta['symbol'],'price':price,'split_high':high,'half':half,
-        'range_low':half*.65,'range_high':half*.8,'discount_pct':round(discount,2),
+        'range_low':half*.6,'range_high':half*.85,'discount_pct':round(discount,2),
         'recent_rise_pct':round(max_rise,2),'split_date':meta['effective_date'],
         'available':b.get('available'),'rsi':a.get('rsi_daily'),'sessions':a.get('effective_sessions'),
         'price_at':q.get('market_timestamp'),'history_at':h.get('updated_at'),'waves80_count':len(wave_result['events'])}
@@ -173,7 +173,7 @@ async def build_cached(universe,history,quotes,borrow,analytics,charts,exclusion
         high=number(h.get('split_day_4h_high'));price=number(q.get('price'));available=number(b.get('available'))
         proof=(exclusions or {}).get(sym) or {}
         saved_exclusion=valid_exclusion(proof,meta['effective_date'])
-        if not chart and high and price and available is not None and 0<=available<=40000 and high*.325<=price<=high*.4 and not saved_exclusion:
+        if not chart and high and price and available is not None and 0<=available<=40000 and high*.3<=price<=high*.425 and not saved_exclusion:
             saved=await asyncio.to_thread(storage.load,('support_chart:'+sym,))
             chart=saved.get('support_chart:'+sym)
         detail={'symbol':sym}
@@ -216,7 +216,7 @@ async def worker(universe,history,quotes,borrow,analytics,charts=None):
             # Share the existing single chart worker and its cooldown, without HTTP-path I/O.
             from support_chart import PRIORITY, WAKE, cache_info
             for d in SNAPSHOT.get('diagnostics',[]):
-                if d.get('state') not in ('pending','eligible') or d.get('available') is None or d['available']>40000 or not 20<=d.get('discount_pct',0)<=35 or len(PRIORITY)>=50:continue
+                if d.get('state') not in ('pending','eligible') or d.get('available') is None or d['available']>40000 or not 15<=d.get('discount_pct',0)<=40 or len(PRIORITY)>=50:continue
                 cached=cache_info(d['symbol']) or {}
                 if cached.get('hourly_version',0)<1 or cached.get('split_date')!=(universe.get(d['symbol']) or {}).get('effective_date') or not recent(cached.get('updated_at'),at,21600):
                     PRIORITY.setdefault(d['symbol'],0)

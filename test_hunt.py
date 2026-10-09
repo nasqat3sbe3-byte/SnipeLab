@@ -15,7 +15,7 @@ class HuntTests(unittest.TestCase):
                 self.chart['candles'].append({'date':d,'time':i*100+n*30,'local_time':d+' '+slot,'low':2,'high':2.4,'closed':True})
     def result(self):return hunt.evaluate(self.meta,self.h,self.q,self.borrow, {},self.at,self.chart)
     def test_price_boundaries(self):
-        for price,state in [(2.4,'eligible'),(1.95,'eligible'),(2.401,'outside'),(1.949,'outside')]:
+        for price,state in [(2.55,'eligible'),(1.8,'eligible'),(2.551,'outside'),(1.799,'outside')]:
             self.q['price']=price;self.assertEqual(self.result()[0],state)
     def test_fixed_split_high_ignores_old_rally(self):
         self.h.update(post_split_high=100,half_reference_high=100,top_10_gain_pct=1000)

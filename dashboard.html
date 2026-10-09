@@ -1523,6 +1523,26 @@ function recentTenSessionSurge70(x){
  const gain=Number(x.top_10_gain_pct),since=Number(x.top_10_sessions_since_peak);
  return x.top_10_verified===true&&Number.isFinite(gain)&&gain>=70&&Number.isFinite(since)&&since>=0&&since<10;
 }
+// All stocks: keep >=80% movers at the bottom for ten completed sessions.
+function recentSurge80(x){
+ const events=[];
+ const t=topStats(x);
+ if(t&&t.gain>=80&&t.sessions>=0)events.push({...t,date:x.top_10_high_date,source:'wave'});
+ const gain=Number(x.surge70_gain_pct),sessions=Number(x.surge70_sessions_since_peak);
+ if(x.surge70_verified===true&&gain>=80&&Number.isFinite(gain)&&Number.isInteger(sessions)&&sessions>=0&&sessions<10)
+   events.push({gain,sessions,date:x.surge70_peak_date,source:'wave'});
+ if(x.live_day_rise_provisional===true&&Number(x.live_day_rise_pct)>=80)
+   events.push({gain:Number(x.live_day_rise_pct),sessions:0,date:String(x.q?.market_timestamp||'').slice(0,10),source:'live',provisional:true});
+ // A newer qualifying peak renews the waiting period.
+ return events.sort((a,b)=>a.sessions-b.sessions||b.gain-a.gain)[0]||null;
+}
+function surge80Notice(x){
+ const t=selected==='all'?recentSurge80(x):null;
+ if(!t)return '';
+ const date=t.date?' · قمة '+t.date:'';
+ const source=t.source==='live'?'من الإغلاق السابق — قراءة اليوم':'من قاع إلى قمة';
+ return '<div class="sl-surge-notice" style="padding-top:8px;font-size:11px;color:var(--gold);line-height:1.6">'+esc('↑ طلع +'+t.gain.toFixed(2)+'% · '+source+date+' · مؤخر لأسفل · باقي '+(10-t.sessions)+' جلسات تداول')+'</div>';
+}
 function radarCandidate(x){
  if(recentTenSessionSurge70(x)||isTop(x)||x.ready||!x.history_verified)return false;
  const c=conditionState(x);
@@ -1595,7 +1615,7 @@ function nearListCandidate(x){
  const c=nearConditions(x);
  return !!c&&c.av>=0&&c.av<=25000&&!c.retestFailed&&c.missing.length>=1&&c.missing.length<=2;
 }
-function filtered(){let a=rows(),q=$('query').value.trim().toUpperCase();if(q)a=a.filter(x=>x.symbol.toUpperCase().includes(q)||String(x.company_name||x.name||'').toUpperCase().includes(q));if(selected==='ready')a=a.filter(readyListCandidate);if(selected==='retest')a=a.filter(x=>!recentTenSessionSurge70(x)&&displayedReadiness(x)===90&&conditionState(x)?.retest==='waiting');if(selected==='near')a=a.filter(nearListCandidate);if(selected==='borrow')a=a.filter(x=>x.b.available!=null&&x.b.available<15000);if(selected==='top')a=a.filter(isTop);if(selected==='radar')a=a.filter(radarCandidate);if(selected==='favorites')a=a.filter(x=>favorites.has(x.symbol));if($('useRsi')?.checked){const cap=Number($('premiumRsi').value);a=a.filter(x=>x.rsi_daily!=null&&Number(x.rsi_daily)<cap)}if($('useBorrow')?.checked){const cap=Number($('premiumBorrow').value);a=a.filter(x=>x.b.available!=null&&Number(x.b.available)<cap)}if($('useDistance')?.checked){const cap=Number($('premiumDistance').value);a=a.filter(x=>x.effective_distance_pct!=null&&Number(x.effective_distance_pct)<=cap)}if($('useStability')?.checked)a=a.filter(x=>Number(x.stability_sessions)>=4);if($('useOneMissing')?.checked)a=a.filter(x=>conditionState(x)?.missing.length===1);if($('useAvailDrop')?.checked){const min=Number($('premiumDrop').value);a=a.filter(x=>{const t=availableTrend(x);return t&&t.pct>0&&t.pct>=min})}a.sort((x,y)=>{if(selected==='all'){const av=z=>z.b.available==null?Infinity:Number(z.b.available),rr=z=>z.rsi_daily==null?Infinity:Number(z.rsi_daily),dd=z=>z.effective_distance_pct==null?Infinity:Number(z.effective_distance_pct);if(premiumSort==='available')return av(x)-av(y)||x.symbol.localeCompare(y.symbol);if(premiumSort==='rsi')return rr(x)-rr(y)||x.symbol.localeCompare(y.symbol);if(premiumSort==='distance')return dd(x)-dd(y)||x.symbol.localeCompare(y.symbol);}
+function filtered(){let a=rows(),q=$('query').value.trim().toUpperCase();if(q)a=a.filter(x=>x.symbol.toUpperCase().includes(q)||String(x.company_name||x.name||'').toUpperCase().includes(q));if(selected==='ready')a=a.filter(readyListCandidate);if(selected==='retest')a=a.filter(x=>!recentTenSessionSurge70(x)&&displayedReadiness(x)===90&&conditionState(x)?.retest==='waiting');if(selected==='near')a=a.filter(nearListCandidate);if(selected==='borrow')a=a.filter(x=>x.b.available!=null&&x.b.available<15000);if(selected==='top')a=a.filter(isTop);if(selected==='radar')a=a.filter(radarCandidate);if(selected==='favorites')a=a.filter(x=>favorites.has(x.symbol));if($('useRsi')?.checked){const cap=Number($('premiumRsi').value);a=a.filter(x=>x.rsi_daily!=null&&Number(x.rsi_daily)<cap)}if($('useBorrow')?.checked){const cap=Number($('premiumBorrow').value);a=a.filter(x=>x.b.available!=null&&Number(x.b.available)<cap)}if($('useDistance')?.checked){const cap=Number($('premiumDistance').value);a=a.filter(x=>x.effective_distance_pct!=null&&Number(x.effective_distance_pct)<=cap)}if($('useStability')?.checked)a=a.filter(x=>Number(x.stability_sessions)>=4);if($('useOneMissing')?.checked)a=a.filter(x=>conditionState(x)?.missing.length===1);if($('useAvailDrop')?.checked){const min=Number($('premiumDrop').value);a=a.filter(x=>{const t=availableTrend(x);return t&&t.pct>0&&t.pct>=min})}a.sort((x,y)=>{if(selected==='all'){const deferred=Number(!!recentSurge80(x))-Number(!!recentSurge80(y));if(deferred)return deferred;const av=z=>z.b.available==null?Infinity:Number(z.b.available),rr=z=>z.rsi_daily==null?Infinity:Number(z.rsi_daily),dd=z=>z.effective_distance_pct==null?Infinity:Number(z.effective_distance_pct);if(premiumSort==='available')return av(x)-av(y)||x.symbol.localeCompare(y.symbol);if(premiumSort==='rsi')return rr(x)-rr(y)||x.symbol.localeCompare(y.symbol);if(premiumSort==='distance')return dd(x)-dd(y)||x.symbol.localeCompare(y.symbol);}
   if(selected==='top')return topStats(y).gain-topStats(x).gain;
   if(selected==='radar'){
     const cx=conditionState(x),cy=conditionState(y);
@@ -1855,7 +1875,7 @@ card=function(x){
 
 
  m('CTB',pct(x.b?.ctb))+m('Rebate',pct(x.b?.rebate),Number(x.b?.rebate)<0?'bad':'good')+
- '</div>'+(selected==='near'?'<div class="near-missing" style="padding-top:8px;font-size:11px;color:#9b7b45">'+esc((nearConditions(x)?.missing.length===1?'ناقص شرط واحد: ':'ناقص شرطان: ')+(nearConditions(x)?.missing||[]).join('، '))+'</div>':'')+'</article>'
+ '</div>'+surge80Notice(x)+(selected==='near'?'<div class="near-missing" style="padding-top:8px;font-size:11px;color:#9b7b45">'+esc((nearConditions(x)?.missing.length===1?'ناقص شرط واحد: ':'ناقص شرطان: ')+(nearConditions(x)?.missing||[]).join('، '))+'</div>':'')+'</article>'
 };
 function slFilterCount(){const n=document.querySelectorAll('[data-sl-filter]:checked').length,c=$('approvedFilterCount');c.textContent=n+' شروط';c.hidden=!n;const matches=filtered().length;$('approvedFilterDone').textContent='عرض النتائج ('+fmt(matches)+' سهم)';$('filteredResultCount').textContent=fmt(matches)+' سهم مطابق';$('filterResults').hidden=!n}
 document.querySelectorAll('[data-sl-filter]').forEach(el=>el.addEventListener('change',slFilterCount));
