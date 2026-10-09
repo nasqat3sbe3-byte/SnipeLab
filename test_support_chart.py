@@ -30,6 +30,27 @@ class SupportChartTests(unittest.TestCase):
             h['A']['post_split_low']=.95
             self.assertEqual(chart.retest_signal('A',h)['support_retest_status'],'waiting')
 
+    def test_refresh_error_visible_even_with_full_cached_chart(self):
+        from unittest.mock import patch
+        with patch.object(chart,'CACHE',{'A':{'candles':[{'time':1}],'error':None}}),patch.object(chart,'META',{'A':{'error':'provider timeout','attempted_at':'2026-10-09'}}):
+            self.assertEqual(chart.cache_info('A')['error'],'provider timeout')
+            self.assertEqual(chart.cache_info('A')['attempted_at'],'2026-10-09')
+            self.assertEqual(chart.cache_info('A')['candles'],[{'time':1}])
+
+    def test_null_legacy_cache_does_not_abort_refresh_queue(self):
+        from unittest.mock import patch
+        at=datetime(2026,10,9,15,tzinfo=timezone.utc).timestamp()
+        with patch.object(chart,'CACHE',{}),patch.object(chart,'META',{'OLD':{'hourly_version':None,'fetched_epoch':None},'BAD':{'hourly_version':'bad','fetched_epoch':'bad'}}):
+            for symbol in ['OLD','BAD','MISSING']:
+                self.assertTrue(chart.refresh_due(symbol,{'effective_date':'2026-09-01'},at))
+    def test_hunt_candidates_refresh_more_often_without_global_request_increase(self):
+        from unittest.mock import patch
+        at=datetime(2026,10,9,15,tzinfo=timezone.utc).timestamp()
+        stored={'hourly_version':1,'fetched_epoch':at-901,'split_date':'2026-09-01'}
+        with patch.object(chart,'CACHE',{'HOT':stored,'OTHER':stored}),patch.object(chart,'META',{}),patch.object(chart,'_HOT',{'HOT'}):
+            self.assertTrue(chart.refresh_due('HOT',{'effective_date':'2026-09-01'},at))
+            self.assertFalse(chart.refresh_due('OTHER',{'effective_date':'2026-09-01'},at))
+
     def test_extended_low_is_in_four_hour_candle(self):
         times = [int(datetime(2026, 10, 2, h, tzinfo=chart.NY).timestamp()) for h in (4, 5, 8, 9, 16, 17)]
         result = {'timestamp': times, 'meta': {'exchangeTimezoneName': 'America/New_York'},

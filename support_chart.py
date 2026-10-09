@@ -109,7 +109,22 @@ def describe(candles, support, support_date, today=None):
 
 def cache_info(symbol):
     stored=CACHE.get(symbol) or META.get(symbol) or {}
-    return {**stored,**{k:v for k,v in (META.get(symbol) or {}).items() if k in ('error','attempted_at')}}
+    info={**stored,**{k:v for k,v in (META.get(symbol) or {}).items() if k in ('error','attempted_at')}}
+    # Old persisted summaries can contain explicit null values, not just absent keys.
+    for key in ('hourly_version','fetched_epoch'):
+        try:
+            value=float(info.get(key) or 0)
+            info[key]=value if math.isfinite(value) and value>=0 else 0
+        except (TypeError,ValueError):info[key]=0
+    return info
+
+def refresh_due(symbol,h,now):
+    info=cache_info(symbol)
+    local=datetime.fromtimestamp(now,NY)
+    # Refresh candidates during trading hours without increasing requests for all stocks.
+    interval=900 if symbol in _HOT and local.weekday()<5 and 4<=local.hour<20 else REFRESH_SECONDS
+    return (info['hourly_version']<1 or now-info['fetched_epoch']>interval
+            or info.get('split_date')!=h.get('effective_date'))
 
 def support_key(h):
     return (h.get('effective_date'),h.get('verified'),h.get('post_split_low'),h.get('post_split_low_date'))
@@ -268,9 +283,8 @@ async def worker(universe, history,quotes=None,borrow=None):
                     if symbol not in CACHE:await load_cached(symbol,history)
                 eligible = [s for s in universe if history.get(s, {}).get('verified') and
                             now - attempts.get(s, 0) > 120 and
-                            (s in PRIORITY or cache_info(s).get('hourly_version',0)<1 or now - cache_info(s).get('fetched_epoch', 0) > REFRESH_SECONDS
-                             or cache_info(s).get('split_date') != history[s].get('effective_date'))]
-                eligible.sort(key=lambda s: (s not in PRIORITY, attempts.get(s, 0)))
+                            (s in PRIORITY or refresh_due(s,history[s],now))]
+                eligible.sort(key=lambda s: (s not in PRIORITY, s not in _HOT, attempts.get(s, 0)))
                 if eligible:
                     symbol = eligible[0]
                     PRIORITY.pop(symbol, None)
