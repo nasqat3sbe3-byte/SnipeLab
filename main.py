@@ -22,6 +22,7 @@ import opportunities
 import low_float
 import focus
 import hunt
+import market_pulse
 from support_chart import worker as support_chart_worker, get as support_chart_get, retest_signal as support_retest_signal
 from support_chart import CACHE as SUPPORT_PATTERN_CACHE, META as SUPPORT_CHART_META, load_cached as load_cached_chart, MAX_CACHED_CHARTS, WORKER_STATE as CHART_WORKER_STATE
 from corporate_actions import worker as corporate_actions_worker, upcoming as upcoming_actions
@@ -616,6 +617,7 @@ async def halt_loop():
 async def startup():
     load_persistent_state()
     low_float.restore()
+    asyncio.create_task(market_pulse.worker(_pulse_groups))
     asyncio.create_task(hunt.worker(UNIVERSE,HISTORY,QUOTES,BORROW,ANALYTICS,SUPPORT_PATTERN_CACHE))
     asyncio.create_task(focus.worker(_focus_rows,_ai_cached_risk,_focus_queue))
     asyncio.create_task(low_float.discovery_worker(UNIVERSE))
@@ -664,10 +666,8 @@ async def dashboard(symbol: str = "", section: str = ""):
     symbol = re.sub(r"[^A-Z0-9.-]", "", symbol.upper())[:12]
     if not symbol:
         if section in {"archive", "ai", "events"}:
-            target = json.dumps("hunt" if section == "events" else section)
+            target = json.dumps("pulse" if section == "events" else section)
             script = "<script>openSection(" + target + ");</script>"
-            if section == "events":
-                script += "<script>document.querySelector('.events')?.scrollIntoView();</script>"
             return HTMLResponse(DASHBOARD.replace("</body>", script + "</body>"))
         return HTMLResponse(DASHBOARD)
     ticker = json.dumps(symbol)
@@ -1948,3 +1948,21 @@ async def hunt_snapshot():
 @app.get('/hunt')
 async def hunt_page():
     return HTMLResponse((Path(__file__).parent/'hunt.html').read_text('utf-8'))
+
+
+def _pulse_groups():
+    groups={s:'أسهم التقسيم' for s in UNIVERSE}
+    groups.update({s:'قليلة الفلوت' for s,r in list(low_float.ROWS.items()) if low_float.eligible(r,UNIVERSE)})
+    return groups
+
+@app.get('/api/market-pulse')
+async def pulse_data():
+    # Cache-only HTTP path; no upstream requests or expensive calculations.
+    data=market_pulse.SNAPSHOT
+    try: age=time.time()-datetime.fromisoformat(data['generated_at']).timestamp()
+    except (KeyError,ValueError,TypeError): age=9999
+    return {**data,'status':'stale','label':'التحديث متأخر؛ التقييم معلّق'} if age>90 and data.get('generated_at') else data
+
+@app.get('/assets/market-pulse.js')
+async def pulse_script():
+    return Response((Path(__file__).parent/'market_pulse.js').read_text('utf-8'), media_type='application/javascript')
