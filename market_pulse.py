@@ -1,6 +1,8 @@
 """Cached breadth of the tracked universe, never an all-market claim.
 Daily high and close returns use the previous split-adjusted daily close.
 SPY's observed session dates supply the shared holiday-aware trading window.
+Only post-action sessions are comparable: action-day returns and all paths
+crossing a split are excluded, even if the vendor silently changes units.
 """
 import asyncio
 import csv
@@ -17,6 +19,7 @@ import storage
 CACHE = {}
 SNAPSHOT = {"status": "starting", "rows": [], "sessions": []}
 NY = ZoneInfo('America/New_York')
+CACHE_SCHEMA = 2
 
 
 def number(v):
@@ -41,8 +44,38 @@ def parse_chart(result):
     return sorted(bars.values(), key=lambda b: b['date'])[-32:]
 
 
-def _build_view(cache, groups, now=None):
+def parse_splits(result):
+    """Retain corporate actions instead of discarding the requested split feed."""
+    events=(result.get('events') or {}).get('splits') or {}
+    if not isinstance(events,dict): raise ValueError('Invalid split event data')
+    days=[]
+    for key,event in events.items():
+        stamp=event.get('date',key)
+        day=datetime.fromtimestamp(int(stamp),NY).date().isoformat()
+        days.append(day)
+    return sorted(set(days))
+
+
+def comparable_bars(record, known_date=None):
+    """Never guess adjustment factors from price jumps or adjust data twice.
+
+    New schema proves that the split event feed was inspected. Use both the
+    independent trading-date calendar and vendor events. Discard pre-action
+    history so peaks, volume ratios, paths and next-day returns share units.
+    A split session itself has no comparable previous close and cannot count.
+    """
+    if record.get('schema') != CACHE_SCHEMA: return []
+    bars=record.get('bars') or []
+    if not bars:return []
+    boundaries=[d for d in record.get('split_dates',[]) if d<=bars[-1]['date']]
+    if known_date and known_date<=bars[-1]['date']:boundaries.append(known_date)
+    boundary=max(boundaries,default='')
+    return [b for b in bars if b['date']>=boundary]
+
+
+def _build_view(cache, groups, now=None, known_splits=None):
     now = now or datetime.now(timezone.utc)
+    known_splits=known_splits or {}
     calendar = cache.get('_calendar', {})
     session_dates = [b['date'] for b in calendar.get('bars', []) if b['date'] <= now.astimezone(NY).date().isoformat()]
     window = session_dates[-10:]
@@ -60,7 +93,7 @@ def _build_view(cache, groups, now=None):
     for sym, group in sorted(groups.items()):
         record = cache.get(sym, {})
         if now.timestamp() - record.get('fetched_at', 0) > 1800: continue
-        bars = record.get('bars', [])
+        bars = comparable_bars(record,known_splits.get(sym))
         if not bars or bars[-1]['date'] != window[-1]: continue
         by_day = {b['date']: (i, b) for i, b in enumerate(bars)}
         # Common cohort for all breadth comparisons: a missing session is not a zero.
@@ -154,14 +187,14 @@ def reference_sample(text, excluded=(), limit=120):
     return sorted(symbols,key=lambda s:hashlib.sha256(s.encode()).hexdigest())[:limit]
 
 
-def build(cache, groups, now=None):
+def build(cache, groups, now=None, known_splits=None):
     now=now or datetime.now(timezone.utc)
     tracked={s:g for s,g in groups.items() if g!=REFERENCE_GROUP}
-    result=_build_view(cache,tracked,now)
+    result=_build_view(cache,tracked,now,known_splits)
     views={'tracked':{k:v for k,v in result.items() if k not in ('rows',)}}
     all_rows=list(result['rows'])
     for key,label in [('split','أسهم التقسيم'),('low_float','قليلة الفلوت'),('reference',REFERENCE_GROUP)]:
-        view=_build_view(cache,{s:g for s,g in groups.items() if g==label},now)
+        view=_build_view(cache,{s:g for s,g in groups.items() if g==label},now,known_splits)
         views[key]={k:v for k,v in view.items() if k!='rows'}
         if key=='reference': all_rows.extend(view['rows'])
     ref=views['reference']; ours=views['tracked']
@@ -184,7 +217,7 @@ def build(cache, groups, now=None):
     return result
 
 
-async def worker(get_groups):
+async def worker(get_groups, get_split_dates=lambda: {}):
     global SNAPSHOT
     try: CACHE.update(storage.load(('market_pulse',)).get('market_pulse') or {})
     except Exception: pass
@@ -192,7 +225,7 @@ async def worker(get_groups):
     reference=CACHE.get('_reference',{})
     if time.time()-reference.get('fetched_at',0)<7*86400:
         initial.update({s:REFERENCE_GROUP for s in reference.get('symbols',[]) if s not in initial})
-    SNAPSHOT=build(CACHE,initial)
+    SNAPSHOT=build(CACHE,initial,known_splits=get_split_dates())
     await asyncio.sleep(8)
     saved_at=0
     async with httpx.AsyncClient(timeout=12, follow_redirects=True, headers={'User-Agent':'Mozilla/5.0 SnipeLab'}) as client:
@@ -204,8 +237,10 @@ async def worker(get_groups):
                     ticker='SPY' if sym=='_calendar' else sym
                     r=await client.get(f'https://query1.finance.yahoo.com/v8/finance/chart/{ticker}',params={'range':'3mo','interval':'1d','includePrePost':'false','events':'splits'})
                     r.raise_for_status()
-                    bars=parse_chart(r.json()['chart']['result'][0])
-                    if bars: CACHE[sym]=dict(bars=bars,fetched_at=time.time(),attempted_at=time.time())
+                    result=r.json()['chart']['result'][0]
+                    bars=parse_chart(result)
+                    split_dates=parse_splits(result)
+                    if bars: CACHE[sym]=dict(bars=bars,split_dates=split_dates,schema=CACHE_SCHEMA,fetched_at=time.time(),attempted_at=time.time())
                 except Exception: pass
         while True:
             try:
@@ -223,10 +258,10 @@ async def worker(get_groups):
                 if time.time()-reference.get('fetched_at',0)<7*86400:
                     groups.update({s:REFERENCE_GROUP for s in reference.get('symbols',[]) if s not in groups})
                 due=sorted(groups,key=lambda s:CACHE.get(s,{}).get('attempted_at',0))
-                due=[s for s in due if time.time()-CACHE.get(s,{}).get('fetched_at',0)>600 and time.time()-CACHE.get(s,{}).get('attempted_at',0)>60][:10]
+                due=[s for s in due if (CACHE.get(s,{}).get('schema')!=CACHE_SCHEMA or time.time()-CACHE.get(s,{}).get('fetched_at',0)>600) and time.time()-CACHE.get(s,{}).get('attempted_at',0)>60][:10]
                 if time.time()-CACHE.get('_calendar',{}).get('attempted_at',0)>300: await fetch('_calendar')
                 await asyncio.gather(*(fetch(s) for s in due))
-                SNAPSHOT=build(CACHE,groups)
+                SNAPSHOT=build(CACHE,groups,known_splits=get_split_dates())
                 for s in list(CACHE):
                     if not s.startswith('_') and s not in groups: del CACHE[s]
                 if time.time()-saved_at>60:

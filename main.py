@@ -41,6 +41,10 @@ SPLITS_URLS = ("https://stockanalysis.com/actions/splits/2026/", "https://stocka
 # Exchange-confirmed corporate actions supplement the lagging public calendar.
 # Dates below are first split-adjusted TRADING dates, not legal effective times.
 CONFIRMED_SPLITS = {
+    "CHOW": {"symbol":"CHOW","company":"ChowChow Cloud International Holdings Limited",
+             "effective_date":"2026-10-26","ratio":"1 for 10",
+             "source":"Company SEC 6-K; first post-split trading session",
+             "source_url":"https://www.sec.gov/Archives/edgar/data/2041829/000149315226046859/form6-k.htm"},
     "WHLR": {"symbol":"WHLR","company":"Wheeler Real Estate Investment Trust, Inc.",
              "effective_date":"2026-09-22","ratio":"1 for 9",
              "source":"Nasdaq Equity Corporate Actions ECA2026-666",
@@ -617,7 +621,7 @@ async def halt_loop():
 async def startup():
     load_persistent_state()
     low_float.restore()
-    asyncio.create_task(market_pulse.worker(_pulse_groups))
+    asyncio.create_task(market_pulse.worker(_pulse_groups, _pulse_split_dates))
     asyncio.create_task(hunt.worker(UNIVERSE,HISTORY,QUOTES,BORROW,ANALYTICS,SUPPORT_PATTERN_CACHE))
     asyncio.create_task(focus.worker(_focus_rows,_ai_cached_risk,_focus_queue))
     asyncio.create_task(low_float.discovery_worker(UNIVERSE))
@@ -1948,6 +1952,14 @@ async def hunt_snapshot():
 @app.get('/hunt')
 async def hunt_page():
     return HTMLResponse((Path(__file__).parent/'hunt.html').read_text('utf-8'))
+
+
+def _pulse_split_dates():
+    # First post-split TRADING dates, not legal effectiveness on a weekend.
+    dates={s:m['effective_date'] for s,m in list(UNIVERSE.items()) if m.get('effective_date')}
+    for s,m in CONFIRMED_SPLITS.items():
+        dates[s]=max(dates.get(s,''),m['effective_date'])
+    return dates
 
 
 def _pulse_groups():

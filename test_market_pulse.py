@@ -1,11 +1,11 @@
 import unittest
 from datetime import datetime, timezone, timedelta
-from market_pulse import build, parse_chart, reference_sample, REFERENCE_GROUP
+from market_pulse import build, parse_chart, parse_splits, reference_sample, REFERENCE_GROUP, CACHE_SCHEMA
 
 NOW=datetime(2026,10,27,22,tzinfo=timezone.utc)
 # Observed exchange sessions, with a deliberately omitted holiday/weekend gap.
 DAYS=['2026-10-08','2026-10-09','2026-10-12','2026-10-13','2026-10-14','2026-10-15','2026-10-16','2026-10-19','2026-10-20','2026-10-21','2026-10-22','2026-10-23','2026-10-26','2026-10-27']
-def record(bars): return {'bars':bars,'fetched_at':NOW.timestamp()}
+def record(bars): return {'bars':bars,'fetched_at':NOW.timestamp(),'schema':CACHE_SCHEMA,'split_dates':[]}
 def bars(): return [dict(date=d,high=10,close=10,volume=100) for d in DAYS]
 def fixture(n=12):
     cache={'_calendar':record(bars())}; groups={}
@@ -90,6 +90,44 @@ class PulseTests(unittest.TestCase):
         self.assertEqual(first,reference_sample(text,{'S0'},limit=5))
         self.assertNotIn('USD',first);self.assertNotIn('S0',first)
         with self.assertRaises(ValueError):reference_sample('not a holdings file')
+    def test_chow_split_repricing_cannot_be_a_948_percent_runner(self):
+        c,g=fixture();g['CHOW']='أسهم التقسيم'
+        series=bars()
+        for b in series:b.update(high=.22,close=.206,volume=100000)
+        series[-2].update(high=2.16,close=1.98,volume=1000)
+        series[-1].update(high=2.16,close=2.145,volume=1100)
+        c['CHOW']=record(series)
+        p=build(c,g,NOW,known_splits={'CHOW':'2026-10-26'})
+        self.assertFalse(any(r['symbol']=='CHOW' for r in p['rows']))
+        self.assertEqual(p['counts']['100'],0)
+    def test_vendor_event_blocks_reverse_and_forward_split_crossings(self):
+        for factor in (10,.1):
+            c,g=fixture();c['0']['bars'][-2].update(high=10*factor,close=10*factor)
+            c['0']['bars'][-1].update(high=10*factor,close=10*factor)
+            c['0']['split_dates']=['2026-10-26']
+            self.assertFalse(any(r['symbol']=='0' for r in build(c,g,NOW)['rows']))
+    def test_real_post_split_move_survives_using_new_units_only(self):
+        c,g=fixture();c['0']['split_dates']=['2026-10-26']
+        c['0']['bars'][-2].update(high=2.16,close=2,volume=1000)
+        c['0']['bars'][-1].update(high=3,close=2.8,volume=2000)
+        m=build(c,g,NOW)['rows'][0]['moves'][0]
+        self.assertEqual(m['gain'],50);self.assertEqual(m['reference'],2)
+        self.assertEqual(m['current_gain'],40)
+        self.assertIsNone(m['volume_ratio'])
+        self.assertEqual([p['date'] for p in m['path']],['2026-10-27'])
+    def test_old_cache_is_not_trusted_after_split_rule_upgrade(self):
+        c,g=fixture();c['0'].pop('schema');c['0']['bars'][-1]['high']=100
+        p=build(c,g,NOW)
+        self.assertEqual(p['covered'],11);self.assertEqual(p['rows'],[])
+    def test_no_old_move_can_have_a_path_crossing_a_new_split(self):
+        c,g=fixture();c['0']['bars'][-3]['high']=30
+        p=build(c,g,NOW,known_splits={'0':'2026-10-26'})
+        self.assertFalse(any(r['symbol']=='0' for r in p['rows']))
+    def test_split_feed_dates_are_kept(self):
+        stamp=int(datetime(2026,10,26,13,30,tzinfo=timezone.utc).timestamp())
+        self.assertEqual(parse_splits({'events':{'splits':{str(stamp):{'date':stamp,'numerator':1,'denominator':10}}}}),['2026-10-26'])
+        self.assertEqual(parse_splits({}),[])
+        with self.assertRaises(ValueError):parse_splits({'events':{'splits':[1]}})
     def test_bad_ohlc_and_nan_ignored(self):
         self.assertEqual(parse_chart({'timestamp':[1], 'indicators':{'quote':[{'high':[float('nan')],'close':[10],'volume':[100]}]}}),[])
 if __name__=='__main__':unittest.main()
