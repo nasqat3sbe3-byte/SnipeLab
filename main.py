@@ -1,6 +1,7 @@
 # Support Retest release: closed 4H five-percent confirmation with dated readiness.
 # Snipe AI release: durable isolated screening v2.
 import asyncio
+import math
 import ftplib
 import io
 import os
@@ -23,6 +24,7 @@ import low_float
 import focus
 import hunt
 import market_pulse
+import watch_journal
 from support_chart import worker as support_chart_worker, get as support_chart_get, retest_signal as support_retest_signal
 from support_chart import CACHE as SUPPORT_PATTERN_CACHE, META as SUPPORT_CHART_META, load_cached as load_cached_chart, MAX_CACHED_CHARTS, WORKER_STATE as CHART_WORKER_STATE
 from corporate_actions import worker as corporate_actions_worker, upcoming as upcoming_actions
@@ -621,6 +623,7 @@ async def halt_loop():
 async def startup():
     load_persistent_state()
     low_float.restore()
+    asyncio.create_task(watch_journal.worker(_watch_rows))
     asyncio.create_task(market_pulse.worker(_pulse_groups, _pulse_split_dates))
     asyncio.create_task(hunt.worker(UNIVERSE,HISTORY,QUOTES,BORROW,ANALYTICS,SUPPORT_PATTERN_CACHE))
     asyncio.create_task(focus.worker(_focus_rows,_ai_cached_risk,_focus_queue))
@@ -1978,3 +1981,53 @@ async def pulse_data():
 @app.get('/assets/market-pulse.js')
 async def pulse_script():
     return Response((Path(__file__).parent/'market_pulse.js').read_text('utf-8'), media_type='application/javascript')
+
+
+# A separate read-only projection for change tracking. No upstream HTTP calls.
+def _watch_rows():
+    result={}
+    analytics_fresh=data_freshness({'at':STATE.get('last_analytics')},'at',90)['status']=='fresh'
+    for sym,meta in list(UNIVERSE.items()):
+        b=BORROW.get(sym) or {};h=HISTORY.get(sym) or {};a=ANALYTICS.get(sym) or {};q=QUOTES.get(sym) or {}
+        values={}
+        borrow_fresh=data_freshness(b,'received_at',1200)['status']=='fresh'
+        quote_fresh=data_freshness(q,'received_at',900)['status']=='fresh'
+        history_fresh=h.get('verified') and data_freshness(h,'updated_at',172800)['status']=='fresh'
+        if borrow_fresh:values['available']=b.get('available')
+        if history_fresh and analytics_fresh and quote_fresh:
+            values.update(stability=a.get('stability_sessions'),broken=a.get('new_low_today'),support=a.get('effective_low'))
+            r=support_retest_signal(sym,HISTORY)
+            if data_freshness(r,'support_retest_updated_at',21600)['status']=='fresh':values['retest']=r.get('support_retest_status')
+            # Mirror the ready-list candidate gate (including the recent-run quarantine).
+            if borrow_fresh:
+                av=b.get('available');rs=a.get('rsi_daily');dist=a.get('effective_distance_pct');st=a.get('stability_sessions')
+                if all(type(v) in {int,float} and math.isfinite(v) for v in (av,rs,dist,st)) and type(a.get('half_reached')) is bool:
+                    surge=bool((h.get('top_10_verified') and (h.get('top_10_gain_pct') or 0)>=70 and (h.get('top_10_sessions_since_peak') if h.get('top_10_sessions_since_peak') is not None else 99)<10)
+                              or (h.get('surge70_verified') and (h.get('surge70_gain_pct') or 0)>=70 and (h.get('surge70_sessions_since_peak') if h.get('surge70_sessions_since_peak') is not None else 99)<10))
+                    values['ready']=bool(not surge and av<15000 and rs<=35 and a['half_reached'] and st>=2 and 0<=dist<=30)
+        result[sym]={'context':meta.get('effective_date'),'market':'split','values':values}
+    for sym,row in list(low_float.ROWS.items()):
+        if not low_float.eligible(row,UNIVERSE):continue
+        values={};b=row.get('borrow') or {}
+        if data_freshness(b,'received_at',1200)['status']=='fresh':values['available']=b.get('available')
+        f=low_float.formation(row)
+        if f.get('ready') and data_freshness(row.get('price') or {},'received_at',900)['status']=='fresh':
+            values.update(stability=f.get('stability_sessions'),support=f.get('support'),broken=f.get('state')=='broken')
+            r='failed' if f.get('retest_state')=='broken' else f.get('retest_state')
+            if r in {'success','failed','waiting'}:values['retest']=r
+        result[sym]={'context':'low_float','market':'low_float','values':values}
+    return result
+
+@app.get('/api/changes')
+async def watch_changes(after: int | None=None, limit: int=250, symbols: str='', journal: str=''):
+    if after is not None and after<0:return Response('Invalid cursor',status_code=400)
+    requested=[s for s in symbols.upper().split(',') if re.fullmatch(r'[A-Z0-9.-]{1,12}',s)][:150]
+    return await asyncio.to_thread(watch_journal.JOURNAL.page,after,limit,requested,journal[:64])
+
+@app.get('/assets/watch-plans.js')
+async def watch_plans_script():
+    return Response((Path(__file__).parent/'watch-plans.js').read_text('utf-8'),media_type='application/javascript')
+
+@app.get('/assets/watch-plans.css')
+async def watch_plans_style():
+    return Response((Path(__file__).parent/'watch-plans.css').read_text('utf-8'),media_type='text/css')

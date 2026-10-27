@@ -3,6 +3,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py .
+COPY watch_journal.py .
+COPY watch-plans.js .
+COPY watch-plans.css .
 COPY market_pulse.py .
 COPY market_pulse.js .
 COPY risk_evidence.py .
