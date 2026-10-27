@@ -3,6 +3,10 @@ Daily high and close returns use the previous split-adjusted daily close.
 SPY's observed session dates supply the shared holiday-aware trading window.
 """
 import asyncio
+import csv
+import io
+import hashlib
+import re
 import math
 import time
 from datetime import datetime, timezone
@@ -29,7 +33,7 @@ def parse_chart(result):
     for i, ts in enumerate(result.get('timestamp') or []):
         try:
             bar = {k: number(q[k][i]) for k in ('high', 'close', 'volume')}
-            if not bar['high'] or not bar['close']: continue
+            if not bar['high'] or not bar['close'] or bar['close'] > bar['high']: continue
             day = datetime.fromtimestamp(ts, NY).date().isoformat()
             bars[day] = dict(date=day, **bar)
         except (KeyError, IndexError, TypeError, ValueError):
@@ -37,7 +41,7 @@ def parse_chart(result):
     return sorted(bars.values(), key=lambda b: b['date'])[-32:]
 
 
-def build(cache, groups, now=None):
+def _build_view(cache, groups, now=None):
     now = now or datetime.now(timezone.utc)
     calendar = cache.get('_calendar', {})
     session_dates = [b['date'] for b in calendar.get('bars', []) if b['date'] <= now.astimezone(NY).date().isoformat()]
@@ -50,7 +54,7 @@ def build(cache, groups, now=None):
     if age > 1800:
         return dict(base, status='stale', label='بيانات الجلسات قديمة؛ التقييم معلّق')
     sessions = {d: dict(date=d, covered=0, counts={str(n): 0 for n in (10,25,50,100)},
-                        advancing=0, holding=0, continued=0, prior_movers=0, volume_samples=0, elevated_volume=0) for d in window}
+                        return_sum=0, mean_return=None, advancing=0, holding=0, continued=0, prior_movers=0, volume_samples=0, elevated_volume=0) for d in window}
     rows = []
     covered = 0
     for sym, group in sorted(groups.items()):
@@ -73,7 +77,7 @@ def build(cache, groups, now=None):
             earlier_volumes = [v['volume'] for v in bars[max(0,i-20):i] if v.get('volume')]
             ratio = b.get('volume')/(sum(earlier_volumes)/len(earlier_volumes)) if b.get('volume') and len(earlier_volumes)>=5 else None
             if cohort:
-                s = sessions[day]; s['covered'] += 1
+                s = sessions[day]; s['covered'] += 1; s['return_sum'] += close; s['mean_return']=round(s['return_sum']/s['covered'],2)
                 s['advancing'] += close > 0
                 for n in (10,25,50,100): s['counts'][str(n)] += high >= n
                 s['holding'] += high >= 10 and close >= high*.5
@@ -87,26 +91,43 @@ def build(cache, groups, now=None):
                 movements.append(dict(date=day, gain=round(high,2), close_gain=round(close,2),
                     reference=prev, peak=b['high'], close=b['close'], volume_ratio=round(ratio,2) if ratio else None,
                     since=len(window)-1-window.index(day), provisional=day==now.astimezone(NY).date().isoformat() and now.astimezone(NY).hour<16,
-                    after_gain=round(after,2), behavior='واصل الصعود' if after>5 else 'متماسك' if after>=-5 else 'تراجع'))
+                    after_gain=round(after,2), current_gain=round((latest/prev-1)*100,2),
+                    retention=round(close/high*100,1),
+                    quality='strong' if close>=high*.7 else 'fade' if close<=high*.25 else 'partial',
+                    next_gain=round((bars[i+1]['close']/b['close']-1)*100,2) if i+1<len(bars) else None,
+                    next_provisional=bool(i+1<len(bars) and bars[i+1]['date']==now.astimezone(NY).date().isoformat() and now.astimezone(NY).hour<16),
+                    path=[dict(date=x['date'],gain=round((x['close']/prev-1)*100,2)) for x in bars[i:]],
+                    behavior='واصل الصعود' if after>5 else 'متماسك' if after>=-5 else 'تراجع'))
         if movements:
             movements.sort(key=lambda e: e['date'], reverse=True)
             rows.append(dict(symbol=sym, group=group, price=bars[-1]['close'], price_date=bars[-1]['date'],
                              moves=movements, **movements[0]))
     series = list(sessions.values())
     today = series[-1]
-    avg = sum(s['counts']['25'] for s in series[:-1])/9
+    baseline = series[:-3]
+    avg = sum(s['counts']['25'] for s in baseline)/len(baseline)
     coverage = covered/max(1,len(groups))
     status, label = 'ready', 'نشاط محدود'
     reasons = []
-    # Explicit heuristic; enough coverage and repeated breadth/retention required.
     if coverage < .7 or covered < 10:
         status, label = 'collecting', 'تغطية غير كافية للحكم'
     else:
-        strong = [s['counts']['25'] >= max(3, avg*1.5) and s['holding'] >= max(1,s['counts']['10']*.5) and s['advancing']/covered>=.5 and s['elevated_volume'] >= max(2,covered*.05) for s in series[-3:]]
+        strong = [s['counts']['25'] >= max(3, avg*1.4)
+                  and s['holding'] >= max(1,s['counts']['10']*.5)
+                  and s['advancing']/covered>=.5
+                  and s['elevated_volume'] >= max(2,covered*.05)
+                  and (not s['prior_movers'] or s['continued']/s['prior_movers']>=.5)
+                  for s in series[-3:]]
         if all(strong): label='نشاط واسع ومستمر'
         elif strong[-1]: label='بداية تحسّن'
-        reasons.append(f"{today['counts']['25']} سهم وصل +25% مقابل متوسط {avg:.1f} في 9 جلسات سابقة")
-        reasons.append(f"{today['holding']} سهم احتفظ بنصف صعوده على الأقل من المتحركين +10%")
+        elif today['counts']['25'] > max(2,avg*1.25): label='حركة تزيد؛ التماسك لم يتأكد'
+        reasons.append(f"{today['counts']['25']} سهم وصل +25% مقابل متوسط {avg:.1f} في أول 7 جلسات")
+        reasons.append(f"{today['holding']} من {today['counts']['10']} احتفظوا بنصف صعودهم على الأقل")
+        reasons.append(f"{today['continued']} من {today['prior_movers']} متحركي الجلسة السابقة واصلوا عند الإغلاق")
+    for session in series:
+        session['advance_pct']=round(100*session['advancing']/max(1,covered),1)
+        session['holding_pct']=round(100*session['holding']/session['counts']['10'],1) if session['counts']['10'] else None
+        session['continuation_pct']=round(100*session['continued']/session['prior_movers'],1) if session['prior_movers'] else None
     return dict(base, status=status, label=label, covered=covered, coverage=round(coverage*100),
                 rows=sorted(rows,key=lambda r:(r['date'],r['gain']),reverse=True), sessions=series,
                 counts=today['counts'], baseline=round(avg,2), reasons=reasons, as_of=window[-1],
@@ -114,35 +135,102 @@ def build(cache, groups, now=None):
                 note='تقييم وصفي للنطاق المتابع؛ النسب من الإغلاق السابق إلى أعلى الجلسة، والأعداد تراكمية. الأسعار اليومية وليست أسعارًا لحظية.')
 
 
+REFERENCE_URL='https://www.ishares.com/us/products/239710/ishares-russell-2000-etf/latest-holdings.csv'
+REFERENCE_GROUP='عينة الأسهم الصغيرة'
+
+
+def reference_sample(text, excluded=(), limit=120):
+    """Stable hash sample, independent of price moves, from the issuer's equities."""
+    rows=list(csv.reader(io.StringIO(text.lstrip('\ufeff'))))
+    header=next((i for i,r in enumerate(rows) if 'Ticker' in r and 'Asset Class' in r),None)
+    if header is None: raise ValueError('Missing holdings header')
+    fields=rows[header]; symbols=set()
+    for values in rows[header+1:]:
+        row=dict(zip(fields,values))
+        symbol=(row.get('Ticker') or '').strip().replace(' ','-').replace('.','-')
+        if row.get('Asset Class')=='Equity' and re.fullmatch(r'[A-Z][A-Z0-9-]{0,9}',symbol) and symbol not in excluded:
+            symbols.add(symbol)
+    if len(symbols)<limit: raise ValueError('Incomplete holdings file')
+    return sorted(symbols,key=lambda s:hashlib.sha256(s.encode()).hexdigest())[:limit]
+
+
+def build(cache, groups, now=None):
+    now=now or datetime.now(timezone.utc)
+    tracked={s:g for s,g in groups.items() if g!=REFERENCE_GROUP}
+    result=_build_view(cache,tracked,now)
+    views={'tracked':{k:v for k,v in result.items() if k not in ('rows',)}}
+    all_rows=list(result['rows'])
+    for key,label in [('split','أسهم التقسيم'),('low_float','قليلة الفلوت'),('reference',REFERENCE_GROUP)]:
+        view=_build_view(cache,{s:g for s,g in groups.items() if g==label},now)
+        views[key]={k:v for k,v in view.items() if k!='rows'}
+        if key=='reference': all_rows.extend(view['rows'])
+    ref=views['reference']; ours=views['tracked']
+    # Reference success is independent from tracked coverage. Never infer breadth from absent data.
+    reference_meta=cache.get('_reference',{})
+    reference_fresh=now.timestamp()-reference_meta.get('fetched_at',0)<=7*86400
+    if not reference_fresh:
+        ref.update(status='collecting',label='العينة المرجعية غير متاحة')
+    comparison='نجمع بيانات العينة المرجعية للمقارنة بأسهمنا.'
+    if ref['status']=='ready' and ours['status']=='ready':
+        rs,ts=ref['sessions'][-1],ours['sessions'][-1]
+        gap=rs['advance_pct']-ts['advance_pct']
+        if gap>15: comparison='الصعود أوسع في العينة الصغيرة؛ أسهمنا تتأخر عنها.'
+        elif gap< -15: comparison='النشاط أكثر تركّزًا في أسهمنا من العينة الصغيرة.'
+        else: comparison='انتشار الصعود متقارب بين أسهمنا والعينة الصغيرة.'
+    result.update(views=views, rows=all_rows, comparison=comparison, reference=dict(
+        size=sum(g==REFERENCE_GROUP for g in groups.values()), available=reference_fresh,
+        fetched_at=reference_meta.get('fetched_at'),
+        source_url=REFERENCE_URL, method='عينة ثابتة من 120 سهمًا من مكونات IWM؛ اختيار مستقل عن الصعود، بأوزان متساوية. ليست السوق كاملًا ولا عائد المؤشر.'))
+    return result
+
+
 async def worker(get_groups):
     global SNAPSHOT
     try: CACHE.update(storage.load(('market_pulse',)).get('market_pulse') or {})
     except Exception: pass
+    initial=get_groups()
+    reference=CACHE.get('_reference',{})
+    if time.time()-reference.get('fetched_at',0)<7*86400:
+        initial.update({s:REFERENCE_GROUP for s in reference.get('symbols',[]) if s not in initial})
+    SNAPSHOT=build(CACHE,initial)
     await asyncio.sleep(8)
-    async with httpx.AsyncClient(timeout=12, headers={'User-Agent':'Mozilla/5.0 SnipeLab'}) as client:
+    saved_at=0
+    async with httpx.AsyncClient(timeout=12, follow_redirects=True, headers={'User-Agent':'Mozilla/5.0 SnipeLab'}) as client:
         sem=asyncio.Semaphore(2)
         async def fetch(sym):
             async with sem:
+                CACHE.setdefault(sym,{})['attempted_at']=time.time()
                 try:
                     ticker='SPY' if sym=='_calendar' else sym
                     r=await client.get(f'https://query1.finance.yahoo.com/v8/finance/chart/{ticker}',params={'range':'3mo','interval':'1d','includePrePost':'false','events':'splits'})
                     r.raise_for_status()
                     bars=parse_chart(r.json()['chart']['result'][0])
-                    if bars: CACHE[sym]=dict(bars=bars,fetched_at=time.time())
-                except Exception: pass  # Retain cache, and expire its coverage in build().
+                    if bars: CACHE[sym]=dict(bars=bars,fetched_at=time.time(),attempted_at=time.time())
+                except Exception: pass
         while True:
             try:
                 groups=get_groups()
-                due=sorted(groups,key=lambda s:CACHE.get(s,{}).get('fetched_at',0))
-                due=[s for s in due if time.time()-CACHE.get(s,{}).get('fetched_at',0)>600][:8]
-                if time.time()-CACHE.get('_calendar',{}).get('fetched_at',0)>300:
-                    await fetch('_calendar')
+                reference=CACHE.get('_reference',{})
+                if time.time()-reference.get('fetched_at',0)>86400 and time.time()-reference.get('attempted_at',0)>600:
+                    CACHE.setdefault('_reference',{})['attempted_at']=time.time()
+                    try:
+                        response=await client.get(REFERENCE_URL,timeout=15)
+                        response.raise_for_status()
+                        selected=reference_sample(response.text,groups)
+                        CACHE['_reference']=dict(symbols=selected,fetched_at=time.time(),attempted_at=time.time())
+                    except Exception: pass
+                reference=CACHE.get('_reference',{})
+                if time.time()-reference.get('fetched_at',0)<7*86400:
+                    groups.update({s:REFERENCE_GROUP for s in reference.get('symbols',[]) if s not in groups})
+                due=sorted(groups,key=lambda s:CACHE.get(s,{}).get('attempted_at',0))
+                due=[s for s in due if time.time()-CACHE.get(s,{}).get('fetched_at',0)>600 and time.time()-CACHE.get(s,{}).get('attempted_at',0)>60][:10]
+                if time.time()-CACHE.get('_calendar',{}).get('attempted_at',0)>300: await fetch('_calendar')
                 await asyncio.gather(*(fetch(s) for s in due))
                 SNAPSHOT=build(CACHE,groups)
-                # Drop removed symbols and persist independently from the main dashboard.
                 for s in list(CACHE):
-                    if s!='_calendar' and s not in groups: del CACHE[s]
-                await asyncio.to_thread(storage.save, {'market_pulse':CACHE})
+                    if not s.startswith('_') and s not in groups: del CACHE[s]
+                if time.time()-saved_at>60:
+                    await asyncio.to_thread(storage.save, {'market_pulse':CACHE}); saved_at=time.time()
             except Exception:
                 SNAPSHOT={**SNAPSHOT,'status':'error','label':'تعذر تحديث نبض السوق'}
-            await asyncio.sleep(15)
+            await asyncio.sleep(8)

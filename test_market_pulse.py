@@ -1,6 +1,6 @@
 import unittest
 from datetime import datetime, timezone, timedelta
-from market_pulse import build, parse_chart
+from market_pulse import build, parse_chart, reference_sample, REFERENCE_GROUP
 
 NOW=datetime(2026,10,27,22,tzinfo=timezone.utc)
 # Observed exchange sessions, with a deliberately omitted holiday/weekend gap.
@@ -53,6 +53,43 @@ class PulseTests(unittest.TestCase):
         self.assertEqual(p['covered'],11)
         self.assertEqual(p['rows'][0]['symbol'],'0')
         self.assertEqual(p['counts']['100'],0)
+    def test_quality_separates_intraday_peak_from_close_and_after(self):
+        c,g=fixture()
+        c['0']['bars'][-2].update(high=20,close=10.5)
+        c['0']['bars'][-1].update(high=12,close=12)
+        m=build(c,g,NOW)['rows'][0]['moves'][0]
+        self.assertEqual(m['quality'],'fade')
+        self.assertEqual(m['retention'],5)
+        self.assertEqual(m['current_gain'],20)
+        self.assertAlmostEqual(m['next_gain'],14.29,2)
+        self.assertEqual(len(m['path']),2)
+    def test_group_rates_and_mean_are_independent(self):
+        c,g=fixture(24)
+        for i in range(12,24):
+            g[str(i)]=REFERENCE_GROUP
+            c[str(i)]['bars'][-1].update(high=12,close=11)
+        c['_reference']={'fetched_at':NOW.timestamp()}
+        p=build(c,g,NOW)
+        self.assertEqual(p['views']['reference']['sessions'][-1]['mean_return'],10)
+        self.assertEqual(p['views']['tracked']['sessions'][-1]['mean_return'],0)
+        self.assertIn('تتأخر',p['comparison'])
+        self.assertEqual(p['total'],12)
+    def test_three_sessions_of_breadth_volume_and_retention_required(self):
+        c,g=fixture()
+        for sym in g:
+            previous=10
+            for b in c[sym]['bars'][-3:]:
+                b.update(high=previous*1.6,close=previous*1.4,volume=300)
+                previous=b['close']
+        self.assertEqual(build(c,g,NOW)['label'],'نشاط واسع ومستمر')
+        for sym in g:c[sym]['bars'][-2]['volume']=100
+        self.assertNotEqual(build(c,g,NOW)['label'],'نشاط واسع ومستمر')
+    def test_reference_sample_is_stable_and_excludes_cash_and_tracked(self):
+        text='Fund\nTicker,Name,Asset Class\n'+'\n'.join(f'S{i},Name,Equity' for i in range(10))+'\nUSD,Cash,Cash'
+        first=reference_sample(text,{'S0'},limit=5)
+        self.assertEqual(first,reference_sample(text,{'S0'},limit=5))
+        self.assertNotIn('USD',first);self.assertNotIn('S0',first)
+        with self.assertRaises(ValueError):reference_sample('not a holdings file')
     def test_bad_ohlc_and_nan_ignored(self):
         self.assertEqual(parse_chart({'timestamp':[1], 'indicators':{'quote':[{'high':[float('nan')],'close':[10],'volume':[100]}]}}),[])
 if __name__=='__main__':unittest.main()
