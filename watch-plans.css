@@ -8,3 +8,15 @@
 #huntPage .sort-row .watch-changes-strip>b{display:inline-block!important;min-width:17px!important;margin:0!important;padding:3px 5px!important;border-radius:999px!important;font:700 10px Arial,sans-serif!important;text-align:center!important;background:#16374b!important;color:#e9d4a7!important}
 body.black-gold #huntPage .sort-row .watch-changes-strip{border-color:#4d6b7c!important;background:#243b491f!important;color:#b3d8eb!important}body.black-gold #huntPage .sort-row .watch-changes-strip>b{background:#294354!important;color:#d2eaf5!important}
 @media(max-width:360px){#huntPage .sort-row .watch-changes-strip{padding:3px 7px!important;gap:4px!important}#huntPage .sort-row .watch-changes-strip small{font-size:10px!important}}
+
+/* Changes journal: the two existing appearances, with no change to stock rules. */
+#huntPage .sort-row .watch-changes-strip{background:#f7f3e8!important;border-color:#d8c9ab!important;color:#886d3e!important;min-height:32px!important;padding:5px 12px!important}
+#huntPage .sort-row .watch-changes-strip>b{background:#17354a!important;color:#f4e4c4!important}
+body.black-gold #huntPage .sort-row .watch-changes-strip{background:#252528!important;border-color:#706356!important;color:#d1b897!important}
+body.black-gold #huntPage .sort-row .watch-changes-strip>b{background:#4b4036!important;color:#f1e6d6!important}
+body.black-gold .watch-dialog{--watch-bg:#222224;--watch-ink:#f1eee8;--watch-muted:#b8b2aa;--watch-edge:#4b4641;--watch-soft:#30302f;border-color:#756451;color:var(--watch-ink)}
+body.black-gold .watch-dialog header small,body.black-gold .watch-event>div:first-child span,body.black-gold .watch-dialog .watch-read,body.black-gold .watch-feed-actions>button{color:#d1b897}
+body.black-gold .watch-feed-filters button.selected{background:#51443a;color:#f4e9da;border-color:#bba284}
+body.black-gold .watch-event.unread{border-inline-start-color:#d1b897;background:#d1b8970d}
+body.black-gold .watch-save-row #watchPlanSave{background:#54483e;border-color:#bba284;color:#f1eee8}
+.watch-feed-filters{overflow-x:auto;scrollbar-width:thin}.watch-feed-filters button{min-width:60px;white-space:nowrap}
