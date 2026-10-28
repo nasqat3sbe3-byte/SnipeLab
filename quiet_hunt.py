@@ -6,6 +6,17 @@ import hunt
 from opportunities import usable_reading
 
 SNAPSHOT={'status':'starting','rows':[],'pending':0}
+ALERTS=[]
+
+def record_transition(memory, symbol, state, row, at):
+    # Missing/stale data is not an exit. First observation establishes a baseline.
+    if state == 'pending':return
+    current=state == 'eligible'
+    previous=memory.get(symbol)
+    if previous is False and current:
+        ALERTS.insert(0,{'symbol':symbol,'kind':'strict_rsi','at':at.isoformat()})
+        del ALERTS[40:]
+    memory[symbol]=current
 
 def evaluate(meta,h,q,b,rsi,rsi_at,chart,at):
     number=hunt.number
@@ -48,6 +59,10 @@ def evaluate(meta,h,q,b,rsi,rsi_at,chart,at):
 
 async def worker(universe,history,quotes,borrow,rsi_lookup,charts):
     global SNAPSHOT
+    saved=await asyncio.to_thread(storage.load,('strip_transitions',))
+    saved=saved.get('strip_transitions') or {}
+    memory=saved.get('states') or {}
+    ALERTS[:]=saved.get('alerts') or []
     while True:
         try:
             at=datetime.now(timezone.utc);rows=[];pending=0;candidate=[]
@@ -60,11 +75,14 @@ async def worker(universe,history,quotes,borrow,rsi_lookup,charts):
                     if price and hi and price<=hi*.6 and av is not None and 0<=av<15000 and rs is not None and 0<=rs<30:
                         chart=(await asyncio.to_thread(storage.load,('support_chart:'+sym,))).get('support_chart:'+sym)
                 state,row=evaluate({**meta,'symbol':sym},h,q,b,rsi,rsi_at,chart,at)
+                record_transition(memory,sym,state,row,at)
                 if state=='eligible':rows.append(row)
                 elif state=='pending':
                     pending+=1
                     price=hunt.number(q.get('price'));hi=hunt.number(h.get('split_day_4h_high'));av=hunt.number(b.get('available'));rs=hunt.number(rsi)
                     if price and hi and price<=hi*.6 and av is not None and 0<=av<15000 and rs is not None and 0<=rs<30 and (not chart or not hunt.recent(chart.get('updated_at'),at,900 if hunt.trading(at.astimezone(hunt.NY).date()) and 4 <= at.astimezone(hunt.NY).hour < 20 else 21600)):candidate.append(sym)
+            durable={'states':memory,'alerts':ALERTS}
+            await asyncio.to_thread(storage.save,{'strip_transitions':durable})
             rows.sort(key=lambda x:(abs(x['distance_pct']),x['available'],x['symbol']))
             SNAPSHOT={'status':'ready','rows':rows,'pending':pending,'generated_at':at.isoformat()}
             from support_chart import PRIORITY,WAKE

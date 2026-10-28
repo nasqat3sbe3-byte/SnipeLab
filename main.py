@@ -30,7 +30,7 @@ import watch_journal
 from support_chart import worker as support_chart_worker, get as support_chart_get, retest_signal as support_retest_signal
 from support_chart import CACHE as SUPPORT_PATTERN_CACHE, META as SUPPORT_CHART_META, load_cached as load_cached_chart, MAX_CACHED_CHARTS, WORKER_STATE as CHART_WORKER_STATE
 from corporate_actions import worker as corporate_actions_worker, upcoming as upcoming_actions
-from event_rules import borrow_events, ready_event, worker_health
+from event_rules import borrow_events, ready_event, worker_health, strip_items
 from bs4 import BeautifulSoup
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, Response
@@ -637,6 +637,10 @@ async def startup():
     asyncio.create_task(support_chart_worker(UNIVERSE,HISTORY,QUOTES,BORROW))
     asyncio.create_task(corporate_actions_worker(UNIVERSE, CORPORATE_ACTIONS, STATE, save_persistent_state))
     asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(live_daily_rsi_loop()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(finnhub_live_loop()); asyncio.create_task(finnhub_country_loop()); asyncio.create_task(massive_float_loop()); asyncio.create_task(halt_loop()); asyncio.create_task(ai_risk_background_loop()); asyncio.create_task(ai_patterns_background_loop()); asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
+
+@app.get("/api/alert-strip")
+async def alert_strip_data():
+    return {"items":strip_items(EVENTS,quiet_hunt.ALERTS,economic_calendar.snapshot(),utcnow())}
 
 @app.get("/api/economic-calendar")
 async def economic_calendar_data():
