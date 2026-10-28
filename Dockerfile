@@ -12,6 +12,8 @@ COPY market_pulse.js .
 COPY risk_evidence.py .
 COPY focus.py .
 COPY hunt.py .
+COPY quiet_hunt.py .
+COPY quiet-hunt.html .
 COPY hunt.html .
 COPY focus_study.py .
 COPY focus.html .
