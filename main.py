@@ -24,6 +24,7 @@ import low_float
 import focus
 import hunt
 import market_pulse
+import economic_calendar
 import watch_journal
 from support_chart import worker as support_chart_worker, get as support_chart_get, retest_signal as support_retest_signal
 from support_chart import CACHE as SUPPORT_PATTERN_CACHE, META as SUPPORT_CHART_META, load_cached as load_cached_chart, MAX_CACHED_CHARTS, WORKER_STATE as CHART_WORKER_STATE
@@ -625,6 +626,7 @@ async def startup():
     low_float.restore()
     asyncio.create_task(watch_journal.worker(_watch_rows))
     asyncio.create_task(market_pulse.worker(_pulse_groups, _pulse_split_dates))
+    asyncio.create_task(economic_calendar.worker())
     asyncio.create_task(hunt.worker(UNIVERSE,HISTORY,QUOTES,BORROW,ANALYTICS,SUPPORT_PATTERN_CACHE))
     asyncio.create_task(focus.worker(_focus_rows,_ai_cached_risk,_focus_queue))
     asyncio.create_task(low_float.discovery_worker(UNIVERSE))
@@ -633,6 +635,10 @@ async def startup():
     asyncio.create_task(support_chart_worker(UNIVERSE,HISTORY,QUOTES,BORROW))
     asyncio.create_task(corporate_actions_worker(UNIVERSE, CORPORATE_ACTIONS, STATE, save_persistent_state))
     asyncio.create_task(heartbeat_loop()); asyncio.create_task(universe_loop()); asyncio.create_task(delayed_market_start()); asyncio.create_task(live_daily_rsi_loop()); asyncio.create_task(delayed_borrow_start()); asyncio.create_task(analytics_loop()); asyncio.create_task(finnhub_live_loop()); asyncio.create_task(finnhub_country_loop()); asyncio.create_task(massive_float_loop()); asyncio.create_task(halt_loop()); asyncio.create_task(ai_risk_background_loop()); asyncio.create_task(ai_patterns_background_loop()); asyncio.create_task(historical_worker(UNIVERSE,HISTORY,YAHOO,save_persistent_state))
+
+@app.get("/api/economic-calendar")
+async def economic_calendar_data():
+    return economic_calendar.snapshot()
 
 @app.get("/")
 async def root():
