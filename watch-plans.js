@@ -70,7 +70,7 @@ function updateLists(){
  updateBadge();
 }
 function updateBadge(){
- const favorites=favoriteSymbols();const unread=state.events.filter(e=>!e.read).length;
+ const favorites=favoriteSymbols();const unread=state.events.filter(e=>e.market===market&&!e.read).length;
  if($('watchChangeCount')){$('watchChangeCount').textContent=unread>99?'99+':unread;$('watchChangeCount').hidden=false;}
  if($('watchChangesDialog')?.open)renderFeed();
 }
@@ -106,7 +106,7 @@ async function poll(){
  finally{busy=false;updateLists();if(draft&&$('watchPlanDialog')?.open)updateDraftStatus();}
 }
 function feedEvents(){
- const favorites=favoriteSymbols();return state.events.filter(e=>feedFilter==='important'?priority(e,favorites):feedFilter==='favorites'?favorites.has(e.symbol):feedFilter==='plans'?e.personal:feedFilter==='unread'?!e.read:true);
+ const favorites=favoriteSymbols();return state.events.filter(e=>e.market===market).filter(e=>feedFilter==='important'?priority(e,favorites):feedFilter==='favorites'?favorites.has(e.symbol):feedFilter==='plans'?e.personal:feedFilter==='unread'?!e.read:true);
 }
 function renderFeed(){
  const events=feedEvents();
@@ -170,7 +170,7 @@ function init(){
  $('watchPlanSave').addEventListener('click',savePlan);
  $('watchPlanDelete').addEventListener('click',()=>{if(!draft)return;const previous=state.plans[draft.symbol];delete state.plans[draft.symbol];if(!save()){state.plans[draft.symbol]=previous;$('watchPlanMessage').textContent='تعذر حفظ حذف الخطة.';return}$('watchPlanDialog').close();draft=null;updateLists()});
  $('watchFeedMore').addEventListener('click',()=>{feedLimit+=150;renderFeed()});
- $('watchReadAll').addEventListener('click',()=>{state.events.forEach(e=>e.read=true);save();updateBadge()});
+ $('watchReadAll').addEventListener('click',()=>{state.events.forEach(e=>{if(e.market===market)e.read=true});save();updateBadge()});
  $('watchPlanDialog').addEventListener('close',()=>{draft=null});
  document.addEventListener('visibilitychange',()=>{if(!document.hidden)poll()});
  root.addEventListener('storage',e=>{if(e.key===KEY){try{const saved=JSON.parse(e.newValue);if(saved){state=saved;updateLists()}}catch(e){}}else if(e.key?.includes('favorites'))updateBadge()});
