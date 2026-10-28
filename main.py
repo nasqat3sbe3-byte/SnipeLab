@@ -23,6 +23,7 @@ import opportunities
 import low_float
 import focus
 import hunt
+import quiet_hunt
 import market_pulse
 import economic_calendar
 import watch_journal
@@ -628,6 +629,7 @@ async def startup():
     asyncio.create_task(market_pulse.worker(_pulse_groups, _pulse_split_dates))
     asyncio.create_task(economic_calendar.worker())
     asyncio.create_task(hunt.worker(UNIVERSE,HISTORY,QUOTES,BORROW,ANALYTICS,SUPPORT_PATTERN_CACHE))
+    asyncio.create_task(quiet_hunt.worker(UNIVERSE,HISTORY,QUOTES,BORROW,_quiet_rsi,SUPPORT_PATTERN_CACHE))
     asyncio.create_task(focus.worker(_focus_rows,_ai_cached_risk,_focus_queue))
     asyncio.create_task(low_float.discovery_worker(UNIVERSE))
     asyncio.create_task(low_float.market_worker(UNIVERSE, fetch_quote))
@@ -1950,6 +1952,21 @@ async def focus_snapshot(market: str='split'):
 async def focus_page():
     return HTMLResponse((Path(__file__).parent/'focus.html').read_text('utf-8'))
 
+
+def _quiet_rsi(symbol):
+    live=LIVE_RSI.get(symbol) or {};hist=HISTORY.get(symbol) or {}
+    return wilder_rsi_live_from_history(symbol), live.get('updated_at') or hist.get('rsi_live_updated_at') or hist.get('updated_at')
+
+@app.get('/api/quiet-hunt')
+async def quiet_hunt_snapshot():
+    snapshot=quiet_hunt.SNAPSHOT
+    if snapshot.get('generated_at') and not hunt.recent(snapshot['generated_at'],utcnow(),90):
+        return {**snapshot,'status':'stale','rows':[]}
+    return snapshot
+
+@app.get('/quiet-hunt')
+async def quiet_hunt_page():
+    return HTMLResponse((Path(__file__).parent/'quiet-hunt.html').read_text('utf-8'))
 
 @app.get('/api/hunt')
 async def hunt_snapshot():
